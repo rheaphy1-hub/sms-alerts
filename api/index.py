@@ -310,7 +310,15 @@ Tiers:
 - Tier 3: Reputation Risk — unhappy customer, complaint, bad experience
 - Tier 4: Routine — general inquiry, positive feedback, neutral
 
-Extract: category (cleanliness/staffing/equipment/wait_time/safety/other), sentiment (negative/neutral/positive), confidence (0.0-1.0), summary (5-10 words), auto_reply (1-2 sentences acknowledging the specific issue, under 160 chars. For tier 1-2 confirm issue type and say manager notified. For tier 3 empathize. For tier 4 respond naturally. Never ask questions.)
+Extract: category (cleanliness/staffing/equipment/wait_time/safety/other), sentiment (negative/neutral/positive), confidence (0.0-1.0), summary (5-10 words), auto_reply (see tone rules below).
+
+AUTO-REPLY TONE RULES (critical):
+- Tier 1 (Emergency): Urgent, direct. ALWAYS tell the customer to call 911 if it's a real emergency. Never claim that emergency services have been contacted. Example: "If this is an emergency, please call 911 immediately. We have notified the business owner."
+- Tier 2 (Business-Critical): Professional, serious. Confirm the specific issue type. Say management has been notified. No exclamation marks. Example: "We've flagged this as an equipment issue and notified management. Thank you for letting us know."
+- Tier 3 (Reputation Risk): Empathetic, professional. Acknowledge their frustration without being defensive. No exclamation marks. Example: "We're sorry to hear about your experience. Your feedback has been shared with management."
+- Tier 4 (Routine/Positive): Warm, friendly, use exclamation marks. Show genuine appreciation. Example: "Thanks so much for the kind words! We'll make sure the team hears this."
+
+Keep auto_reply under 160 characters. Never ask follow-up questions.
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
@@ -357,16 +365,16 @@ def _classify_fallback(text):
     if any(w in t for w in emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,
                 "summary":"Possible emergency reported",
-                "auto_reply":"We've received your message and are notifying the manager immediately."}
+                "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business owner."}
 
     crit = {"cleanliness": (["dirty","disgusting","filthy","mess","bathroom","gross","unsanitary"],
-                            "We've flagged this as a cleanliness issue and notified the manager. Thank you."),
+                            "We've flagged this as a cleanliness issue and notified management. Thank you for letting us know."),
             "staffing": (["no one","nobody","empty","no staff","where is everyone","closed"],
-                         "We've flagged this as a staffing issue and notified the manager. Sorry about that."),
+                         "We've flagged this as a staffing issue and notified management. We apologize for the inconvenience."),
             "equipment": (["broken","machine","not working","out of order","malfunction"],
-                          "We've flagged this as an equipment issue and notified the manager. Thank you."),
+                          "We've flagged this as an equipment issue and notified management. Thank you for letting us know."),
             "wait_time": (["waited","waiting","slow","forever","leaving","20 minutes","30 minutes"],
-                          "We're sorry about the wait. We've notified the manager about the delay.")}
+                          "We're sorry about the wait. Management has been notified about the delay.")}
     for cat, (words, reply) in crit.items():
         if any(w in t for w in words):
             return {"tier":2,"category":cat,"sentiment":"negative","confidence":0.85,
@@ -376,11 +384,11 @@ def _classify_fallback(text):
     if any(w in t for w in neg):
         return {"tier":3,"category":"other","sentiment":"negative","confidence":0.6,
                 "summary":"Unhappy customer feedback",
-                "auto_reply":"We're sorry to hear about your experience. Your feedback has been noted."}
+                "auto_reply":"We're sorry to hear about your experience. Your feedback has been shared with management."}
 
     return {"tier":4,"category":"other","sentiment":"neutral","confidence":0.5,
             "summary":"General message received",
-            "auto_reply":"Thanks for reaching out. We've received your message."}
+            "auto_reply":"Thanks so much for reaching out! We've noted your message."}
 
 
 # ---------------------------------------------------------------------------
@@ -1000,68 +1008,100 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'DM Sans',system-ui,sans-serif;background:#09090b;color:#fafafa;-webkit-font-smoothing:antialiased}
-.wrap{max-width:480px;margin:0 auto;padding:32px 20px;min-height:100vh;display:flex;flex-direction:column}
-.top{text-align:center;margin-bottom:24px}
+.wrap{max-width:860px;margin:0 auto;padding:32px 20px}
+.top{text-align:center;margin-bottom:28px}
 .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#f97316;margin-bottom:8px}
 .logo span{background:#f97316;color:#09090b;padding:2px 6px;border-radius:3px;margin-right:4px}
-h1{font-size:20px;font-weight:600;margin-bottom:4px}
+h1{font-size:22px;font-weight:600;margin-bottom:4px}
 .sub{font-size:14px;color:#71717a}
-.phone{flex:1;background:#18181b;border:1px solid #27272a;border-radius:16px;padding:16px;display:flex;flex-direction:column;min-height:420px}
-.msgs{flex:1;overflow-y:auto;padding-bottom:12px}
-.bubble{padding:10px 14px;border-radius:16px;font-size:14px;margin-bottom:8px;max-width:85%;line-height:1.5;animation:fadeUp 0.3s ease both}
+.phones{display:flex;gap:20px;margin-bottom:20px;align-items:stretch}
+.phone{flex:1;background:#18181b;border:1px solid #27272a;border-radius:20px;display:flex;flex-direction:column;overflow:hidden;min-height:460px}
+.phone-header{padding:14px 16px 10px;border-bottom:1px solid #27272a;text-align:center}
+.phone-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em}
+.phone-label.customer{color:#3b82f6}
+.phone-label.owner{color:#f97316}
+.phone-sub{font-size:11px;color:#52525b;margin-top:2px}
+.msgs{flex:1;padding:14px;overflow-y:auto;min-height:280px}
+.bubble{padding:10px 14px;border-radius:16px;font-size:13px;margin-bottom:8px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#27272a;color:#e4e4e7;border-bottom-left-radius:4px}
-.bubble.out{background:#f97316;color:#09090b;margin-left:auto;border-bottom-right-radius:4px;font-weight:500}
+.bubble.out-blue{background:#3b82f6;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.out-orange{background:#f97316;color:#09090b;margin-left:auto;border-bottom-right-radius:4px;font-weight:500}
 .bubble.alert{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;border-bottom-left-radius:4px}
-.bubble.system{background:rgba(113,113,122,0.15);color:#a1a1aa;font-size:13px;text-align:center;max-width:100%;border-radius:8px}
-.bubble .lbl{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;opacity:0.6;margin-bottom:3px}
-.meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
-.tag{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}
+.bubble.system{background:rgba(113,113,122,0.1);color:#71717a;font-size:12px;text-align:center;max-width:100%;border-radius:8px}
+.bubble.cmd{background:#27272a;color:#e4e4e7;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
+.bubble.resp{background:rgba(113,113,122,0.15);color:#d4d4d8;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
+.bubble .lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;opacity:0.5;margin-bottom:3px}
+.meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.tag{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}
 .tag.t1{background:rgba(239,68,68,0.15);color:#f87171}
 .tag.t2{background:rgba(249,115,22,0.15);color:#fb923c}
 .tag.t3{background:rgba(250,204,21,0.15);color:#fbbf24}
 .tag.t4{background:rgba(113,113,122,0.15);color:#a1a1aa}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.input-row{display:flex;gap:8px;margin-top:12px}
-.input-row input{flex:1;padding:12px 14px;background:#09090b;border:1px solid #3f3f46;border-radius:10px;font-size:15px;color:#fafafa;font-family:inherit}
+.input-area{padding:10px 14px 14px;border-top:1px solid #27272a}
+.input-row{display:flex;gap:6px}
+.input-row input{flex:1;padding:10px 12px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;font-size:14px;color:#fafafa;font-family:inherit}
 .input-row input::placeholder{color:#52525b}
 .input-row input:focus{outline:none;border-color:#f97316}
-.input-row button{padding:12px 18px;background:#f97316;color:#09090b;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
-.input-row button:disabled{opacity:0.4;cursor:not-allowed}
-.examples{margin-top:16px}
+.input-row button{padding:10px 14px;background:#f97316;color:#09090b;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
+.input-row button.blue{background:#3b82f6;color:#fff}
+.input-row button:disabled{opacity:0.3;cursor:not-allowed}
+.owner-input{display:none}
+.owner-cmds{display:none;padding:4px 14px 6px;gap:5px;flex-wrap:wrap}
+.cmd-btn{font-size:11px;padding:5px 10px;background:#27272a;border:1px solid #3f3f46;border-radius:6px;color:#a1a1aa;cursor:pointer;font-family:monospace;font-weight:600}
+.cmd-btn:hover{border-color:#f97316;color:#fafafa}
+.examples{margin-bottom:20px}
 .examples p{font-size:12px;color:#52525b;margin-bottom:6px;text-align:center}
 .ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
 .ex{font-size:12px;padding:6px 10px;background:#18181b;border:1px solid #27272a;border-radius:6px;color:#a1a1aa;cursor:pointer;transition:border-color 0.2s}
-.ex:hover{border-color:#f97316;color:#fafafa}
+.ex:hover{border-color:#3b82f6;color:#fafafa}
 .cta{text-align:center;margin-top:20px}
 .cta a{display:inline-block;padding:12px 28px;background:#f97316;color:#09090b;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid #09090b;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}
 @keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:640px){.phones{flex-direction:column}.phone{min-height:360px}}
 </style></head><body>
 <div class="wrap">
 <div class="top">
 <div class="logo"><span>H</span> HOTLINE</div>
 <h1>Try it live</h1>
-<p class="sub">Type a customer message and watch the AI respond</p>
-</div>
-
-<div class="phone">
-<div class="msgs" id="msgs">
-<div class="bubble system">Type a message below like a customer would text your business</div>
-</div>
-<div class="input-row">
-<input type="text" id="msg-input" placeholder="Type a customer message..." onkeydown="if(event.key==='Enter')sendDemo()">
-<button id="send-btn" onclick="sendDemo()">Send</button>
-</div>
+<p class="sub">Type a message as a customer and watch both sides in real time</p>
 </div>
 
 <div class="examples">
-<p>Try these examples:</p>
+<p>Try an example:</p>
 <div class="ex-row">
-<div class="ex" onclick="tryExample(this)">Bathroom is disgusting</div>
-<div class="ex" onclick="tryExample(this)">No one is at the front desk</div>
-<div class="ex" onclick="tryExample(this)">Great coffee today!</div>
-<div class="ex" onclick="tryExample(this)">Waited 30 minutes</div>
-<div class="ex" onclick="tryExample(this)">There's a fire in back</div>
+<div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
+<div class="ex" onclick="tryEx(this)">No one is at the front desk</div>
+<div class="ex" onclick="tryEx(this)">Great coffee today!</div>
+<div class="ex" onclick="tryEx(this)">Waited 30 minutes and leaving</div>
+<div class="ex" onclick="tryEx(this)">There's a fire in the back</div>
+<div class="ex" onclick="tryEx(this)">Your staff was so friendly</div>
+</div>
+</div>
+
+<div class="phones">
+<div class="phone" id="p-cust">
+<div class="phone-header"><div class="phone-label customer">Customer</div><div class="phone-sub">Texts your business number</div></div>
+<div class="msgs" id="m-cust"><div class="bubble system">Customer messages appear here</div></div>
+<div class="input-area"><div class="input-row">
+<input type="text" id="cust-input" placeholder="Type a customer message..." onkeydown="if(event.key==='Enter')sendDemo()">
+<button class="blue" id="cust-btn" onclick="sendDemo()">Send</button>
+</div></div>
+</div>
+
+<div class="phone" id="p-owner">
+<div class="phone-header"><div class="phone-label owner">Owner</div><div class="phone-sub">Receives alerts on their phone</div></div>
+<div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
+<div class="owner-cmds" id="owner-cmds">
+<div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
+<div class="cmd-btn" onclick="ownerCmd('ACK')">ACK</div>
+<div class="cmd-btn" onclick="ownerCmd('HELP')">HELP</div>
+</div>
+<div class="input-area owner-input" id="owner-input"><div class="input-row">
+<input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
+<button onclick="ownerCmd(document.getElementById('owner-inp').value)">Send</button>
+</div></div>
 </div>
 </div>
 
@@ -1071,11 +1111,12 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
 </div>
 
 <script>
-const msgs = document.getElementById('msgs');
-const inp = document.getElementById('msg-input');
-const btn = document.getElementById('send-btn');
+let lastData = null;
+let acked = false;
+const mc = document.getElementById('m-cust');
+const mo = document.getElementById('m-owner');
 
-function addBubble(cls, label, text, extra) {
+function addB(container, cls, label, text, extra) {
     const d = document.createElement('div');
     d.className = 'bubble ' + cls;
     let h = '';
@@ -1083,59 +1124,112 @@ function addBubble(cls, label, text, extra) {
     h += text;
     if (extra) h += extra;
     d.innerHTML = h;
-    msgs.appendChild(d);
-    msgs.scrollTop = msgs.scrollHeight;
+    container.appendChild(d);
+    container.scrollTop = container.scrollHeight;
     return d;
 }
 
-function tryExample(el) {
-    inp.value = el.textContent;
+function tryEx(el) {
+    document.getElementById('cust-input').value = el.textContent;
     sendDemo();
 }
 
+function showOwnerInput() {
+    document.getElementById('owner-cmds').style.display = 'flex';
+    document.getElementById('owner-input').style.display = 'block';
+}
+function hideOwnerInput() {
+    document.getElementById('owner-cmds').style.display = 'none';
+    document.getElementById('owner-input').style.display = 'none';
+}
+
+function ownerCmd(raw) {
+    const cmd = (raw || '').trim().toUpperCase();
+    document.getElementById('owner-inp').value = '';
+    if (!cmd) return;
+
+    addB(mo, 'cmd', '', cmd);
+
+    if (cmd === 'HELP') {
+        addB(mo, 'resp', '', 'Commands:\\nDETAILS \\u2014 View latest alert\\nACK \\u2014 Acknowledge alert\\nLIST \\u2014 Last 5 flagged issues\\nSTATUS \\u2014 Alert status\\nMUTE 2H \\u2014 Silence for 2 hours\\nPAUSE \\u2014 Stop all alerts\\nRESUME \\u2014 Resume alerts\\nHELP \\u2014 This message');
+        return;
+    }
+
+    if (!lastData) {
+        addB(mo, 'resp', '', 'No active alerts.');
+        return;
+    }
+
+    if (cmd === 'DETAILS') {
+        const d = lastData;
+        const now = new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+        const ackLabel = acked ? '\\u2705 Acknowledged' : '\\u23f3 Pending';
+        addB(mo, 'resp', '', 'Alert \\u2014 ' + ackLabel + '\\nTime: ' + now + '\\nCategory: ' + d.category.replace('_',' ') + '\\nTier: ' + d.tier + ' | Confidence: ' + Math.round(d.confidence*100) + '%\\nMessage: "' + d.original_message + '"\\nReply ACK to acknowledge.');
+        return;
+    }
+
+    if (cmd === 'ACK') {
+        if (acked) {
+            addB(mo, 'resp', '', 'Already acknowledged.');
+        } else {
+            acked = true;
+            addB(mo, 'resp', '', '\\u2705 Alert marked as acknowledged.');
+        }
+        return;
+    }
+
+    addB(mo, 'resp', '', 'Unknown command: "' + cmd + '"\\nReply HELP for commands.');
+}
+
 async function sendDemo() {
+    const inp = document.getElementById('cust-input');
+    const btn = document.getElementById('cust-btn');
     const text = inp.value.trim();
     if (!text) return;
     inp.value = '';
     btn.disabled = true;
+    hideOwnerInput();
+    acked = false;
 
-    addBubble('in', 'Customer texts', text);
-
-    await new Promise(r => setTimeout(r, 400));
-    const thinking = addBubble('system', '', '<span class="spinner"></span> AI analyzing...');
+    addB(mc, 'out-blue', '', text);
+    addB(mo, 'system', '', '<span class="spinner"></span> Processing...');
 
     try {
         const r = await fetch('/demo/classify', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: {'Content-Type':'application/json'},
             body: JSON.stringify({message: text})
         });
         const d = await r.json();
-        thinking.remove();
+        d.original_message = text;
+        lastData = d;
 
-        await new Promise(r => setTimeout(r, 200));
-        addBubble('out', 'Auto-reply to customer', d.auto_reply);
+        mo.lastChild.remove();
+
+        await new Promise(r => setTimeout(r, 300));
+        addB(mc, 'in', 'Auto-reply', d.auto_reply);
 
         await new Promise(r => setTimeout(r, 400));
 
         const tierCls = 't' + d.tier;
         const tags = '<div class="meta">'
-            + '<span class="tag ' + tierCls + '">Tier ' + d.tier + ': ' + d.tier_label + '</span>'
+            + '<span class="tag ' + tierCls + '">' + d.tier_label + '</span>'
             + '<span class="tag ' + tierCls + '">' + d.category.replace('_',' ') + '</span>'
-            + '<span class="tag ' + tierCls + '">' + Math.round(d.confidence * 100) + '% confidence</span>'
+            + '<span class="tag ' + tierCls + '">' + Math.round(d.confidence*100) + '%</span>'
             + '</div>';
 
         if (d.would_alert) {
             const alertText = d.tier === 1
-                ? '&#x1F6A8; URGENT: Possible emergency reported\\nReply: DETAILS'
-                : '&#x26A0;&#xFE0F; Issue detected: ' + d.summary + '\\nReply: DETAILS or ACK';
-            addBubble('alert', 'Alert sent to owner', alertText + tags);
+                ? '\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS'
+                : '\\u26a0\\ufe0f Issue detected: ' + d.summary + '\\nReply: DETAILS or ACK';
+            addB(mo, 'alert', 'Alert', alertText + tags);
+            showOwnerInput();
         } else {
-            addBubble('system', '', 'No alert sent (Tier ' + d.tier + ' &mdash; ' + d.tier_label.toLowerCase() + ')' + tags);
+            addB(mo, 'system', '', 'No alert \\u2014 ' + d.tier_label.toLowerCase() + tags);
         }
     } catch(e) {
-        thinking.remove();
-        addBubble('system', '', 'Demo error. Try again.');
+        mo.lastChild.remove();
+        addB(mo, 'system', '', 'Demo error. Try again.');
     }
     btn.disabled = false;
     inp.focus();
