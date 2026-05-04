@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 
-from fastapi import FastAPI, Form, Response
+from fastapi import FastAPI, Form, Response, Query
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -481,7 +481,7 @@ _initialized = False
 _ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER", "")
 _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER", "")
 _ENV_NAME = os.getenv("BUSINESS_NAME", "MyBusiness")
-
+_ADMIN_KEY = os.getenv("ADMIN_KEY", "changeme")
 
 def _ensure_init():
     global _initialized
@@ -551,3 +551,50 @@ def _twiml(msg):
            + msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
            + '</Message></Response>')
     return Response(content=xml, media_type="application/xml")
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+WELCOME_MSG = """Welcome to {name} SMS Alerts!
+
+Your customers can now text {twilio} with feedback and you'll get alerts here when something needs attention.
+
+Commands you can text back:
+DETAILS - See the full message
+ACK - Mark alert as handled
+LIST - Last 5 issues
+STATUS - Check if alerts are on
+MUTE 2H - Silence for 2 hours
+PAUSE - Stop alerts until RESUME
+RESUME - Turn alerts back on
+HELP - Get this list anytime
+
+Emergencies always get through, even when muted."""
+
+
+@app.get("/admin/add")
+def admin_add(key: str = Query(...), name: str = Query(...), owner: str = Query(...), twilio: str = Query(...), biz_id: str = Query("")):
+    _ensure_init()
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+    owner = owner.strip()
+    twilio = twilio.strip()
+    name = name.strip()
+    if not owner.startswith("+") or not twilio.startswith("+"):
+        return {"error": "Phone numbers must start with + (e.g. +17275551234)"}
+    if not biz_id:
+        biz_id = name.lower().replace(" ", "-").replace("'", "")[:30]
+    ok = create_business(biz_id, name, owner, twilio)
+    if not ok:
+        return {"error": f"Business '{biz_id}' already exists or Twilio number already in use"}
+    msg = WELCOME_MSG.format(name=name, twilio=twilio)
+    send_sms(owner, msg, from_number=twilio)
+    return {"success": True, "business_id": biz_id, "name": name, "owner_phone": owner, "twilio_number": twilio, "welcome_sent": True}
+
+
+@app.get("/admin/list")
+def admin_list(key: str = Query(...)):
+    _ensure_init()
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+    businesses = get_all_businesses()
+    return {"count": len(businesses), "businesses": [{"id": b["id"], "name": b["name"], "owner": b["owner_phone"], "twilio": b["twilio_number"]} for b in businesses]}
