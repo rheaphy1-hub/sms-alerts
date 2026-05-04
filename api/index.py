@@ -872,6 +872,7 @@ footer{text-align:center;padding:32px 24px;color:#52525b;font-size:13px;border-t
 <div class="logo"><span>H</span> HOTLINE</div>
 <h1>Stop losing customers to <em>fixable problems</em></h1>
 <p class="sub">Your customers text you when something's wrong. AI filters the noise and alerts you instantly. No app to install — just SMS.</p>
+<a href="/demo" style="display:inline-block;padding:10px 22px;border:1px solid rgba(249,115,22,0.4);border-radius:8px;color:#fb923c;font-size:14px;font-weight:500;margin-bottom:8px;transition:background 0.2s">Try the live demo &rarr;</a>
 </div>
 
 <div class="card">
@@ -967,6 +968,186 @@ async function signup() {
 def signup_page():
     _ensure_init()
     return Response(content=SIGNUP_HTML, media_type="text/html")
+
+
+# ---------------------------------------------------------------------------
+# Live demo — no SMS, just AI classification
+# ---------------------------------------------------------------------------
+@app.post("/demo/classify")
+async def demo_classify(request_data: dict = None):
+    _ensure_init()
+    text = (request_data or {}).get("message", "").strip()
+    if not text:
+        return {"error": "No message provided"}
+    if len(text) > 500:
+        return {"error": "Message too long"}
+    c = classify_message(text)
+    return {
+        "tier": c["tier"],
+        "category": c["category"],
+        "sentiment": c["sentiment"],
+        "confidence": c["confidence"],
+        "summary": c["summary"],
+        "auto_reply": c["auto_reply"],
+        "tier_label": {1: "Emergency", 2: "Business-Critical", 3: "Reputation Risk", 4: "Routine"}.get(c["tier"], "Unknown"),
+        "would_alert": c["tier"] == 1 or (c["tier"] == 2 and c["confidence"] > 0.7),
+    }
+
+
+DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hotline — Live Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',system-ui,sans-serif;background:#09090b;color:#fafafa;-webkit-font-smoothing:antialiased}
+.wrap{max-width:480px;margin:0 auto;padding:32px 20px;min-height:100vh;display:flex;flex-direction:column}
+.top{text-align:center;margin-bottom:24px}
+.logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#f97316;margin-bottom:8px}
+.logo span{background:#f97316;color:#09090b;padding:2px 6px;border-radius:3px;margin-right:4px}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+.sub{font-size:14px;color:#71717a}
+.phone{flex:1;background:#18181b;border:1px solid #27272a;border-radius:16px;padding:16px;display:flex;flex-direction:column;min-height:420px}
+.msgs{flex:1;overflow-y:auto;padding-bottom:12px}
+.bubble{padding:10px 14px;border-radius:16px;font-size:14px;margin-bottom:8px;max-width:85%;line-height:1.5;animation:fadeUp 0.3s ease both}
+.bubble.in{background:#27272a;color:#e4e4e7;border-bottom-left-radius:4px}
+.bubble.out{background:#f97316;color:#09090b;margin-left:auto;border-bottom-right-radius:4px;font-weight:500}
+.bubble.alert{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;border-bottom-left-radius:4px}
+.bubble.system{background:rgba(113,113,122,0.15);color:#a1a1aa;font-size:13px;text-align:center;max-width:100%;border-radius:8px}
+.bubble .lbl{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;opacity:0.6;margin-bottom:3px}
+.meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.tag{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}
+.tag.t1{background:rgba(239,68,68,0.15);color:#f87171}
+.tag.t2{background:rgba(249,115,22,0.15);color:#fb923c}
+.tag.t3{background:rgba(250,204,21,0.15);color:#fbbf24}
+.tag.t4{background:rgba(113,113,122,0.15);color:#a1a1aa}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.input-row{display:flex;gap:8px;margin-top:12px}
+.input-row input{flex:1;padding:12px 14px;background:#09090b;border:1px solid #3f3f46;border-radius:10px;font-size:15px;color:#fafafa;font-family:inherit}
+.input-row input::placeholder{color:#52525b}
+.input-row input:focus{outline:none;border-color:#f97316}
+.input-row button{padding:12px 18px;background:#f97316;color:#09090b;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
+.input-row button:disabled{opacity:0.4;cursor:not-allowed}
+.examples{margin-top:16px}
+.examples p{font-size:12px;color:#52525b;margin-bottom:6px;text-align:center}
+.ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.ex{font-size:12px;padding:6px 10px;background:#18181b;border:1px solid #27272a;border-radius:6px;color:#a1a1aa;cursor:pointer;transition:border-color 0.2s}
+.ex:hover{border-color:#f97316;color:#fafafa}
+.cta{text-align:center;margin-top:20px}
+.cta a{display:inline-block;padding:12px 28px;background:#f97316;color:#09090b;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #09090b;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></head><body>
+<div class="wrap">
+<div class="top">
+<div class="logo"><span>H</span> HOTLINE</div>
+<h1>Try it live</h1>
+<p class="sub">Type a customer message and watch the AI respond</p>
+</div>
+
+<div class="phone">
+<div class="msgs" id="msgs">
+<div class="bubble system">Type a message below like a customer would text your business</div>
+</div>
+<div class="input-row">
+<input type="text" id="msg-input" placeholder="Type a customer message..." onkeydown="if(event.key==='Enter')sendDemo()">
+<button id="send-btn" onclick="sendDemo()">Send</button>
+</div>
+</div>
+
+<div class="examples">
+<p>Try these examples:</p>
+<div class="ex-row">
+<div class="ex" onclick="tryExample(this)">Bathroom is disgusting</div>
+<div class="ex" onclick="tryExample(this)">No one is at the front desk</div>
+<div class="ex" onclick="tryExample(this)">Great coffee today!</div>
+<div class="ex" onclick="tryExample(this)">Waited 30 minutes</div>
+<div class="ex" onclick="tryExample(this)">There's a fire in back</div>
+</div>
+</div>
+
+<div class="cta">
+<a href="/signup">Get Hotline for your business &rarr;</a>
+</div>
+</div>
+
+<script>
+const msgs = document.getElementById('msgs');
+const inp = document.getElementById('msg-input');
+const btn = document.getElementById('send-btn');
+
+function addBubble(cls, label, text, extra) {
+    const d = document.createElement('div');
+    d.className = 'bubble ' + cls;
+    let h = '';
+    if (label) h += '<div class="lbl">' + label + '</div>';
+    h += text;
+    if (extra) h += extra;
+    d.innerHTML = h;
+    msgs.appendChild(d);
+    msgs.scrollTop = msgs.scrollHeight;
+    return d;
+}
+
+function tryExample(el) {
+    inp.value = el.textContent;
+    sendDemo();
+}
+
+async function sendDemo() {
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    btn.disabled = true;
+
+    addBubble('in', 'Customer texts', text);
+
+    await new Promise(r => setTimeout(r, 400));
+    const thinking = addBubble('system', '', '<span class="spinner"></span> AI analyzing...');
+
+    try {
+        const r = await fetch('/demo/classify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: text})
+        });
+        const d = await r.json();
+        thinking.remove();
+
+        await new Promise(r => setTimeout(r, 200));
+        addBubble('out', 'Auto-reply to customer', d.auto_reply);
+
+        await new Promise(r => setTimeout(r, 400));
+
+        const tierCls = 't' + d.tier;
+        const tags = '<div class="meta">'
+            + '<span class="tag ' + tierCls + '">Tier ' + d.tier + ': ' + d.tier_label + '</span>'
+            + '<span class="tag ' + tierCls + '">' + d.category.replace('_',' ') + '</span>'
+            + '<span class="tag ' + tierCls + '">' + Math.round(d.confidence * 100) + '% confidence</span>'
+            + '</div>';
+
+        if (d.would_alert) {
+            const alertText = d.tier === 1
+                ? '&#x1F6A8; URGENT: Possible emergency reported\\nReply: DETAILS'
+                : '&#x26A0;&#xFE0F; Issue detected: ' + d.summary + '\\nReply: DETAILS or ACK';
+            addBubble('alert', 'Alert sent to owner', alertText + tags);
+        } else {
+            addBubble('system', '', 'No alert sent (Tier ' + d.tier + ' &mdash; ' + d.tier_label.toLowerCase() + ')' + tags);
+        }
+    } catch(e) {
+        thinking.remove();
+        addBubble('system', '', 'Demo error. Try again.');
+    }
+    btn.disabled = false;
+    inp.focus();
+}
+</script>
+</body></html>"""
+
+
+@app.get("/demo")
+def demo_page():
+    _ensure_init()
+    return Response(content=DEMO_HTML, media_type="text/html")
 
 
 @app.post("/signup/create")
