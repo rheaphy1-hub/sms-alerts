@@ -1,214 +1,146 @@
 """
-SMS Alert System v2 — Hotline — Single-file Vercel deployment.
+Hotline — SMS Alert System. Single-file Vercel deployment.
 """
-
-import os
-import re
-import json
-import logging
+import os, re, json, logging
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
-
 from fastapi import FastAPI, Form, Response, Query
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sms")
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
+# --- Database ---
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres")
-
 if USE_POSTGRES:
-    import psycopg2
-    import psycopg2.extras
+    import psycopg2, psycopg2.extras
 else:
     import sqlite3
 
-
 def _pg_connect():
-    url = DATABASE_URL
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    conn = psycopg2.connect(url)
-    conn.autocommit = False
-    return conn
-
+    url = DATABASE_URL.replace("postgres://", "postgresql://", 1) if DATABASE_URL.startswith("postgres://") else DATABASE_URL
+    c = psycopg2.connect(url); c.autocommit = False; return c
 
 def _sqlite_connect():
-    conn = sqlite3.connect(os.getenv("DB_PATH", "alerts.db"))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
+    c = sqlite3.connect(os.getenv("DB_PATH", "alerts.db")); c.row_factory = sqlite3.Row; c.execute("PRAGMA journal_mode=WAL"); return c
 
 @contextmanager
 def get_db():
     conn = _pg_connect() if USE_POSTGRES else _sqlite_connect()
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    try: yield conn; conn.commit()
+    finally: conn.close()
 
-
-def _fetchone(conn, query, params=()):
+def _fetchone(conn, q, p=()):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) if USE_POSTGRES else conn.cursor()
-    cur.execute(query, params)
-    row = cur.fetchone()
-    return dict(row) if row else None
+    cur.execute(q, p); row = cur.fetchone(); return dict(row) if row else None
 
-
-def _fetchall(conn, query, params=()):
+def _fetchall(conn, q, p=()):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) if USE_POSTGRES else conn.cursor()
-    cur.execute(query, params)
-    return [dict(r) for r in cur.fetchall()]
+    cur.execute(q, p); return [dict(r) for r in cur.fetchall()]
 
+def _execute(conn, q, p=()):
+    cur = conn.cursor(); cur.execute(q, p); return cur
 
-def _execute(conn, query, params=()):
-    cur = conn.cursor()
-    cur.execute(query, params)
-    return cur
-
-
-def _q(query):
-    return query.replace("?", "%s") if USE_POSTGRES else query
-
-
-def _normalize_phone(phone):
-    return phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-
+def _q(query): return query.replace("?", "%s") if USE_POSTGRES else query
+def _normalize_phone(p): return p.replace(" ","").replace("-","").replace("(","").replace(")","")
 
 def init_db():
-    serial = "SERIAL" if USE_POSTGRES else "INTEGER"
+    s = "SERIAL" if USE_POSTGRES else "INTEGER"
     pk = "PRIMARY KEY" if USE_POSTGRES else "PRIMARY KEY AUTOINCREMENT"
-    with get_db() as conn:
-        _execute(conn, f"""CREATE TABLE IF NOT EXISTS businesses (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
-            owner_phone TEXT NOT NULL, alert_phones TEXT NOT NULL DEFAULT '',
-            email TEXT NOT NULL DEFAULT '', digest_freq TEXT NOT NULL DEFAULT 'weekly',
-            twilio_number TEXT NOT NULL UNIQUE,
-            muted_until TEXT, paused INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
-        _execute(conn, f"""CREATE TABLE IF NOT EXISTS messages (
-            id {serial} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
+    with get_db() as c:
+        _execute(c, f"""CREATE TABLE IF NOT EXISTS businesses (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', owner_phone TEXT NOT NULL,
+            alert_phones TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+            digest_freq TEXT NOT NULL DEFAULT 'weekly', alert_tier3 INTEGER DEFAULT 0,
+            website_url TEXT NOT NULL DEFAULT '', website_info TEXT NOT NULL DEFAULT '',
+            twilio_number TEXT NOT NULL UNIQUE, muted_until TEXT, paused INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL)""")
+        _execute(c, f"""CREATE TABLE IF NOT EXISTS messages (
+            id {s} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
             message_text TEXT NOT NULL, tier INTEGER, category TEXT, sentiment TEXT,
             confidence REAL, summary TEXT, acknowledged INTEGER DEFAULT 0,
             alerted INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
-        _execute(conn, f"""CREATE TABLE IF NOT EXISTS alert_log (
-            id {serial} {pk}, message_id INTEGER NOT NULL, business_id TEXT NOT NULL,
+        _execute(c, f"""CREATE TABLE IF NOT EXISTS alert_log (
+            id {s} {pk}, message_id INTEGER NOT NULL, business_id TEXT NOT NULL,
             alert_type TEXT NOT NULL, sent_at TEXT NOT NULL)""")
-        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)")
-        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)")
-        for col, default in [("alert_phones","''"),("email","''"),("digest_freq","'weekly'")]:
-            try:
-                _execute(conn, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
-            except Exception:
-                pass
+        _execute(c, "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)")
+        _execute(c, "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)")
+        for col, default in [("alert_phones","''"),("email","''"),("digest_freq","'weekly'"),
+                             ("alert_tier3","0"),("website_url","''"),("website_info","''")]:
+            try: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+            except: pass
 
-
-def create_business(biz_id, name, owner_phone, twilio_number, extra_phones="", email=""):
+def create_business(biz_id, name, owner_phone, twilio_number, extra_phones="", email="", website_url=""):
     now = datetime.now(timezone.utc).isoformat()
-    all_phones = owner_phone
-    if extra_phones:
-        all_phones = ",".join([owner_phone] + [p.strip() for p in extra_phones.split(",") if p.strip()])
+    all_phones = ",".join([owner_phone] + [p.strip() for p in extra_phones.split(",") if p.strip()]) if extra_phones else owner_phone
+    website_info = scrape_website_info(website_url) if website_url else ""
     try:
-        with get_db() as conn:
-            _execute(conn, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,twilio_number,created_at) VALUES (?,?,?,?,?,?,?)"),
-                     (biz_id, name, owner_phone, all_phones, email or "", twilio_number, now))
+        with get_db() as c:
+            _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,created_at) VALUES (?,?,?,?,?,?,?,?,?)"),
+                     (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number, now))
         return True
-    except Exception:
-        return False
-
+    except: return False
 
 def get_alert_phones(biz):
-    phones_str = biz.get("alert_phones") or biz.get("owner_phone") or ""
-    phones = [p.strip() for p in phones_str.split(",") if p.strip()]
-    owner = biz.get("owner_phone", "")
-    if owner and owner not in phones:
-        phones.insert(0, owner)
+    phones = [p.strip() for p in (biz.get("alert_phones") or biz.get("owner_phone") or "").split(",") if p.strip()]
+    owner = biz.get("owner_phone","")
+    if owner and owner not in phones: phones.insert(0, owner)
     return phones
-
 
 def get_business_by_twilio(twilio_number):
     clean = _normalize_phone(twilio_number)
-    with get_db() as conn:
-        row = _fetchone(conn, _q("SELECT * FROM businesses WHERE twilio_number = ?"), (clean,))
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT * FROM businesses WHERE twilio_number=?"), (clean,))
         if row: return row
-        for r in _fetchall(conn, "SELECT * FROM businesses"):
+        for r in _fetchall(c, "SELECT * FROM businesses"):
             if _normalize_phone(r["twilio_number"])[-10:] == clean[-10:]: return r
     return None
 
-
 def get_business_by_owner(owner_phone):
     clean = _normalize_phone(owner_phone)
-    with get_db() as conn:
-        row = _fetchone(conn, _q("SELECT * FROM businesses WHERE owner_phone = ?"), (clean,))
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT * FROM businesses WHERE owner_phone=?"), (clean,))
         if row: return row
-        for r in _fetchall(conn, "SELECT * FROM businesses"):
+        for r in _fetchall(c, "SELECT * FROM businesses"):
             if _normalize_phone(r["owner_phone"])[-10:] == clean[-10:]: return r
             for p in (r.get("alert_phones") or "").split(","):
                 if p.strip() and _normalize_phone(p.strip())[-10:] == clean[-10:]: return r
     return None
 
-
-def store_message(business_id, from_number, message_text, classification):
+def store_message(bid, fn, mt, cl):
     now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
+    with get_db() as c:
         q = _q("INSERT INTO messages (business_id,from_number,message_text,tier,category,sentiment,confidence,summary,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
-        params = (business_id, from_number, message_text, classification.get("tier"),
-                  classification.get("category"), classification.get("sentiment"),
-                  classification.get("confidence"), classification.get("summary", ""), now)
-        if USE_POSTGRES:
-            cur = _execute(conn, q + " RETURNING id", params)
-            return cur.fetchone()[0]
-        else:
-            return _execute(conn, q, params).lastrowid
+        p = (bid,fn,mt,cl.get("tier"),cl.get("category"),cl.get("sentiment"),cl.get("confidence"),cl.get("summary",""),now)
+        if USE_POSTGRES: cur = _execute(c, q+" RETURNING id", p); return cur.fetchone()[0]
+        else: return _execute(c, q, p).lastrowid
 
+def log_alert(mid, bid, at):
+    with get_db() as c: _execute(c, _q("INSERT INTO alert_log (message_id,business_id,alert_type,sent_at) VALUES (?,?,?,?)"), (mid,bid,at,datetime.now(timezone.utc).isoformat()))
 
-def log_alert(message_id, business_id, alert_type):
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        _execute(conn, _q("INSERT INTO alert_log (message_id,business_id,alert_type,sent_at) VALUES (?,?,?,?)"),
-                 (message_id, business_id, alert_type, now))
+def mark_acknowledged(mid):
+    with get_db() as c: _execute(c, _q("UPDATE messages SET acknowledged=1 WHERE id=?"), (mid,))
 
+def mark_alerted(mid):
+    with get_db() as c: _execute(c, _q("UPDATE messages SET alerted=1 WHERE id=?"), (mid,))
 
-def mark_acknowledged(message_id):
-    with get_db() as conn:
-        _execute(conn, _q("UPDATE messages SET acknowledged=1 WHERE id=?"), (message_id,))
+def get_latest_unacked(bid):
+    with get_db() as c: return _fetchone(c, _q("SELECT * FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=0 ORDER BY created_at DESC LIMIT 1"), (bid,))
 
+def get_message_by_id(mid):
+    with get_db() as c: return _fetchone(c, _q("SELECT * FROM messages WHERE id=?"), (mid,))
 
-def mark_alerted(message_id):
-    with get_db() as conn:
-        _execute(conn, _q("UPDATE messages SET alerted=1 WHERE id=?"), (message_id,))
+def get_recent_flagged(bid, limit=5):
+    with get_db() as c: return _fetchall(c, _q("SELECT * FROM messages WHERE business_id=? AND tier IN (1,2) ORDER BY created_at DESC LIMIT ?"), (bid, limit))
 
+def get_recent_all(bid, limit=5):
+    with get_db() as c: return _fetchall(c, _q("SELECT * FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT ?"), (bid, limit))
 
-def get_latest_unacked(biz_id):
-    with get_db() as conn:
-        return _fetchone(conn, _q("SELECT * FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=0 ORDER BY created_at DESC LIMIT 1"), (biz_id,))
-
-
-def get_message_by_id(msg_id):
-    with get_db() as conn:
-        return _fetchone(conn, _q("SELECT * FROM messages WHERE id=?"), (msg_id,))
-
-
-def get_recent_flagged(biz_id, limit=5):
-    with get_db() as conn:
-        return _fetchall(conn, _q("SELECT * FROM messages WHERE business_id=? AND tier IN (1,2) ORDER BY created_at DESC LIMIT ?"), (biz_id, limit))
-
-
-def get_recent_all(biz_id, limit=5):
-    with get_db() as conn:
-        return _fetchall(conn, _q("SELECT * FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT ?"), (biz_id, limit))
-
-
-def get_recent_alert_count(biz_id, minutes=10):
+def get_recent_alert_count(bid, minutes=10):
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
-    with get_db() as conn:
-        row = _fetchone(conn, _q("SELECT COUNT(*) as cnt FROM alert_log WHERE business_id=? AND sent_at>?"), (biz_id, cutoff))
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM alert_log WHERE business_id=? AND sent_at>?"), (bid, cutoff))
         return row["cnt"] if row else 0
-
 
 def is_alerts_silenced(biz):
     if biz.get("paused"): return True
@@ -216,821 +148,601 @@ def is_alerts_silenced(biz):
     if mu:
         try:
             if datetime.fromisoformat(mu) > datetime.now(timezone.utc): return True
-        except Exception: pass
+        except: pass
     return False
 
+def set_muted_until(bid, until):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET muted_until=? WHERE id=?"), (until.isoformat() if until else None, bid))
 
-def set_muted_until(biz_id, until):
-    with get_db() as conn:
-        _execute(conn, _q("UPDATE businesses SET muted_until=? WHERE id=?"),
-                 (until.isoformat() if until else None, biz_id))
+def set_paused(bid, paused):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET paused=? WHERE id=?"), (1 if paused else 0, bid))
 
+def set_digest_freq(bid, freq):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET digest_freq=? WHERE id=?"), (freq, bid))
 
-def set_paused(biz_id, paused):
-    with get_db() as conn:
-        _execute(conn, _q("UPDATE businesses SET paused=? WHERE id=?"), (1 if paused else 0, biz_id))
-
-
-def set_digest_freq(biz_id, freq):
-    with get_db() as conn:
-        _execute(conn, _q("UPDATE businesses SET digest_freq=? WHERE id=?"), (freq, biz_id))
-
+def set_alert_tier3(bid, on):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET alert_tier3=? WHERE id=?"), (1 if on else 0, bid))
 
 def get_all_businesses():
-    with get_db() as conn:
-        return _fetchall(conn, "SELECT * FROM businesses")
+    with get_db() as c: return _fetchall(c, "SELECT * FROM businesses")
 
-
-def get_stats(biz_id, days=7):
+def get_stats(bid, days=7):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    with get_db() as conn:
-        total = _fetchone(conn, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND created_at>?"), (biz_id, cutoff))["cnt"]
-        flagged = _fetchone(conn, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>?"), (biz_id, cutoff))["cnt"]
-        acked = _fetchone(conn, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=1 AND created_at>?"), (biz_id, cutoff))["cnt"]
-        top = _fetchone(conn, _q("SELECT category,COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>? GROUP BY category ORDER BY cnt DESC LIMIT 1"), (biz_id, cutoff))
-        return {"total_messages": total, "flagged_issues": flagged, "acknowledged": acked, "top_category": top["category"] if top else "none"}
+    with get_db() as c:
+        total = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND created_at>?"), (bid, cutoff))["cnt"]
+        flagged = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>?"), (bid, cutoff))["cnt"]
+        acked = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=1 AND created_at>?"), (bid, cutoff))["cnt"]
+        top = _fetchone(c, _q("SELECT category,COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>? GROUP BY category ORDER BY cnt DESC LIMIT 1"), (bid, cutoff))
+        return {"total_messages":total,"flagged_issues":flagged,"acknowledged":acked,"top_category":top["category"] if top else "none"}
 
 
-# ---------------------------------------------------------------------------
-# SMS — Twilio
-# ---------------------------------------------------------------------------
+# --- Website scraping ---
+def scrape_website_info(url):
+    if not url: return ""
+    try:
+        import urllib.request
+        if not url.startswith("http"): url = "https://" + url
+        req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0 (Hotline Bot)"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")[:10000]
+        # Extract text from common meta tags and body
+        info_parts = []
+        for tag in ["description","og:description"]:
+            m = re.search(rf'<meta[^>]*(?:name|property)="{tag}"[^>]*content="([^"]*)"', html, re.I)
+            if m: info_parts.append(m.group(1))
+        title_m = re.search(r"<title>([^<]*)</title>", html, re.I)
+        if title_m: info_parts.insert(0, title_m.group(1).strip())
+        # Try to find address/hours patterns
+        for pattern in [r'(\d+\s+\w+\s+(?:St|Ave|Blvd|Rd|Dr|Ln|Way|Ct)[^<]{0,60})', r'(\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*[-\u2013]\s*\d{1,2}(?::\d{2})?\s*(?:am|pm))']:
+            matches = re.findall(pattern, html, re.I)
+            info_parts.extend(matches[:2])
+        result = " | ".join(info_parts)[:500]
+        logger.info(f"Scraped website info: {result[:100]}")
+        return result
+    except Exception as e:
+        logger.error(f"Website scrape failed for {url}: {e}")
+        return ""
+
+
+# --- SMS / Twilio ---
 _twilio_client = None
 _twilio_from = ""
 
-
 def init_sms():
     global _twilio_client, _twilio_from
-    sid = os.getenv("TWILIO_ACCOUNT_SID")
-    token = os.getenv("TWILIO_AUTH_TOKEN")
+    sid, token = os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
     _twilio_from = os.getenv("TWILIO_PHONE_NUMBER", "")
     if sid and token:
-        from twilio.rest import Client
-        _twilio_client = Client(sid, token)
-        logger.info("Twilio ready")
-    else:
-        logger.warning("Twilio not configured — dry-run mode")
-
+        from twilio.rest import Client; _twilio_client = Client(sid, token); logger.info("Twilio ready")
+    else: logger.warning("Twilio not configured")
 
 def send_sms(to, body, from_number=""):
     sender = from_number or _twilio_from
-    if not _twilio_client:
-        logger.info(f"[DRY-RUN] {sender} -> {to}: {body}")
-        return True
-    try:
-        _twilio_client.messages.create(body=body, from_=sender, to=to)
-        return True
-    except Exception as e:
-        logger.error(f"SMS failed to {to}: {e}")
-        return False
-
+    if not _twilio_client: logger.info(f"[DRY-RUN] {sender} -> {to}: {body}"); return True
+    try: _twilio_client.messages.create(body=body, from_=sender, to=to); return True
+    except Exception as e: logger.error(f"SMS failed to {to}: {e}"); return False
 
 def buy_twilio_number(area_code="", webhook_url=""):
-    if not _twilio_client:
-        logger.warning("[DRY-RUN] Would buy a Twilio number")
-        return "+15550000000"
+    if not _twilio_client: return "+15550000000"
     try:
-        kwargs = {"limit": 1, "sms_enabled": True, "voice_enabled": False}
-        if area_code: kwargs["area_code"] = area_code
-        available = _twilio_client.available_phone_numbers("US").local.list(**kwargs)
-        if not available and "area_code" in kwargs:
-            del kwargs["area_code"]
-            available = _twilio_client.available_phone_numbers("US").local.list(**kwargs)
-        if not available: return None
-        number = _twilio_client.incoming_phone_numbers.create(
-            phone_number=available[0].phone_number,
-            sms_url=webhook_url or "https://sms-alerts.vercel.app/sms/incoming",
-            sms_method="POST")
-        logger.info(f"Bought Twilio number: {number.phone_number}")
-        return number.phone_number
-    except Exception as e:
-        logger.error(f"Failed to buy Twilio number: {e}")
-        return None
+        kw = {"limit":1,"sms_enabled":True,"voice_enabled":False}
+        if area_code: kw["area_code"] = area_code
+        avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
+        if not avail and "area_code" in kw: del kw["area_code"]; avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
+        if not avail: return None
+        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://sms-alerts.vercel.app/sms/incoming", sms_method="POST")
+        return num.phone_number
+    except Exception as e: logger.error(f"Buy number failed: {e}"); return None
 
 
-# ---------------------------------------------------------------------------
-# Email — SendGrid (for digests)
-# ---------------------------------------------------------------------------
+# --- Email (SendGrid) ---
 SENDGRID_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
 DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "alerts@hotline.so")
 
-
 def send_email(to_email, subject, html_body):
-    if not SENDGRID_KEY:
-        logger.info(f"[DRY-RUN] Email to {to_email}: {subject}")
-        return True
+    if not SENDGRID_KEY: logger.info(f"[DRY-RUN] Email to {to_email}: {subject}"); return True
     try:
         import urllib.request
-        data = json.dumps({
-            "personalizations": [{"to": [{"email": to_email}]}],
-            "from": {"email": DIGEST_FROM_EMAIL, "name": "Hotline"},
-            "subject": subject,
-            "content": [{"type": "text/html", "value": html_body}]
-        }).encode()
-        req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send",
-            data=data, headers={"Authorization": f"Bearer {SENDGRID_KEY}",
-                                "Content-Type": "application/json"}, method="POST")
-        urllib.request.urlopen(req)
-        logger.info(f"Email sent to {to_email}")
-        return True
-    except Exception as e:
-        logger.error(f"Email failed to {to_email}: {e}")
-        return False
+        data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":DIGEST_FROM_EMAIL,"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
+        req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send", data=data, headers={"Authorization":f"Bearer {SENDGRID_KEY}","Content-Type":"application/json"}, method="POST")
+        urllib.request.urlopen(req); return True
+    except Exception as e: logger.error(f"Email failed: {e}"); return False
 
 
-# ---------------------------------------------------------------------------
-# AI Classifier
-# ---------------------------------------------------------------------------
+# --- AI Classifier ---
 _ai_client = None
 
-CLASSIFICATION_PROMPT = """You are a business issue classifier. Analyze customer SMS messages and return structured JSON.
+CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
 Tiers:
-- Tier 1: Emergency — violence, injury, fire, flooding, gas leak, medical emergency, active danger
-- Tier 2: Business-Critical — operations broken, no staff, equipment failure, health hazard, extreme waits
-- Tier 3: Reputation Risk — unhappy customer, complaint, bad experience
-- Tier 4: Routine — general inquiry, positive feedback, neutral
+- Tier 1: Emergency ONLY for actual physical danger (fire, injury, flooding, violence, gas leak). NOT figurative language.
+- Tier 2: Business-Critical - operations broken, no staff, equipment failure, health hazard, extreme waits, supply issues (out of toilet paper, soap, etc)
+- Tier 3: Reputation Risk - unhappy customer, complaint, bad experience
+- Tier 4: Routine - general inquiry, positive feedback, neutral
 
-Extract: category (cleanliness/staffing/equipment/wait_time/safety/other), sentiment (negative/neutral/positive), confidence (0.0-1.0), summary (5-10 words), auto_reply (see tone rules below).
+Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
 
-AUTO-REPLY TONE RULES (critical):
-- Tier 1 (Emergency): Urgent, direct. ALWAYS tell the customer to call 911 if it's a real emergency. Never claim that emergency services have been contacted. Example: "If this is an emergency, please call 911 immediately. We have notified the business owner."
-- Tier 2 (Business-Critical): Professional, serious. Confirm the specific issue type. Say management has been notified. No exclamation marks. Example: "We've flagged this as an equipment issue and notified management. Thank you for letting us know."
-- Tier 3 (Reputation Risk): Empathetic, professional. Acknowledge their frustration and gently invite them to share more details so the business can address it. No exclamation marks. Example: "We're sorry to hear that. If you're willing to share more details, it helps us make it right."
-- Tier 4 (Routine/Positive): Warm, friendly, use exclamation marks. Show genuine appreciation. Example: "Thanks so much for the kind words! We'll make sure the team hears this."
+CRITICAL RULES:
+- Category "inquiry" is for questions about the business (hours, location, menu, directions, policies). NEVER answer these questions with fabricated information. You do not know the answer. Always forward to management.
+- "fire her/him" = employment complaint, NOT emergency. "this place is a dumpster fire" = complaint, NOT emergency.
+- For Tier 3: invite the customer to share more details. This gives them an outlet and prevents bad reviews.
+- For Tier 4 positive: be warm, use exclamation marks.
+- For Tier 1: tell customer to call 911. Never claim emergency services contacted.
+- For inquiries: say you've forwarded their question to management and someone will get back to them.
 
-Keep auto_reply under 160 characters. Never ask follow-up questions for Tier 1 or 2.
+{website_context}
 
-Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
-
+Keep auto_reply under 160 characters. Be natural.
+Respond ONLY with JSON: {{"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}}"""
 
 def init_classifier():
     global _ai_client
     key = os.getenv("ANTHROPIC_API_KEY")
     if key:
-        from anthropic import Anthropic
-        _ai_client = Anthropic(api_key=key)
-    else:
-        logger.warning("No ANTHROPIC_API_KEY — using fallback classifier")
+        from anthropic import Anthropic; _ai_client = Anthropic(api_key=key)
+    else: logger.warning("No ANTHROPIC_API_KEY")
 
-
-def classify_message(text):
+def classify_message(text, website_info=""):
+    ctx = f"Business website info (use ONLY for answering basic questions like hours/address): {website_info}" if website_info else "No business website info available. Do NOT guess answers to customer questions."
+    prompt = CLASSIFICATION_PROMPT.replace("{website_context}", ctx)
     if _ai_client:
         try:
-            resp = _ai_client.messages.create(
-                model="claude-sonnet-4-20250514", max_tokens=300,
-                system=CLASSIFICATION_PROMPT,
-                messages=[{"role": "user", "content": f'Classify this customer SMS:\n\n"{text}"'}])
+            resp = _ai_client.messages.create(model="claude-sonnet-4-20250514", max_tokens=300, system=prompt,
+                messages=[{"role":"user","content":f'Classify this customer SMS:\n\n"{text}"'}])
             raw = resp.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             r = json.loads(raw)
-            r["tier"] = max(1, min(4, int(r.get("tier", 4))))
-            r["confidence"] = max(0.0, min(1.0, float(r.get("confidence", 0.5))))
-            r.setdefault("category", "other")
-            r.setdefault("sentiment", "neutral")
-            r.setdefault("summary", text[:50])
-            r.setdefault("auto_reply", "Thanks so much for reaching out! We've noted your message.")
+            r["tier"] = max(1,min(4,int(r.get("tier",4))))
+            r["confidence"] = max(0.0,min(1.0,float(r.get("confidence",0.5))))
+            for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks so much for reaching out! We've noted your message.")]:
+                r.setdefault(k,v)
             return r
-        except Exception as e:
-            logger.error(f"AI classification failed: {e}")
+        except Exception as e: logger.error(f"AI classify failed: {e}")
     return _classify_fallback(text)
-
 
 def _classify_fallback(text):
     t = text.lower()
-    emergency = ["fire","help","emergency","injury","hurt","bleeding","attack","weapon","gun",
-                 "violence","ambulance","911","collapsed","unconscious","not breathing",
-                 "heart attack","seizure","overdose","stabbed","shot","flood","flooding",
-                 "gas leak","smoke","sparks","electrical","water leak","burst pipe"]
-    if any(w in t for w in emergency):
-        return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,
-                "summary":"Possible emergency reported",
+    # Check for figurative "fire" (fire her, fire him, dumpster fire, etc)
+    fire_is_literal = "fire" in t and not any(p in t for p in ["fire her","fire him","fire them","fire that","fire the ","fire this","dumpster fire","on fire with","fired"])
+    emergency = ["emergency","injury","hurt","bleeding","attack","weapon","gun","violence","ambulance","911",
+                 "collapsed","unconscious","not breathing","heart attack","seizure","overdose","stabbed","shot",
+                 "flood","flooding","gas leak","smoke","sparks","electrical","water leak","burst pipe"]
+    if fire_is_literal: emergency.append("fire")
+    if any(f" {w} " in f" {t} " or t.startswith(w+" ") or t.endswith(" "+w) or t==w for w in emergency):
+        return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,"summary":"Possible emergency reported",
                 "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business owner."}
-
-    crit = {"cleanliness": (["dirty","disgusting","filthy","mess","bathroom","gross","unsanitary"],
-                            "We've flagged this as a cleanliness issue and notified management. Thank you for letting us know."),
-            "staffing": (["no one","nobody","empty","no staff","where is everyone","closed"],
-                         "We've flagged this as a staffing issue and notified management. We apologize for the inconvenience."),
-            "equipment": (["broken","machine","not working","out of order","malfunction"],
-                          "We've flagged this as an equipment issue and notified management. Thank you for letting us know."),
-            "wait_time": (["waited","waiting","slow","forever","leaving","20 minutes","30 minutes"],
-                          "We're sorry about the wait. Management has been notified about the delay.")}
-    for cat, (words, reply) in crit.items():
+    question_words = ["what time","when do","where is","where are","do you have","is there","how do i","how much","can i","are you open"]
+    if any(w in t for w in question_words) or t.endswith("?"):
+        return {"tier":4,"category":"inquiry","sentiment":"neutral","confidence":0.7,"summary":"Customer inquiry",
+                "auto_reply":"Great question! We've forwarded this to management and someone will get back to you shortly."}
+    crit = {"cleanliness":(["dirty","disgusting","filthy","mess","bathroom","gross","unsanitary"],
+            "We've flagged this as a cleanliness issue and notified management. Thank you for letting us know."),
+        "staffing":(["no one","nobody","empty","no staff","where is everyone","closed"],
+            "We've flagged this as a staffing issue and notified management. We apologize for the inconvenience."),
+        "equipment":(["broken","machine","not working","out of order","malfunction"],
+            "We've flagged this as an equipment issue and notified management. Thank you for letting us know."),
+        "supply":(["out of","no more","need more","empty dispenser","toilet paper","soap","napkins","paper towels"],
+            "We've noted the supply issue and notified management. Thank you for letting us know."),
+        "wait_time":(["waited","waiting","slow","forever","leaving","20 minutes","30 minutes"],
+            "We're sorry about the wait. Management has been notified about the delay.")}
+    for cat,(words,reply) in crit.items():
         if any(w in t for w in words):
             return {"tier":2,"category":cat,"sentiment":"negative","confidence":0.85,
                     "summary":f"{cat.replace('_',' ').title()} issue reported","auto_reply":reply}
-
-    neg = ["bad","terrible","awful","rude","worst","hate","angry","disappointed","unhappy","never coming back"]
+    neg = ["bad","terrible","awful","rude","worst","hate","angry","disappointed","unhappy","never coming back","too loud","too cold","too hot"]
     if any(w in t for w in neg):
-        return {"tier":3,"category":"other","sentiment":"negative","confidence":0.6,
-                "summary":"Unhappy customer feedback",
+        return {"tier":3,"category":"other","sentiment":"negative","confidence":0.6,"summary":"Unhappy customer feedback",
                 "auto_reply":"We're sorry to hear that. If you're willing to share more details, it helps us make it right."}
-
-    return {"tier":4,"category":"other","sentiment":"neutral","confidence":0.5,
-            "summary":"General message received",
+    return {"tier":4,"category":"other","sentiment":"neutral","confidence":0.5,"summary":"General message received",
             "auto_reply":"Thanks so much for reaching out! We've noted your message."}
 
 
-# ---------------------------------------------------------------------------
-# Owner commands
-# ---------------------------------------------------------------------------
+# --- Owner commands ---
 _owner_context = {}
+_owner_reply_mode = {}  # biz_id -> message_id (waiting for reply text)
 
-
-def set_context(biz_id, msg_id):
-    _owner_context[biz_id] = msg_id
-
+def set_context(bid, mid): _owner_context[bid] = mid
 
 def _fmt_ts(iso):
-    try:
-        return datetime.fromisoformat(iso).strftime("%b %d %I:%M%p").replace(" 0", " ")
-    except Exception:
-        return iso[:16]
-
+    try: return datetime.fromisoformat(iso).strftime("%b %d %I:%M%p").replace(" 0"," ")
+    except: return iso[:16]
 
 def _fmt_phone_short(phone):
-    d = _normalize_phone(phone).replace("+", "")
-    if len(d) == 11 and d[0] == "1": d = d[1:]
-    if len(d) == 10: return f"({d[:3]}) {d[3:6]}-{d[6:]}"
+    d = _normalize_phone(phone).replace("+","")
+    if len(d)==11 and d[0]=="1": d=d[1:]
+    if len(d)==10: return f"({d[:3]}) {d[3:6]}-{d[6:]}"
     return phone
 
-
-def handle_owner_command(text, business):
-    biz_id = business["id"]
+def handle_owner_command(text, business, sender_phone=""):
+    bid = business["id"]
     raw = text.strip()
     cmd = raw.upper()
 
-    # --- Acknowledgment ---
-    ack_words = {"OK", "GOT IT", "DONE", "ON IT", "ACK"}
-    is_thumbs = "\U0001f44d" in raw
-    is_reaction_ack = any(cmd.startswith(w) for w in ["LIKED", "LOVED", "THUMBED UP"])
+    # Check if we're in reply mode
+    if bid in _owner_reply_mode:
+        msg_id = _owner_reply_mode.pop(bid)
+        msg = get_message_by_id(msg_id)
+        if msg:
+            send_sms(msg["from_number"], raw, from_number=business.get("twilio_number",""))
+            return f"Reply sent to {_fmt_phone_short(msg['from_number'])}."
+        return "Could not find the original message."
 
+    # Ack
+    ack_words = {"OK","GOT IT","DONE","ON IT","ACK","YES"}
+    is_thumbs = "\U0001f44d" in raw
+    is_reaction_ack = any(cmd.startswith(w) for w in ["LIKED","LOVED","THUMBED UP"])
     if cmd in ack_words or is_thumbs or is_reaction_ack:
-        msg = get_message_by_id(_owner_context.get(biz_id, 0)) if biz_id in _owner_context else None
-        if not msg: msg = get_latest_unacked(biz_id)
+        msg = get_message_by_id(_owner_context.get(bid,0)) if bid in _owner_context else None
+        if not msg: msg = get_latest_unacked(bid)
         if not msg: return "No active alerts to acknowledge."
         if msg["acknowledged"]: return f"Alert #{msg['id']} already acknowledged."
         mark_acknowledged(msg["id"])
-        # Notify other contacts in the group
-        acker_phone = _fmt_phone_short(raw) if False else ""  # We don't know who sent it here
-        all_phones = get_alert_phones(business)
-        from_number = business.get("twilio_number", "")
-        # We'll notify from the incoming handler instead where we know the sender
+        others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
+        short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
+        for p in others: send_sms(p, f"\u2705 Alert #{msg['id']} acknowledged by {short}.", from_number=business.get("twilio_number",""))
         return f"\u2705 Alert #{msg['id']} acknowledged."
 
     if cmd == "HELP":
-        return ("Commands:\nDETAILS \u2014 View latest alert\n\U0001f44d or OK \u2014 Acknowledge alert\n"
-                "LIST \u2014 Last 5 flagged issues\nLIST ALL \u2014 Last 5 messages (all types)\n"
-                "STATUS \u2014 Alert status\nMUTE 2H \u2014 Silence for 2 hours\n"
-                "PAUSE \u2014 Stop all alerts\nRESUME \u2014 Resume alerts\n"
-                "DIGEST DAILY \u2014 Get daily email digest\nDIGEST WEEKLY \u2014 Get weekly email digest\n"
-                "HELP \u2014 This message")
+        return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Acknowledge alert\n"
+                "REPLY \u2014 Reply to customer\nLIST \u2014 Flagged issues\nLIST ALL \u2014 All messages\n"
+                "STATUS \u2014 Alert status\nALERTS ALL \u2014 Get Tier 2+3 alerts\nALERTS CRITICAL \u2014 Tier 2 only\n"
+                "MUTE 2H \u2014 Silence alerts\nPAUSE / RESUME\n"
+                "DIGEST DAILY / WEEKLY\nHELP \u2014 This message")
+
+    if cmd == "REPLY":
+        msg = get_message_by_id(_owner_context.get(bid,0)) if bid in _owner_context else None
+        if not msg: msg = get_latest_unacked(bid)
+        if not msg: return "No active message to reply to."
+        _owner_reply_mode[bid] = msg["id"]
+        return f"What would you like to reply to {_fmt_phone_short(msg['from_number'])}? Type your message now."
 
     if cmd == "DETAILS":
-        msg = get_message_by_id(_owner_context.get(biz_id, 0)) if biz_id in _owner_context else None
-        if not msg: msg = get_latest_unacked(biz_id)
+        msg = get_message_by_id(_owner_context.get(bid,0)) if bid in _owner_context else None
+        if not msg: msg = get_latest_unacked(bid)
         if not msg: return "No active alerts."
-        set_context(biz_id, msg["id"])
+        set_context(bid, msg["id"])
         ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
         return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'])}\n"
-                f"Category: {msg['category']}\n"
-                f"From: {_fmt_phone_short(msg['from_number'])}\n"
-                f"Message: \"{msg['message_text']}\"\n"
-                f"Reply \U0001f44d or OK to acknowledge.")
+                f"Category: {msg['category']}\nFrom: {_fmt_phone_short(msg['from_number'])}\n"
+                f"Message: \"{msg['message_text']}\"\nReply OK to acknowledge or REPLY to respond.")
 
     if cmd == "LIST ALL":
-        msgs = get_recent_all(biz_id, 5)
+        msgs = get_recent_all(bid, 5)
         if not msgs: return "No messages yet."
-        tier_icons = {1: "\U0001f6a8", 2: "\u26a0\ufe0f", 3: "\U0001f614", 4: "\U0001f4ac"}
+        icons = {1:"\U0001f6a8",2:"\u26a0\ufe0f",3:"\U0001f614",4:"\U0001f4ac"}
         lines = ["Last 5 messages:\n"]
-        for m in msgs:
-            icon = tier_icons.get(m["tier"], "\U0001f4ac")
-            ack = " \u2705" if m["acknowledged"] else ""
-            lines.append(f"{icon} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])}){ack}")
+        for m in msgs: lines.append(f"{icons.get(m['tier'],'\U0001f4ac')} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])}){' \u2705' if m['acknowledged'] else ''}")
         return "\n".join(lines)
 
     if cmd == "LIST":
-        msgs = get_recent_flagged(biz_id, 5)
+        msgs = get_recent_flagged(bid, 5)
         if not msgs: return "No flagged issues."
-        lines = ["Last 5 flagged issues:\n"]
-        for m in msgs:
-            a = "\u2705" if m["acknowledged"] else "\u26a0\ufe0f"
-            lines.append(f"{a} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
+        lines = ["Last 5 flagged:\n"]
+        for m in msgs: lines.append(f"{'\u2705' if m['acknowledged'] else '\u26a0\ufe0f'} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
         return "\n".join(lines)
 
     if cmd == "STATUS":
-        name = business.get("name") or biz_id
+        name = business.get("name") or bid
         if business.get("paused"): return f"\U0001f4f4 Alerts PAUSED for {name}.\nReply RESUME to turn back on."
         mu = business.get("muted_until")
         if mu:
             try:
                 until = datetime.fromisoformat(mu)
                 if until > datetime.now(timezone.utc):
-                    mins = int((until - datetime.now(timezone.utc)).total_seconds() / 60)
-                    t = f"{mins//60}h {mins%60}m" if mins >= 60 else f"{mins}m"
-                    return f"\U0001f507 Alerts muted for {t} more.\nReply RESUME to unmute."
-            except Exception: pass
-        return f"\U0001f514 Alerts are ON for {name}."
+                    mins = int((until - datetime.now(timezone.utc)).total_seconds()/60)
+                    return f"\U0001f507 Muted for {mins//60}h {mins%60}m.\nReply RESUME to unmute."
+            except: pass
+        t3 = "on" if business.get("alert_tier3") else "off"
+        return f"\U0001f514 Alerts ON for {name}.\nTier 3 alerts: {t3} (text ALERTS ALL or ALERTS CRITICAL)"
 
-    if cmd == "PAUSE":
-        set_paused(biz_id, True)
-        return "\U0001f4f4 Alerts PAUSED. Reply RESUME to turn back on."
-
-    if cmd == "RESUME":
-        set_paused(biz_id, False); set_muted_until(biz_id, None)
-        return "\U0001f514 Alerts resumed."
-
-    if cmd == "DIGEST DAILY":
-        set_digest_freq(biz_id, "daily")
-        return "\U0001f4e7 Digest set to daily. You'll get an email summary every evening."
-
-    if cmd == "DIGEST WEEKLY":
-        set_digest_freq(biz_id, "weekly")
-        return "\U0001f4e7 Digest set to weekly. You'll get an email summary every Sunday."
+    if cmd == "ALERTS ALL": set_alert_tier3(bid, True); return "You'll now receive Tier 3 (reputation risk) alerts too."
+    if cmd == "ALERTS CRITICAL": set_alert_tier3(bid, False); return "Tier 3 alerts off. You'll only get critical (Tier 2) and emergency alerts."
+    if cmd == "PAUSE": set_paused(bid, True); return "\U0001f4f4 Alerts PAUSED. Reply RESUME to turn back on."
+    if cmd == "RESUME": set_paused(bid, False); set_muted_until(bid, None); return "\U0001f514 Alerts resumed."
+    if cmd == "DIGEST DAILY": set_digest_freq(bid, "daily"); return "\U0001f4e7 Digest set to daily."
+    if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
 
     if cmd.startswith("MUTE"):
         m = re.match(r"MUTE\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
-        if not m:
-            set_muted_until(biz_id, datetime.now(timezone.utc) + timedelta(hours=1))
-            return "\U0001f507 Alerts muted for 1 hour. Reply RESUME to unmute."
+        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 Muted 1 hour. Reply RESUME to unmute."
         amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
-        if unit == "M":
-            amt = max(1, min(1440, amt))
-            set_muted_until(biz_id, datetime.now(timezone.utc) + timedelta(minutes=amt))
-            return f"\U0001f507 Alerts muted for {amt} minute{'s' if amt!=1 else ''}. Reply RESUME to unmute."
-        else:
-            amt = max(1, min(72, amt))
-            set_muted_until(biz_id, datetime.now(timezone.utc) + timedelta(hours=amt))
-            return f"\U0001f507 Alerts muted for {amt} hour{'s' if amt!=1 else ''}. Reply RESUME to unmute."
+        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Muted {amt}m."
+        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Muted {amt}h."
 
-    if any(cmd.startswith(w) for w in ["EMPHASIZED", "QUESTIONED", "LAUGHED AT", "DISLIKED"]):
-        return ""
-
-    return f"Unknown command: \"{raw[:20]}\"\nReply HELP for commands."
+    if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED"]): return ""
+    return f"Unknown: \"{raw[:20]}\"\nReply HELP for commands."
 
 
-# ---------------------------------------------------------------------------
-# Digest — email
-# ---------------------------------------------------------------------------
-def build_digest_html(biz_name, stats, period="week"):
-    total, flagged, acked = stats["total_messages"], stats["flagged_issues"], stats["acknowledged"]
-    top_cat = stats["top_category"].replace("_", " ")
-    unacked = flagged - acked
-
-    return f"""<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:24px">
-<h1 style="font-size:20px;margin:0 0 4px">{biz_name}</h1>
-<p style="color:#888;font-size:14px;margin:0 0 24px">Hotline {period}ly digest</p>
+# --- Digest ---
+def build_digest_html(name, stats, period="week"):
+    t,f,a = stats["total_messages"],stats["flagged_issues"],stats["acknowledged"]
+    tc = stats["top_category"].replace("_"," "); u = f - a
+    return f"""<div style="font-family:system-ui;max-width:480px;margin:0 auto;padding:24px">
+<h1 style="font-size:20px;margin:0 0 4px">{name}</h1><p style="color:#888;font-size:14px;margin:0 0 24px">Hotline {period}ly digest</p>
 <div style="display:flex;gap:12px;margin-bottom:24px">
-<div style="flex:1;background:#f5f5f0;padding:16px;border-radius:10px;text-align:center">
-<div style="font-size:28px;font-weight:700">{total}</div><div style="font-size:12px;color:#888">messages</div></div>
-<div style="flex:1;background:#fff4e6;padding:16px;border-radius:10px;text-align:center">
-<div style="font-size:28px;font-weight:700">{flagged}</div><div style="font-size:12px;color:#888">flagged</div></div>
-<div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center">
-<div style="font-size:28px;font-weight:700">{acked}</div><div style="font-size:12px;color:#888">acknowledged</div></div>
-</div>
-{"<p style='color:#c0392b;font-size:14px'>\u26a0\ufe0f "+str(unacked)+" unacknowledged issue"+ ("s" if unacked!=1 else "") +" \u2014 text LIST to review.</p>" if unacked > 0 else ""}
-{"<p style='font-size:14px'>Top category: <strong>"+top_cat+"</strong></p>" if flagged > 0 else ""}
-<p style="font-size:13px;color:#aaa;margin-top:24px">Reply to your Hotline number with HELP to see commands.</p>
-</div>"""
-
+<div style="flex:1;background:#f5f5f0;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{t}</div><div style="font-size:12px;color:#888">messages</div></div>
+<div style="flex:1;background:#fff4e6;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{f}</div><div style="font-size:12px;color:#888">flagged</div></div>
+<div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
+{"<p style='color:#c0392b;font-size:14px'>\u26a0\ufe0f "+str(u)+" unacknowledged</p>" if u>0 else ""}
+{"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
+<p style="font-size:13px;color:#aaa;margin-top:24px">Reply HELP to your Hotline number for commands.</p></div>"""
 
 def send_all_digests(force_freq=None):
-    businesses = get_all_businesses()
     sent = 0
-    for biz in businesses:
+    for biz in get_all_businesses():
         freq = force_freq or biz.get("digest_freq") or "weekly"
-        days = 1 if freq == "daily" else 7
-        email = biz.get("email", "")
+        email = biz.get("email","")
         if not email: continue
+        days = 1 if freq=="daily" else 7
         stats = get_stats(biz["id"], days=days)
-        name = biz.get("name") or biz["id"]
-        period = "dai" if freq == "daily" else "week"
-        subject = f"Hotline {period}ly digest for {name}"
-        html = build_digest_html(name, stats, period)
-        if send_email(email, subject, html): sent += 1
+        period = "dai" if freq=="daily" else "week"
+        if send_email(email, f"Hotline {period}ly digest for {biz.get('name','')}", build_digest_html(biz.get("name",""), stats, period)): sent += 1
     return sent
 
 
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
+# --- FastAPI ---
 app = FastAPI(title="Hotline", version="3.0.0")
-
-RATE_LIMIT_MAX = 5
-RATE_LIMIT_WINDOW = 10
-_initialized = False
-
-_ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER", "")
-_ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER", "")
-_ENV_NAME = os.getenv("BUSINESS_NAME", "MyBusiness")
-_ADMIN_KEY = os.getenv("ADMIN_KEY", "changeme")
-
+RATE_LIMIT_MAX = 5; RATE_LIMIT_WINDOW = 10; _initialized = False
+_ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER",""); _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER","")
+_ENV_NAME = os.getenv("BUSINESS_NAME","MyBusiness"); _ADMIN_KEY = os.getenv("ADMIN_KEY","changeme")
 
 def _ensure_init():
     global _initialized
     if _initialized: return
     init_db(); init_classifier(); init_sms()
     if _ENV_OWNER and _ENV_TWILIO:
-        if create_business("default", _ENV_NAME, _ENV_OWNER, _ENV_TWILIO):
-            logger.info(f"Registered business '{_ENV_NAME}'")
+        if create_business("default", _ENV_NAME, _ENV_OWNER, _ENV_TWILIO): logger.info(f"Registered '{_ENV_NAME}'")
     _initialized = True
-
 
 WELCOME_MSG = """Welcome to {name} on Hotline!
 
-Your customers can now text {twilio} with feedback and you'll get alerts here when something needs attention.
+Your customers can now text {twilio} with feedback.
 
-Commands you can text back:
-DETAILS \u2014 See the full message
-\U0001f44d or OK \u2014 Acknowledge alert
-LIST \u2014 Last 5 flagged issues
-LIST ALL \u2014 Last 5 messages (all types)
+Commands:
+DETAILS \u2014 View alert
+OK \u2014 Acknowledge
+REPLY \u2014 Reply to customer
+LIST \u2014 Flagged issues
+LIST ALL \u2014 All messages
 STATUS \u2014 Alert status
-MUTE 2H \u2014 Silence for 2 hours
-PAUSE \u2014 Stop alerts until RESUME
-RESUME \u2014 Turn alerts back on
-HELP \u2014 Get this list anytime
+ALERTS ALL \u2014 Include reputation alerts
+MUTE 2H \u2014 Silence alerts
+PAUSE / RESUME
+HELP \u2014 Full command list
 
-Emergencies always get through, even when muted."""
+Emergencies always get through."""
 
 
+# --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init()
-    return Response(content=SIGNUP_HTML, media_type="text/html")
-
+    _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
 
 @app.get("/health")
-def health():
-    _ensure_init()
-    return {"status": "ok"}
-
+def health(): _ensure_init(); return {"status":"ok"}
 
 @app.post("/digest")
-def digest_endpoint(freq: str = Query("weekly")):
-    _ensure_init()
-    return {"digests_sent": send_all_digests(force_freq=freq)}
+def digest_endpoint(freq: str = Query("weekly")): _ensure_init(); return {"digests_sent": send_all_digests(force_freq=freq)}
 
-
-# ---------------------------------------------------------------------------
-# Admin
-# ---------------------------------------------------------------------------
+# Admin routes
 @app.get("/admin/add")
-def admin_add(key: str = Query(...), name: str = Query(...), owner: str = Query(...), twilio: str = Query(...), biz_id: str = Query(""), extra_phones: str = Query(""), email: str = Query("")):
+def admin_add(key:str=Query(...),name:str=Query(...),owner:str=Query(...),twilio:str=Query(...),biz_id:str=Query(""),extra_phones:str=Query(""),email:str=Query(""),website:str=Query("")):
     _ensure_init()
-    if key != _ADMIN_KEY: return {"error": "Invalid admin key"}
-    owner, twilio, name = owner.strip(), twilio.strip(), name.strip()
-    if not owner.startswith("+") or not twilio.startswith("+"): return {"error": "Phone numbers must start with + (e.g. +17275551234)"}
-    if not biz_id: biz_id = re.sub(r"[^a-z0-9\-]", "", name.lower().replace(" ", "-").replace("'", ""))[:30]
-    ok = create_business(biz_id, name, owner, twilio, extra_phones=extra_phones, email=email)
-    if not ok: return {"error": f"Business '{biz_id}' already exists or Twilio number already in use"}
-    msg = WELCOME_MSG.format(name=name, twilio=twilio)
-    for phone in get_alert_phones({"owner_phone": owner, "alert_phones": f"{owner},{extra_phones}" if extra_phones else owner}):
-        send_sms(phone, msg, from_number=twilio)
-    return {"success": True, "business_id": biz_id, "name": name, "owner_phone": owner, "twilio_number": twilio}
-
+    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    owner,twilio,name = owner.strip(),twilio.strip(),name.strip()
+    if not owner.startswith("+") or not twilio.startswith("+"): return {"error":"Phone numbers must start with +"}
+    if not biz_id: biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
+    ok = create_business(biz_id,name,owner,twilio,extra_phones=extra_phones,email=email,website_url=website)
+    if not ok: return {"error":"Already exists or number in use"}
+    msg = WELCOME_MSG.format(name=name,twilio=twilio)
+    for p in get_alert_phones({"owner_phone":owner,"alert_phones":f"{owner},{extra_phones}" if extra_phones else owner}): send_sms(p,msg,from_number=twilio)
+    return {"success":True,"business_id":biz_id,"name":name}
 
 @app.get("/admin/welcome")
-def admin_welcome(key: str = Query(...), biz_id: str = Query(...)):
+def admin_welcome(key:str=Query(...),biz_id:str=Query(...)):
     _ensure_init()
-    if key != _ADMIN_KEY: return {"error": "Invalid admin key"}
-    with get_db() as conn:
-        biz = _fetchone(conn, _q("SELECT * FROM businesses WHERE id = ?"), (biz_id,))
-    if not biz: return {"error": f"Business '{biz_id}' not found"}
-    msg = WELCOME_MSG.format(name=biz["name"], twilio=biz["twilio_number"])
-    for phone in get_alert_phones(biz):
-        send_sms(phone, msg, from_number=biz["twilio_number"])
-    return {"success": True, "sent_to": get_alert_phones(biz)}
-
+    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    with get_db() as c: biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
+    if not biz: return {"error":"Not found"}
+    msg = WELCOME_MSG.format(name=biz["name"],twilio=biz["twilio_number"])
+    for p in get_alert_phones(biz): send_sms(p,msg,from_number=biz["twilio_number"])
+    return {"success":True}
 
 @app.get("/admin/list")
-def admin_list(key: str = Query(...)):
+def admin_list(key:str=Query(...)):
     _ensure_init()
-    if key != _ADMIN_KEY: return {"error": "Invalid admin key"}
-    businesses = get_all_businesses()
-    return {"count": len(businesses), "businesses": [
-        {"id": b["id"], "name": b["name"], "owner": b["owner_phone"],
-         "alert_phones": b.get("alert_phones",""), "email": b.get("email",""),
-         "twilio": b["twilio_number"], "paused": bool(b.get("paused")),
-         "digest_freq": b.get("digest_freq","weekly")} for b in businesses]}
-
-
-@app.get("/admin/stats")
-def admin_stats(key: str = Query(...), biz_id: str = Query(...)):
-    _ensure_init()
-    if key != _ADMIN_KEY: return {"error": "Invalid admin key"}
-    stats = get_stats(biz_id)
-    with get_db() as conn:
-        recent = _fetchall(conn, _q("SELECT id,tier,category,summary,acknowledged,created_at FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT 10"), (biz_id,))
-    return {"stats": stats, "recent_messages": recent}
-
+    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    return {"businesses":[{"id":b["id"],"name":b["name"],"owner":b["owner_phone"],"twilio":b["twilio_number"]} for b in get_all_businesses()]}
 
 @app.get("/admin/remove")
-def admin_remove(key: str = Query(...), biz_id: str = Query(...)):
+def admin_remove(key:str=Query(...),biz_id:str=Query(...)):
     _ensure_init()
-    if key != _ADMIN_KEY: return {"error": "Invalid admin key"}
-    with get_db() as conn:
-        _execute(conn, _q("DELETE FROM businesses WHERE id=?"), (biz_id,))
-    return {"success": True, "removed": biz_id}
-
+    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    with get_db() as c: _execute(c,_q("DELETE FROM businesses WHERE id=?"), (biz_id,))
+    return {"success":True}
 
 @app.get("/admin")
-def admin_ui(key: str = Query("")):
+def admin_ui(key:str=Query("")):
     _ensure_init()
-    if key != _ADMIN_KEY:
-        return Response(content="""<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#fafaf8">
-<div style="text-align:center"><h2 style="margin:0 0 16px">Hotline Admin</h2>
-<form style="display:flex;gap:8px" onsubmit="location.href='/admin?key='+document.getElementById('k').value;return false">
-<input id="k" type="password" placeholder="Admin key" style="padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;width:220px">
-<button style="padding:10px 20px;background:#111;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Enter</button>
-</form></div></body></html>""", media_type="text/html")
+    if key!=_ADMIN_KEY:
+        return Response(content='<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f8f8f6"><div style="text-align:center"><h2>Hotline Admin</h2><form style="display:flex;gap:8px" onsubmit="location.href=\'/admin?key=\'+document.getElementById(\'k\').value;return false"><input id="k" type="password" placeholder="Admin key" style="padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;width:220px"><button style="padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Enter</button></form></div></body></html>', media_type="text/html")
     businesses = get_all_businesses()
-    biz_rows = ""
+    rows = ""
     for b in businesses:
         s = get_stats(b["id"])
-        paused = "Paused" if b.get("paused") else "Active"
-        biz_rows += f'<tr><td style="padding:12px 16px;font-weight:600">{b["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["twilio_number"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["owner_phone"]}</td><td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td><td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td><td style="padding:12px 16px;text-align:center">{paused}</td><td style="padding:12px 16px"><a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;text-decoration:none;font-size:13px;margin-right:12px">Resend welcome</a><a href="#" onclick="if(confirm(\'Remove {b["name"]}?\'))location.href=\'/admin/remove?key={key}&biz_id={b["id"]}\';return false" style="color:#dc2626;text-decoration:none;font-size:13px">Remove</a></td></tr>'
-    if not biz_rows:
-        biz_rows = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
-    html = f'<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head><body style="font-family:system-ui;margin:0;padding:24px;background:#fafaf8;color:#1a1a1a"><div style="max-width:960px;margin:0 auto"><h1 style="font-size:24px;margin:0 0 24px">Hotline Admin <span style="font-size:14px;color:#888">({len(businesses)} businesses)</span></h1><div style="background:#fff;border:1px solid #e5e5e0;border-radius:10px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="background:#f5f5f0;border-bottom:1px solid #e5e5e0"><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Twilio</th><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Owner</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Msgs (7d)</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Status</th><th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th></tr></thead><tbody>{biz_rows}</tbody></table></div></div></body></html>'
-    return Response(content=html, media_type="text/html")
+        rows += f'<tr><td style="padding:12px 16px;font-weight:600">{b["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["twilio_number"]}</td><td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td><td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td><td style="padding:12px 16px"><a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a><a href="#" onclick="if(confirm(\'Remove?\'))location.href=\'/admin/remove?key={key}&biz_id={b["id"]}\';return false" style="color:#dc2626;font-size:13px">Remove</a></td></tr>'
+    if not rows: rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
+    return Response(content=f'<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head><body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6"><div style="max-width:900px;margin:0 auto"><h1 style="font-size:24px;margin:0 0 24px">Hotline Admin</h1><div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc"><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Number</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Msgs</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th><th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th></tr></thead><tbody>{rows}</tbody></table></div></div></body></html>', media_type="text/html")
 
 
-# ---------------------------------------------------------------------------
-# SMS incoming
-# ---------------------------------------------------------------------------
+# --- SMS Incoming ---
 @app.post("/sms/incoming")
-async def incoming_sms(From: str = Form(...), Body: str = Form(...), To: str = Form("")):
+async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     _ensure_init()
     sender, body, twilio_num = From.strip(), Body.strip(), To.strip()
     logger.info(f"SMS from {sender}: {body[:80]}")
 
-    # Owner/contact?
     owner_biz = get_business_by_owner(sender)
     if owner_biz:
-        response_text = handle_owner_command(body, owner_biz)
-        # If this was an acknowledgment, notify the group
-        cmd = body.strip().upper()
-        ack_words = {"OK", "GOT IT", "DONE", "ON IT", "ACK"}
-        is_thumbs = "\U0001f44d" in body
-        is_reaction_ack = any(cmd.startswith(w) for w in ["LIKED", "LOVED", "THUMBED UP"])
-        if (cmd in ack_words or is_thumbs or is_reaction_ack) and "\u2705" in response_text:
-            all_phones = get_alert_phones(owner_biz)
-            other_phones = [p for p in all_phones if _normalize_phone(p)[-10:] != _normalize_phone(sender)[-10:]]
-            short = _fmt_phone_short(sender)
-            for phone in other_phones:
-                send_sms(phone, f"\u2705 Alert acknowledged by {short}.", from_number=owner_biz.get("twilio_number",""))
-        if not response_text: return _twiml("")
-        return _twiml(response_text)
+        resp = handle_owner_command(body, owner_biz, sender_phone=sender)
+        if not resp: return _twiml("")
+        return _twiml(resp)
 
-    # Customer
     biz = get_business_by_twilio(twilio_num)
-    if not biz:
-        return _twiml("Thanks so much for reaching out! We've noted your message.")
+    if not biz: return _twiml("Thanks so much for reaching out! We've noted your message.")
 
-    c = classify_message(body)
+    website_info = biz.get("website_info","")
+    c = classify_message(body, website_info=website_info)
     msg_id = store_message(biz["id"], sender, body, c)
-    tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
+    tier, conf, summary = c["tier"], c["confidence"], c.get("summary","Issue reported")
+    cat = c.get("category","other")
 
-    # Alert all contacts
     alert_phones = get_alert_phones(biz)
-    if alert_phones and not (is_alerts_silenced(biz) and tier != 1):
+    should_alert_t3 = biz.get("alert_tier3") and tier == 3 and conf > 0.5
+    should_alert = tier == 1 or (tier == 2 and conf > 0.7) or should_alert_t3
+
+    if alert_phones and should_alert and not (is_alerts_silenced(biz) and tier != 1):
         if get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW) < RATE_LIMIT_MAX:
-            alert = None
             if tier == 1: alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply: DETAILS"
-            elif tier == 2 and conf > 0.7: alert = f"\u26a0\ufe0f Issue reported: {summary}\nReply \U0001f44d or OK to acknowledge"
-            if alert:
-                sent_any = False
-                for phone in alert_phones:
-                    if send_sms(phone, alert, from_number=biz["twilio_number"]): sent_any = True
-                if sent_any:
-                    mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
-                    set_context(biz["id"], msg_id)
+            elif cat == "inquiry": alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond"
+            else: alert = f"\u26a0\ufe0f Issue reported: {summary}\nReply OK to acknowledge"
+            for p in alert_phones: send_sms(p, alert, from_number=biz["twilio_number"])
+            mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
+            set_context(biz["id"], msg_id)
 
-    return _twiml(c.get("auto_reply", "Thanks so much for reaching out! We've noted your message."))
-
+    return _twiml(c.get("auto_reply","Thanks so much for reaching out! We've noted your message."))
 
 def _twiml(msg):
-    xml = ('<?xml version="1.0" encoding="UTF-8"?><Response><Message>'
-           + msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
-           + '</Message></Response>')
-    return Response(content=xml, media_type="application/xml")
+    return Response(content='<?xml version="1.0" encoding="UTF-8"?><Response><Message>'+msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")+'</Message></Response>', media_type="application/xml")
 
 
-# ---------------------------------------------------------------------------
-# Landing page
-# ---------------------------------------------------------------------------
-SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hotline \u2014 Stop losing customers to fixable problems</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;line-height:1.6;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
-.hero{padding:60px 24px 40px;text-align:center;max-width:640px;margin:0 auto}.logo{font-size:15px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;margin-bottom:32px;display:inline-block}.logo span{background:#ea580c;color:#fff;padding:3px 8px;border-radius:4px;margin-right:6px}h1{font-size:clamp(32px,6vw,48px);font-weight:700;line-height:1.15;margin-bottom:16px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}.sub{font-size:18px;color:#888;max-width:480px;margin:0 auto 40px;line-height:1.5}
-.card{background:#fff;border:1px solid #e0e0dc;border-radius:16px;padding:32px;max-width:440px;margin:0 auto 48px;text-align:left;box-shadow:0 4px 20px rgba(0,0,0,0.04)}.trial{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:20px;text-align:center}label{display:block;font-size:13px;font-weight:500;color:#888;margin-bottom:4px;margin-top:14px}label:first-of-type{margin-top:0}input[type=text],input[type=tel],input[type=email]{width:100%;padding:12px 14px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:16px;color:#1a1a1a;font-family:inherit;transition:border-color 0.2s}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
-.btn{width:100%;padding:14px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit;transition:background 0.2s}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4;cursor:not-allowed}
-.result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
-.spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}@keyframes spin{to{transform:rotate(360deg)}}
-.proof{text-align:center;max-width:640px;margin:0 auto;padding:0 24px 48px}.proof h2{font-size:14px;font-weight:500;color:#aaa;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:24px}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:48px}.step{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.step-num{width:32px;height:32px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:14px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px}.step h3{font-size:15px;font-weight:600;margin-bottom:4px;color:#1a1a1a}.step p{font-size:13px;color:#888;line-height:1.4}
-.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 48px;padding:0 24px}.feat{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.feat strong{font-size:14px;display:block;margin-bottom:2px;color:#1a1a1a}.feat p{font-size:13px;color:#888;margin:0;line-height:1.4}
-.sms-demo{max-width:360px;margin:0 auto 48px;padding:0 24px}.sms-demo h2{font-size:14px;font-weight:500;color:#aaa;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;text-align:center}.bubble{padding:10px 14px;border-radius:16px;font-size:14px;margin-bottom:8px;max-width:85%;line-height:1.4;animation:fadeUp 0.4s ease both}.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}.bubble.out{background:#ea580c;color:#fff;margin-left:auto;border-bottom-right-radius:4px}.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}.bubble .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:4px}@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}.bubble:nth-child(2){animation-delay:0.15s}.bubble:nth-child(3){animation-delay:0.3s}.bubble:nth-child(4){animation-delay:0.45s}.bubble:nth-child(5){animation-delay:0.6s}
-footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
-@media(max-width:600px){.steps{grid-template-columns:1fr}.features{grid-template-columns:1fr}}
-</style></head><body>
-<div class="hero"><div class="logo"><span>H</span> HOTLINE</div>
-<h1>Stop losing customers to <em>fixable problems</em></h1>
-<p class="sub">Your customers text you when something's wrong. AI filters the noise and alerts you instantly. No app to install \u2014 just SMS.</p>
-<a href="/demo" style="display:inline-block;padding:10px 22px;border:1px solid #e0e0dc;border-radius:8px;color:#ea580c;font-size:14px;font-weight:500;margin-bottom:8px">Try the live demo &rarr;</a></div>
-<div class="card"><div class="trial">14-day free trial &middot; No credit card required</div><div class="result" id="result"></div>
-<label>Business name</label><input type="text" id="f-name" placeholder="Joe's Coffee">
-<label>Your cell phone (where you'll get alerts)</label><input type="tel" id="f-phone" placeholder="(727) 555-1234">
-<label>Partner or manager phone (optional)</label><input type="tel" id="f-phone2" placeholder="(727) 555-5678">
-<label>Email (for weekly digest)</label><input type="email" id="f-email" placeholder="you@example.com">
-<label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
-<button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button></div>
-<div class="proof"><h2>How it works</h2><div class="steps">
-<div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get a unique phone number for your business in seconds</p></div>
-<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Put the number on a sign, sticker, or receipt in your location</p></div>
-<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you when something needs attention</p></div></div></div>
-<div class="sms-demo"><h2>See it in action</h2>
-<div class="bubble in"><div class="label">Customer texts</div>Bathroom is disgusting and nobody is at the front desk</div>
-<div class="bubble out"><div class="label">Auto-reply to customer</div>We've flagged this as a cleanliness issue and notified management. Thank you for letting us know.</div>
-<div class="bubble alert"><div class="label">You get an alert</div>&#9888;&#65039; Issue reported: Cleanliness and staffing issue<br>Reply &#128077; or OK to acknowledge</div>
-<div class="bubble in" style="background:#f0f0ec"><div class="label">You reply</div>&#128077;</div>
-<div class="bubble out" style="background:#e8e8e4;color:#333"><div class="label">System confirms</div>&#9989; Alert acknowledged.</div></div>
-<div class="features">
-<div class="feat"><strong>AI-powered filtering</strong><p>Only alerts on real issues. Positive feedback stays quiet.</p></div>
-<div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, LIST, MUTE, PAUSE \u2014 all via SMS.</p></div>
-<div class="feat"><strong>Email digest</strong><p>Daily or weekly summary of all messages and issues.</p></div>
-<div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
-<script>
-async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');
-if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
-if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
-if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
-btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up your number...';res.style.display='none';
-try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,area_code:area})});const d=await r.json();
-if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your business number: <strong>'+d.twilio_number+'</strong><br><br>A welcome text with your commands has been sent. Display your new number in your business and customers can start texting right away.';res.style.display='block';btn.textContent='Done!'}
-else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
-catch(e){res.className='result err';res.textContent='Connection error. Please try again.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
-</script></body></html>"""
-
-
-# ---------------------------------------------------------------------------
-# Demo — two-phone UI
-# ---------------------------------------------------------------------------
-@app.get("/signup")
-def signup_page():
-    _ensure_init()
-    return Response(content=SIGNUP_HTML, media_type="text/html")
-
-
-DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo. You will receive customer messages and must respond naturally.
-
-You have two jobs:
-1. CLASSIFY the message (tier, category, sentiment, summary)
-2. Write a natural AUTO-REPLY to the customer
+# --- Demo page (homepage) ---
+DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
 CLASSIFICATION TIERS:
-- Tier 1: Emergency ONLY for actual physical danger (fire, injury, flooding, violence). NOT for figurative language like "fire her", "killing it", "blowing up"
-- Tier 2: Business-Critical — operations broken, no staff present, equipment failure, health hazard, extreme waits
-- Tier 3: Reputation Risk — unhappy customer, complaint, bad experience, frustration
-- Tier 4: Routine — general inquiry, positive feedback, neutral message
+- Tier 1: Emergency ONLY for actual physical danger. NOT figurative ("fire her", "killing it", "blowing up")
+- Tier 2: Business-Critical - operations broken, no staff, equipment failure, supply issues
+- Tier 3: Reputation Risk - unhappy customer, complaint
+- Tier 4: Routine - inquiry, positive feedback, neutral
 
-CONTEXT RULES (critical):
-- If conversation history is provided, READ IT. A follow-up to a complaint is still part of that complaint.
-- "fire her" means terminate employment. "this place is a dumpster fire" means it's bad. Neither is a Tier 1 emergency.
-- Use the full conversation to understand intent, not just keywords in the latest message.
+Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
 
-AUTO-REPLY TONE:
-- Tier 1: Urgent. Tell customer to call 911. Never claim emergency services contacted. Example: "If this is an emergency, please call 911 immediately. We have notified the business owner."
-- Tier 2: Professional, serious. Confirm issue type. Say management notified. No exclamation marks.
-- Tier 3: Empathetic. Acknowledge frustration. Gently invite more details so the business can address it. No exclamation marks. If they ARE sharing details (follow-up), thank them and assure management will review.
-- Tier 4: Warm, friendly, use exclamation marks. Genuine appreciation.
-
-Keep auto_reply under 160 characters. Be natural — vary your responses, don't repeat the same template.
+CRITICAL RULES:
+- Use conversation history to understand context. Follow-ups to complaints stay as complaints.
+- NEVER fabricate business information (hours, location, menu, directions). For questions, say you've forwarded to management.
+- For complaints (Tier 3): empathize and invite more details. This prevents bad reviews.
+- For positive (Tier 4): warm, friendly, use exclamation marks.
+- For emergencies: tell them to call 911.
+- Vary your responses naturally. Don't repeat the same template.
+- Keep auto_reply under 160 characters.
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
 
 @app.post("/demo/classify")
-async def demo_classify(request_data: dict = None):
+async def demo_classify(request_data:dict=None):
     _ensure_init()
-    if not request_data: return {"error": "No message provided"}
+    if not request_data: return {"error":"No message"}
     text = (request_data.get("message") or "").strip()
     history = request_data.get("history") or []
-    if not text: return {"error": "No message provided"}
-    if len(text) > 500: return {"error": "Message too long"}
-
+    if not text: return {"error":"No message"}
+    if len(text) > 500: return {"error":"Too long"}
     if _ai_client:
         try:
             user_msg = ""
             if history:
                 user_msg = "Conversation so far:\n"
-                for h in history[-6:]:
-                    user_msg += f'Customer: "{h.get("customer","")}"'
-                    user_msg += f'\nSystem reply: "{h.get("reply","")}"'
-                    user_msg += "\n\n"
-                user_msg += f'New message from same customer: "{text}"\n\nClassify this new message with full conversation context.'
-            else:
-                user_msg = f'Classify this customer SMS:\n\n"{text}"'
-
-            resp = _ai_client.messages.create(
-                model="claude-haiku-4-5-20251001", max_tokens=300,
-                system=DEMO_PROMPT,
-                messages=[{"role": "user", "content": user_msg}])
+                for h in history[-6:]: user_msg += f'Customer: "{h.get("customer","")}"\nSystem: "{h.get("reply","")}"\n\n'
+                user_msg += f'New message from same customer: "{text}"\n\nClassify with full context.'
+            else: user_msg = f'Classify this customer SMS:\n\n"{text}"'
+            resp = _ai_client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=300, system=DEMO_PROMPT, messages=[{"role":"user","content":user_msg}])
             raw = resp.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             c = json.loads(raw)
-            c["tier"] = max(1, min(4, int(c.get("tier", 4))))
-            c["confidence"] = max(0.0, min(1.0, float(c.get("confidence", 0.5))))
-            c.setdefault("category", "other")
-            c.setdefault("sentiment", "neutral")
-            c.setdefault("summary", text[:50])
-            c.setdefault("auto_reply", "Thanks so much for reaching out! We've noted your message.")
-        except Exception as e:
-            logger.error(f"Demo classify failed: {e}")
-            c = _classify_fallback(text)
-    else:
-        c = _classify_fallback(text)
-
-    return {"tier": c["tier"], "category": c["category"], "sentiment": c["sentiment"],
-            "confidence": c["confidence"], "summary": c["summary"], "auto_reply": c["auto_reply"],
-            "tier_label": {1:"Emergency",2:"Business-Critical",3:"Reputation Risk",4:"Routine"}.get(c["tier"],"Unknown"),
-            "would_alert": c["tier"]==1 or (c["tier"]==2 and c["confidence"]>0.7)}
+            c["tier"]=max(1,min(4,int(c.get("tier",4)))); c["confidence"]=max(0.0,min(1.0,float(c.get("confidence",0.5))))
+            for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks so much for reaching out!")]: c.setdefault(k,v)
+        except Exception as e: logger.error(f"Demo: {e}"); c = _classify_fallback(text)
+    else: c = _classify_fallback(text)
+    return {"tier":c["tier"],"category":c["category"],"sentiment":c["sentiment"],"confidence":c["confidence"],
+            "summary":c["summary"],"auto_reply":c["auto_reply"],
+            "tier_label":{1:"Emergency",2:"Business-Critical",3:"Reputation Risk",4:"Routine"}.get(c["tier"],"Unknown"),
+            "would_alert":c["tier"]==1 or (c["tier"]==2 and c["confidence"]>0.7)}
 
 
 DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hotline \u2014 Live Demo</title>
+<title>Hotline \u2014 Stop losing customers to fixable problems</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#09090b;color:#fafafa;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}
+a{color:#ea580c;text-decoration:none}
 .wrap{max-width:860px;margin:0 auto;padding:32px 20px}
-.top{text-align:center;margin-bottom:28px}.logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#f97316;margin-bottom:8px}.logo span{background:#f97316;color:#09090b;padding:2px 6px;border-radius:3px;margin-right:4px}h1{font-size:22px;font-weight:600;margin-bottom:4px}.sub{font-size:14px;color:#71717a}
+.top{text-align:center;margin-bottom:24px}.logo{font-size:15px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;margin-bottom:12px;display:inline-block;text-decoration:none}.logo span{background:#ea580c;color:#fff;padding:3px 8px;border-radius:4px;margin-right:6px}
+h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}
+.sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 24px}
 .phones{display:flex;gap:24px;margin-bottom:20px;justify-content:center;align-items:flex-start}
 .device{width:320px;flex-shrink:0}
-.frame{background:#1c1c1e;border-radius:36px;border:3px solid #38383a;overflow:hidden;position:relative}
-.notch{width:100px;height:28px;background:#1c1c1e;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}
-.notch::before{content:'';width:8px;height:8px;background:#2c2c2e;border-radius:50%;position:absolute;right:20px;top:8px}
-.statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#999;margin-top:-10px}
-.phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #2a2a2e}
-.phone-label-bar.customer{color:#3b82f6}.phone-label-bar.owner{color:#f97316}
-.msgs{height:340px;overflow-y:auto;padding:12px 14px}
+.frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
+.notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
+.statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
+.phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
+.phone-label-bar.customer{color:#2563eb}.phone-label-bar.owner{color:#ea580c}
+.msgs{height:340px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
 .bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
-.bubble.in{background:#2a2a2e;color:#e4e4e7;border-bottom-left-radius:4px}
-.bubble.out-blue{background:#3b82f6;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
-.bubble.out-orange{background:#f97316;color:#09090b;margin-left:auto;border-bottom-right-radius:4px;font-weight:500}
-.bubble.alert{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;border-bottom-left-radius:4px}
-.bubble.system{background:rgba(113,113,122,0.08);color:#71717a;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}
-.bubble.cmd{background:#2a2a2e;color:#e4e4e7;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
-.bubble.resp{background:rgba(113,113,122,0.12);color:#d4d4d8;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
-.bubble .lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;opacity:0.5;margin-bottom:3px}
+.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
+.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
+.bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}
+.bubble.cmd{background:#e8e8e4;color:#333;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
+.bubble.resp{background:#f5f5f0;color:#555;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
+.bubble .lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:3px}
 .meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.tag{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}
-.tag.t1{background:rgba(239,68,68,0.15);color:#f87171}.tag.t2{background:rgba(249,115,22,0.15);color:#fb923c}.tag.t3{background:rgba(250,204,21,0.15);color:#fbbf24}.tag.t4{background:rgba(113,113,122,0.15);color:#a1a1aa}
+.tag.t1{background:#fee2e2;color:#dc2626}.tag.t2{background:#fff7ed;color:#b45309}.tag.t3{background:#fef9c3;color:#a16207}.tag.t4{background:#f0f0ec;color:#888}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.input-area{padding:8px 12px 12px;border-top:1px solid #2a2a2e}
-.input-row{display:flex;gap:6px}.input-row input{flex:1;padding:10px 12px;background:#09090b;border:1px solid #3f3f46;border-radius:20px;font-size:14px;color:#fafafa;font-family:inherit}.input-row input::placeholder{color:#52525b}.input-row input:focus{outline:none;border-color:#f97316}
+.input-area{padding:8px 12px 12px;border-top:1px solid #f0f0ec;background:#fff}
+.input-row{display:flex;gap:6px}.input-row input{flex:1;padding:10px 12px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:20px;font-size:14px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
 .input-row button{padding:10px 14px;border-radius:50%;border:none;font-size:16px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center}
-.input-row button.blue{background:#3b82f6;color:#fff}.input-row button.orange{background:#f97316;color:#09090b}
+.input-row button.blue{background:#2563eb;color:#fff}.input-row button.orange{background:#ea580c;color:#fff}
 .input-row button:disabled{opacity:0.3;cursor:not-allowed}
-.owner-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap}
-.cmd-btn{font-size:11px;padding:5px 10px;background:#27272a;border:1px solid #3f3f46;border-radius:6px;color:#a1a1aa;cursor:pointer;font-family:monospace;font-weight:600}.cmd-btn:hover{border-color:#f97316;color:#fafafa}
+.owner-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}
+.cmd-btn{font-size:11px;padding:5px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;font-family:monospace;font-weight:600}.cmd-btn:hover{border-color:#ea580c;color:#1a1a1a}
 .owner-input{display:none}
-.home-bar{width:120px;height:4px;background:#555;border-radius:2px;margin:8px auto 10px}
-.examples{margin-bottom:20px}.examples p{font-size:12px;color:#52525b;margin-bottom:6px;text-align:center}
-.ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.ex{font-size:12px;padding:6px 10px;background:#18181b;border:1px solid #27272a;border-radius:6px;color:#a1a1aa;cursor:pointer}.ex:hover{border-color:#3b82f6;color:#fafafa}
-.cta{text-align:center;margin-top:20px}.cta a{display:inline-block;padding:12px 28px;background:#f97316;color:#09090b;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
+.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
+.examples{margin-bottom:20px}.examples p{font-size:12px;color:#aaa;margin-bottom:6px;text-align:center}
+.ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.ex{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04)}.ex:hover{border-color:#2563eb;color:#1a1a1a}
+.cta{text-align:center;margin:24px 0}.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 32px}.feat{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.feat strong{font-size:14px;display:block;margin-bottom:2px;color:#1a1a1a}.feat p{font-size:13px;color:#888;margin:0;line-height:1.4}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}@keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:360px}}
+@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:360px}.features{grid-template-columns:1fr}}
 </style></head><body>
 <div class="wrap">
-<div class="top"><div class="logo"><span>H</span> HOTLINE</div><h1>Try it live</h1><p class="sub">Type a message as a customer and watch both sides in real time</p></div>
+<div class="top">
+<a href="/" class="logo"><span>H</span> HOTLINE</a>
+<h1>Stop losing customers to <em>fixable problems</em></h1>
+<p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you when something needs attention. Try it below.</p>
+</div>
 <div class="examples"><p>Try an example:</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
 <div class="ex" onclick="tryEx(this)">No one is at the front desk</div>
 <div class="ex" onclick="tryEx(this)">Great coffee today!</div>
-<div class="ex" onclick="tryEx(this)">Waited 30 minutes and leaving</div>
-<div class="ex" onclick="tryEx(this)">There's a fire in the back</div>
-<div class="ex" onclick="tryEx(this)">Your staff was so friendly!</div>
+<div class="ex" onclick="tryEx(this)">We're out of toilet paper!</div>
+<div class="ex" onclick="tryEx(this)">We can't get in the front door</div>
+<div class="ex" onclick="tryEx(this)">The music is way too loud</div>
+<div class="ex" onclick="tryEx(this)">What time do you close?</div>
 <div class="ex" onclick="tryEx(this)">Terrible service, very rude</div>
 </div></div>
 <div class="phones">
 <div class="device"><div class="frame">
-<div class="notch"></div>
-<div class="statusbar"><span>9:41</span><span>5G &nbsp; 87%</span></div>
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 87%</span></div>
 <div class="phone-label-bar customer">Customer</div>
 <div class="msgs" id="m-cust"><div class="bubble system">Customer messages appear here</div></div>
 <div class="input-area"><div class="input-row">
 <input type="text" id="cust-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendDemo()">
 <button class="blue" id="cust-btn" onclick="sendDemo()">&#9650;</button>
-</div></div>
-<div class="home-bar"></div>
+</div></div><div class="home-bar"></div>
 </div></div>
 <div class="device"><div class="frame">
-<div class="notch"></div>
-<div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
 <div class="phone-label-bar owner">Owner</div>
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
@@ -1041,11 +753,16 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
 <button class="orange" onclick="ownerCmd(document.getElementById('owner-inp').value)">&#9650;</button>
-</div></div>
-<div class="home-bar"></div>
+</div></div><div class="home-bar"></div>
 </div></div>
 </div>
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
+<div class="features">
+<div class="feat"><strong>AI-powered filtering</strong><p>Only alerts on real issues. Positive feedback stays quiet.</p></div>
+<div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
+<div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
+<div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
+<footer><a href="/" class="logo" style="font-size:12px"><span>H</span> HOTLINE</a> &middot; AI-powered customer alerts for small businesses</footer>
 </div>
 <script>
 let lastData=null,acked=false,history=[],demoCount=0,maxDemo=10;
@@ -1057,11 +774,11 @@ function hideOwnerInput(){document.getElementById('owner-cmds').style.display='n
 function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();document.getElementById('owner-inp').value='';if(!cmd)return;
 addB(mo,'cmd','',raw.trim());
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK to acknowledge.');return}
+if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK to acknowledge or REPLY to respond.');return}
 if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
 addB(mo,'resp','','Try DETAILS or OK.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
-if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#f97316">Sign up</a> to get started!');return}
+if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
 inp.value='';btn.disabled=true;demoCount++;
 addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
 try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
@@ -1073,45 +790,80 @@ catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn
 </script></body></html>"""
 
 @app.get("/demo")
-def demo_page():
-    _ensure_init()
-    return Response(content=DEMO_HTML, media_type="text/html")
+def demo_page(): _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
 
 
-# ---------------------------------------------------------------------------
-# Self-serve signup
-# ---------------------------------------------------------------------------
+# --- Signup page ---
+SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign Up \u2014 Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}
+.wrap{max-width:480px;margin:0 auto;padding:40px 24px}
+.logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;margin-bottom:24px;display:inline-block;text-decoration:none}.logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
+h1{font-size:24px;font-weight:700;margin-bottom:8px}
+.sub{font-size:15px;color:#888;margin-bottom:24px}
+.card{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.04)}
+.trial{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:20px;text-align:center}
+label{display:block;font-size:13px;font-weight:500;color:#888;margin-bottom:4px;margin-top:14px}label:first-of-type{margin-top:0}
+input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;padding:12px 14px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:16px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
+.btn{width:100%;padding:14px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
+.result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}@keyframes spin{to{transform:rotate(360deg)}}
+</style></head><body>
+<div class="wrap">
+<a href="/" class="logo"><span>H</span> HOTLINE</a>
+<h1>Get your business number</h1>
+<p class="sub">Set up takes about 30 seconds. You'll get a unique phone number and a welcome text with all your commands.</p>
+<div class="card">
+<div class="trial">14-day free trial &middot; No credit card required</div>
+<div class="result" id="result"></div>
+<label>Business name</label><input type="text" id="f-name" placeholder="Joe's Coffee">
+<label>Your cell phone</label><input type="tel" id="f-phone" placeholder="(727) 555-1234">
+<label>Partner or manager phone (optional)</label><input type="tel" id="f-phone2" placeholder="(727) 555-5678">
+<label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
+<label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
+<label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
+<button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
+</div></div>
+<script>
+async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');
+if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
+if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
+if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
+btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
+try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,area_code:area})});const d=await r.json();
+if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';res.style.display='block';btn.textContent='Done!'}
+else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
+catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
+</script></body></html>"""
+
+@app.get("/signup")
+def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
+
 @app.post("/signup/create")
-async def signup_create(request_data: dict = None):
+async def signup_create(request_data:dict=None):
     _ensure_init()
-    if not request_data: return {"error": "Missing request data"}
+    if not request_data: return {"error":"Missing data"}
     name = (request_data.get("name") or "").strip()
     phone = (request_data.get("phone") or "").strip()
     phone2 = (request_data.get("phone2") or "").strip()
     email = (request_data.get("email") or "").strip()
+    website_url = (request_data.get("website_url") or "").strip()
     area_code = (request_data.get("area_code") or "").strip()
-    if not name: return {"error": "Business name is required"}
-    if not phone or not phone.startswith("+"): return {"error": "Valid phone number with country code is required"}
-
-    biz_id = re.sub(r"[^a-z0-9\-]", "", name.lower().replace(" ", "-").replace("'", ""))[:30]
-    with get_db() as conn:
-        existing = _fetchone(conn, _q("SELECT id FROM businesses WHERE id=?"), (biz_id,))
-    if existing:
-        biz_id = biz_id[:25] + "-" + datetime.now(timezone.utc).strftime("%H%M%S")
-
-    webhook = "https://sms-alerts.vercel.app/sms/incoming"
-    twilio_number = buy_twilio_number(area_code=area_code, webhook_url=webhook)
-    if not twilio_number:
-        return {"error": "Could not provision a phone number. Please try again or contact support."}
-
+    if not name: return {"error":"Business name required"}
+    if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
+    biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
+    with get_db() as c:
+        if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
+            biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
+    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://sms-alerts.vercel.app/sms/incoming")
+    if not twilio_number: return {"error":"Could not provision number. Try again."}
     extra = phone2 if phone2 and phone2.startswith("+") else ""
-    ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email)
-    if not ok:
-        return {"error": "Could not create business. Phone number may already be registered."}
-
+    ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
+    if not ok: return {"error":"Could not create business."}
     msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
     send_sms(phone, msg, from_number=twilio_number)
     if extra: send_sms(extra, msg, from_number=twilio_number)
-
-    logger.info(f"Self-serve signup: {name} ({biz_id}) -> {twilio_number} -> {phone}")
-    return {"success": True, "business_id": biz_id, "name": name, "owner_phone": phone, "twilio_number": twilio_number}
+    logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
+    return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
