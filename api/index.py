@@ -265,7 +265,8 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry
 CRITICAL RULES:
 - Category "inquiry" is for questions about the business (hours, location, menu, directions, policies). NEVER answer these questions with fabricated information. You do not know the answer. Always forward to management.
 - "fire her/him" = employment complaint, NOT emergency. "this place is a dumpster fire" = complaint, NOT emergency.
-- For Tier 3: invite the customer to share more details. This gives them an outlet and prevents bad reviews.
+- For Tier 2 and 3: acknowledge receipt and say management has been notified. Do NOT promise any specific action will be taken (e.g. don't say "we'll adjust that" or "we'll fix it"). The business may have reasons for their choices.
+- For Tier 3: also invite the customer to share more details.
 - For Tier 4 positive: be warm, use exclamation marks.
 - For Tier 1: tell customer to call 911. Never claim emergency services contacted.
 - For inquiries: say you've forwarded their question to management and someone will get back to them.
@@ -630,7 +631,7 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry
 CRITICAL RULES:
 - Use conversation history to understand context. Follow-ups to complaints stay as complaints.
 - NEVER fabricate business information (hours, location, menu, directions). For questions, say you've forwarded to management.
-- For complaints (Tier 3): empathize and invite more details. This prevents bad reviews.
+- For complaints (Tier 2-3): acknowledge receipt and say management has been notified. Do NOT promise specific action (don't say "we'll fix it" or "we'll change that"). Invite more details for Tier 3.
 - For positive (Tier 4): warm, friendly, use exclamation marks.
 - For emergencies: tell them to call 911.
 - Vary your responses naturally. Don't repeat the same template.
@@ -749,6 +750,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
 <div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
 <div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
+<div class="cmd-btn" onclick="ownerCmd('REPLY')">REPLY</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
@@ -765,27 +767,32 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <footer><a href="/" class="logo" style="font-size:12px"><span>H</span> HOTLINE</a> &middot; AI-powered customer alerts for small businesses</footer>
 </div>
 <script>
-let lastData=null,acked=false,history=[],demoCount=0,maxDemo=10;
+let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10;
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
 function addB(c,cls,label,text){const d=document.createElement('div');d.className='bubble '+cls;let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
-function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();document.getElementById('owner-inp').value='';if(!cmd)return;
+function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
+if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
 addB(mo,'cmd','',raw.trim());
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK to acknowledge or REPLY to respond.');return}
+if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK or REPLY to respond.');return}
+if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to reply to (555) 867-5309? Type your message now.');inp.placeholder='Type your reply...';inp.focus();return}
 if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
-addB(mo,'resp','','Try DETAILS or OK.')}
+addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
 if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
-inp.value='';btn.disabled=true;demoCount++;
+inp.value='';btn.disabled=true;demoCount++;acked=false;replyMode=false;
 addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
 try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
 history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
 await new Promise(r=>setTimeout(r,300));addB(mc,'in','Auto-reply',d.auto_reply);await new Promise(r=>setTimeout(r,400));
 const tierCls='t'+d.tier;const tags='<div class="meta"><span class="tag '+tierCls+'">'+d.tier_label+'</span><span class="tag '+tierCls+'">'+d.category.replace('_',' ')+'</span></div>';
-if(d.would_alert){const alertText=d.tier===1?'\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS':'\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge';addB(mo,'alert','Alert',alertText+tags);showOwnerInput()}else{addB(mo,'system','','No alert \\u2014 '+d.tier_label.toLowerCase()+tags)}}
+if(d.tier===1){addB(mo,'alert','Alert','\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS'+tags);showOwnerInput()}
+else if(d.tier===2){addB(mo,'alert','Alert','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge'+tags);showOwnerInput()}
+else if(d.tier===3){addB(mo,'alert','Feedback','\\ud83d\\ude14 '+d.summary+tags);showOwnerInput()}
+else{addB(mo,'system','','\\ud83d\\udcac '+d.summary+tags);showOwnerInput()}}
 catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
 </script></body></html>"""
 
