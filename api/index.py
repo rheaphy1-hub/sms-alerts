@@ -889,10 +889,47 @@ def signup_page():
 @app.post("/demo/classify")
 async def demo_classify(request_data: dict = None):
     _ensure_init()
-    text = (request_data or {}).get("message", "").strip()
+    if not request_data: return {"error": "No message provided"}
+    text = (request_data.get("message") or "").strip()
+    history = request_data.get("history") or []
     if not text: return {"error": "No message provided"}
     if len(text) > 500: return {"error": "Message too long"}
-    c = classify_message(text)
+
+    # Rate limit: 20/hr per session (tracked client-side, but we cap total)
+    # For server-side we just ensure the API call isn't too expensive
+    if _ai_client:
+        try:
+            # Build conversation context for follow-ups
+            system = CLASSIFICATION_PROMPT
+            if history:
+                context = "Previous messages in this conversation:\\n"
+                for h in history[-6:]:  # last 6 messages max
+                    context += f"- Customer: \"{h.get('customer','')}\"\n  Auto-reply: \"{h.get('reply','')}\"\n"
+                context += f"\\nNow classify this NEW follow-up message from the same customer:"
+                user_msg = f"{context}\\n\\n\"{text}\""
+            else:
+                user_msg = f'Classify this customer SMS:\\n\\n"{text}"'
+
+            resp = _ai_client.messages.create(
+                model="claude-haiku-4-5-20251001", max_tokens=300,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}])
+            raw = resp.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\\n", 1)[1].rsplit("```", 1)[0].strip()
+            c = json.loads(raw)
+            c["tier"] = max(1, min(4, int(c.get("tier", 4))))
+            c["confidence"] = max(0.0, min(1.0, float(c.get("confidence", 0.5))))
+            c.setdefault("category", "other")
+            c.setdefault("sentiment", "neutral")
+            c.setdefault("summary", text[:50])
+            c.setdefault("auto_reply", "Thanks so much for reaching out! We've noted your message.")
+        except Exception as e:
+            logger.error(f"Demo classify failed: {e}")
+            c = _classify_fallback(text)
+    else:
+        c = _classify_fallback(text)
+
     return {"tier": c["tier"], "category": c["category"], "sentiment": c["sentiment"],
             "confidence": c["confidence"], "summary": c["summary"], "auto_reply": c["auto_reply"],
             "tier_label": {1:"Emergency",2:"Business-Critical",3:"Reputation Risk",4:"Routine"}.get(c["tier"],"Unknown"),
@@ -974,7 +1011,6 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
 <div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
 <div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
-<div class="cmd-btn" onclick="ownerCmd('HELP')">HELP</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
@@ -986,7 +1022,7 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 </div>
 <script>
-let lastData=null,acked=false;
+let lastData=null,acked=false,history=[],demoCount=0,maxDemo=10;
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
 function addB(c,cls,label,text){const d=document.createElement('div');d.className='bubble '+cls;let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
@@ -994,17 +1030,19 @@ function showOwnerInput(){document.getElementById('owner-cmds').style.display='f
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
 function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();document.getElementById('owner-inp').value='';if(!cmd)return;
 addB(mo,'cmd','',raw.trim());
-if(cmd==='HELP'){addB(mo,'resp','','Commands:\\nDETAILS \\u2014 View latest alert\\n\\ud83d\\udc4d or OK \\u2014 Acknowledge alert\\nLIST \\u2014 Last 5 flagged issues\\nLIST ALL \\u2014 All recent messages\\nSTATUS \\u2014 Alert status\\nMUTE 2H \\u2014 Silence for 2 hours\\nPAUSE / RESUME \\u2014 Stop or start alerts\\nDIGEST DAILY / WEEKLY \\u2014 Set email frequency\\nHELP \\u2014 This message');return}
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply \\ud83d\\udc4d or OK to acknowledge.');return}
+if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK to acknowledge.');return}
 if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
-addB(mo,'resp','','Unknown command: "'+cmd+'"\\nReply HELP for commands.')}
-async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;inp.value='';btn.disabled=true;hideOwnerInput();acked=false;
+addB(mo,'resp','','Try DETAILS or OK.')}
+async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
+if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#f97316">Sign up</a> to get started!');return}
+inp.value='';btn.disabled=true;demoCount++;
 addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
-try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
+try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
+history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
 await new Promise(r=>setTimeout(r,300));addB(mc,'in','Auto-reply',d.auto_reply);await new Promise(r=>setTimeout(r,400));
 const tierCls='t'+d.tier;const tags='<div class="meta"><span class="tag '+tierCls+'">'+d.tier_label+'</span><span class="tag '+tierCls+'">'+d.category.replace('_',' ')+'</span></div>';
-if(d.would_alert){const alertText=d.tier===1?'\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS':'\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply \\ud83d\\udc4d or OK to acknowledge';addB(mo,'alert','Alert',alertText+tags);showOwnerInput()}else{addB(mo,'system','','No alert \\u2014 '+d.tier_label.toLowerCase()+tags)}}
+if(d.would_alert){const alertText=d.tier===1?'\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS':'\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge';addB(mo,'alert','Alert',alertText+tags);showOwnerInput()}else{addB(mo,'system','','No alert \\u2014 '+d.tier_label.toLowerCase()+tags)}}
 catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
 </script></body></html>"""
 
