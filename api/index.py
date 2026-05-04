@@ -265,6 +265,38 @@ def send_sms(to, body, from_number=""):
         return False
 
 
+def buy_twilio_number(area_code="", webhook_url=""):
+    """Buy a local Twilio number and set its webhook. Returns the number or None."""
+    if not _twilio_client:
+        logger.warning("[DRY-RUN] Would buy a Twilio number")
+        return "+15550000000"
+    try:
+        # Search for available local numbers
+        kwargs = {"limit": 1, "sms_enabled": True, "voice_enabled": False}
+        if area_code:
+            kwargs["area_code"] = area_code
+        available = _twilio_client.available_phone_numbers("US").local.list(**kwargs)
+        if not available:
+            # Try without area code constraint
+            del kwargs["area_code"]
+            available = _twilio_client.available_phone_numbers("US").local.list(**kwargs)
+        if not available:
+            logger.error("No Twilio numbers available")
+            return None
+
+        # Buy it
+        number = _twilio_client.incoming_phone_numbers.create(
+            phone_number=available[0].phone_number,
+            sms_url=webhook_url or f"https://sms-alerts.vercel.app/sms/incoming",
+            sms_method="POST",
+        )
+        logger.info(f"Bought Twilio number: {number.phone_number}")
+        return number.phone_number
+    except Exception as e:
+        logger.error(f"Failed to buy Twilio number: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # AI Classifier
 # ---------------------------------------------------------------------------
@@ -778,3 +810,183 @@ def _twiml(msg):
            + msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
            + '</Message></Response>')
     return Response(content=xml, media_type="application/xml")
+
+
+# ---------------------------------------------------------------------------
+# Self-serve signup
+# ---------------------------------------------------------------------------
+SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Get SMS Alerts for Your Business</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#fafaf8;color:#1a1a1a;line-height:1.6}
+.wrap{max-width:520px;margin:0 auto;padding:40px 24px}
+h1{font-size:28px;font-weight:700;margin-bottom:8px}
+.sub{font-size:16px;color:#666;margin-bottom:32px}
+.card{background:#fff;border:1px solid #e5e5e0;border-radius:12px;padding:28px}
+label{display:block;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px}
+input[type=text],input[type=tel]{width:100%;padding:12px 14px;border:1px solid #ddd;border-radius:8px;font-size:16px;margin-bottom:16px;transition:border-color 0.2s}
+input:focus{outline:none;border-color:#111}
+.btn{width:100%;padding:14px;background:#111;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:opacity 0.2s}
+.btn:hover{opacity:0.85}
+.btn:disabled{opacity:0.4;cursor:not-allowed}
+.result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}
+.ok{background:#f0fdf4;color:#166534;border:1px solid #b8e8c8}
+.err{background:#fef2f2;color:#991b1b;border:1px solid #f5c2c2}
+.how{margin-top:32px;font-size:14px;color:#888}
+.how h3{font-size:15px;color:#444;font-weight:600;margin-bottom:8px}
+.how ol{padding-left:20px}
+.how li{margin-bottom:6px}
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:24px 0 0}
+.feat div{background:#f5f5f0;padding:12px 14px;border-radius:8px;font-size:13px;color:#444}
+.feat strong{display:block;font-size:14px;color:#1a1a1a;margin-bottom:2px}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.trial{background:#eef4ff;border:1px solid #c2d6f5;color:#1a4480;padding:12px 16px;border-radius:8px;font-size:14px;margin-bottom:20px}
+</style></head><body>
+<div class="wrap">
+<h1>SMS alerts for your business</h1>
+<p class="sub">Customers text you feedback. You get alerts when something needs attention. No app needed.</p>
+
+<div class="card">
+<div class="trial">14-day free trial. No credit card required.</div>
+<div class="result" id="result"></div>
+
+<label>Business name</label>
+<input type="text" id="f-name" placeholder="Joe's Coffee">
+
+<label>Your cell phone number (where you'll get alerts)</label>
+<input type="tel" id="f-phone" placeholder="+1 (727) 555-1234">
+
+<label>Preferred area code (optional)</label>
+<input type="text" id="f-area" placeholder="727" maxlength="3" style="width:120px">
+
+<button class="btn" id="f-btn" onclick="signup()">Get my number</button>
+</div>
+
+<div class="feat">
+<div><strong>Smart alerts</strong>AI filters noise, only alerts on real issues</div>
+<div><strong>Text to manage</strong>Reply DETAILS, ACK, MUTE, PAUSE</div>
+<div><strong>Weekly digest</strong>Summary of all feedback every Sunday</div>
+<div><strong>Works instantly</strong>Post the number in your business, done</div>
+</div>
+
+<div class="how">
+<h3>How it works</h3>
+<ol>
+<li>Sign up and get your unique business phone number</li>
+<li>Display the number in your business (sign, sticker, receipt)</li>
+<li>Customers text feedback to that number</li>
+<li>AI reads each message and alerts you on your phone if something needs attention</li>
+<li>You manage everything by texting back (DETAILS, ACK, MUTE, etc.)</li>
+</ol>
+</div>
+</div>
+
+<script>
+async function signup() {
+    const name = document.getElementById('f-name').value.trim();
+    let phone = document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
+    const area = document.getElementById('f-area').value.trim();
+    const res = document.getElementById('result');
+    const btn = document.getElementById('f-btn');
+
+    if (!phone.startsWith('+')) {
+        if (phone.startsWith('1') && phone.length === 11) phone = '+' + phone;
+        else if (phone.length === 10) phone = '+1' + phone;
+        else { res.className='result err'; res.style.display='block'; res.textContent='Please enter a valid US phone number.'; return; }
+    }
+    if (!name) { res.className='result err'; res.style.display='block'; res.textContent='Please enter your business name.'; return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Setting up your number...';
+    res.style.display = 'none';
+
+    try {
+        const r = await fetch('/signup/create', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({name, phone, area_code: area})
+        });
+        const d = await r.json();
+        if (d.success) {
+            res.className='result ok';
+            res.innerHTML = '<strong>You are live!</strong><br><br>Your business number: <strong>'+d.twilio_number+'</strong><br><br>We just sent a welcome text to '+d.owner_phone+' with your commands. Display your number in your business and customers can start texting right away.';
+            res.style.display='block';
+            btn.textContent='Done!';
+        } else {
+            res.className='result err';
+            res.textContent=d.error || 'Something went wrong. Please try again.';
+            res.style.display='block';
+            btn.disabled=false;
+            btn.textContent='Get my number';
+        }
+    } catch(e) {
+        res.className='result err';
+        res.textContent='Connection error. Please try again.';
+        res.style.display='block';
+        btn.disabled=false;
+        btn.textContent='Get my number';
+    }
+}
+</script>
+</body></html>"""
+
+
+@app.get("/signup")
+def signup_page():
+    _ensure_init()
+    return Response(content=SIGNUP_HTML, media_type="text/html")
+
+
+@app.post("/signup/create")
+async def signup_create(request_data: dict = None):
+    _ensure_init()
+
+    if not request_data:
+        return {"error": "Missing request data"}
+
+    name = (request_data.get("name") or "").strip()
+    phone = (request_data.get("phone") or "").strip()
+    area_code = (request_data.get("area_code") or "").strip()
+
+    if not name:
+        return {"error": "Business name is required"}
+    if not phone or not phone.startswith("+"):
+        return {"error": "Valid phone number with country code is required"}
+
+    # Generate a business ID
+    biz_id = name.lower().replace(" ", "-").replace("'", "").replace('"', "")[:30]
+    biz_id = re.sub(r"[^a-z0-9\-]", "", biz_id)
+    # Check if it already exists, if so append a number
+    existing = None
+    with get_db() as conn:
+        existing = _fetchone(conn, _q("SELECT id FROM businesses WHERE id=?"), (biz_id,))
+    if existing:
+        biz_id = biz_id[:25] + "-" + datetime.now(timezone.utc).strftime("%H%M%S")
+
+    # Buy a Twilio number
+    webhook = "https://sms-alerts.vercel.app/sms/incoming"
+    twilio_number = buy_twilio_number(area_code=area_code, webhook_url=webhook)
+    if not twilio_number:
+        return {"error": "Could not provision a phone number. Please try again or contact support."}
+
+    # Register the business
+    ok = create_business(biz_id, name, phone, twilio_number)
+    if not ok:
+        return {"error": "Could not create business. Phone number may already be registered."}
+
+    # Send welcome text
+    msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
+    send_sms(phone, msg, from_number=twilio_number)
+
+    logger.info(f"Self-serve signup: {name} ({biz_id}) → {twilio_number} → {phone}")
+
+    return {
+        "success": True,
+        "business_id": biz_id,
+        "name": name,
+        "owner_phone": phone,
+        "twilio_number": twilio_number,
+    }
+
