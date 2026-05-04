@@ -90,7 +90,8 @@ def init_db():
     with get_db() as conn:
         _execute(conn, f"""CREATE TABLE IF NOT EXISTS businesses (
             id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
-            owner_phone TEXT NOT NULL, twilio_number TEXT NOT NULL UNIQUE,
+            owner_phone TEXT NOT NULL, alert_phones TEXT NOT NULL DEFAULT '',
+            twilio_number TEXT NOT NULL UNIQUE,
             muted_until TEXT, paused INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
         _execute(conn, f"""CREATE TABLE IF NOT EXISTS messages (
             id {serial} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
@@ -102,17 +103,36 @@ def init_db():
             alert_type TEXT NOT NULL, sent_at TEXT NOT NULL)""")
         _execute(conn, "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)")
         _execute(conn, "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)")
+        # Migration: add alert_phones column if missing
+        try:
+            _execute(conn, "ALTER TABLE businesses ADD COLUMN alert_phones TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
 
 
-def create_business(biz_id, name, owner_phone, twilio_number):
+def create_business(biz_id, name, owner_phone, twilio_number, extra_phones=""):
     now = datetime.now(timezone.utc).isoformat()
+    all_phones = owner_phone
+    if extra_phones:
+        all_phones = ",".join([owner_phone] + [p.strip() for p in extra_phones.split(",") if p.strip()])
     try:
         with get_db() as conn:
-            _execute(conn, _q("INSERT INTO businesses (id,name,owner_phone,twilio_number,created_at) VALUES (?,?,?,?,?)"),
-                     (biz_id, name, owner_phone, twilio_number, now))
+            _execute(conn, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,twilio_number,created_at) VALUES (?,?,?,?,?,?)"),
+                     (biz_id, name, owner_phone, all_phones, twilio_number, now))
         return True
     except Exception:
         return False
+
+
+def get_alert_phones(biz):
+    """Get list of all phone numbers that should receive alerts."""
+    phones_str = biz.get("alert_phones") or biz.get("owner_phone") or ""
+    phones = [p.strip() for p in phones_str.split(",") if p.strip()]
+    # Always include owner_phone
+    owner = biz.get("owner_phone", "")
+    if owner and owner not in phones:
+        phones.insert(0, owner)
+    return phones
 
 
 def get_business_by_twilio(twilio_number):
@@ -128,14 +148,20 @@ def get_business_by_twilio(twilio_number):
 
 
 def get_business_by_owner(owner_phone):
+    """Check if this phone number belongs to any business (owner or alert contact)."""
     clean = _normalize_phone(owner_phone)
     with get_db() as conn:
+        # Check owner_phone directly
         row = _fetchone(conn, _q("SELECT * FROM businesses WHERE owner_phone = ?"), (clean,))
         if row:
             return row
+        # Check all businesses for this number in alert_phones or owner_phone
         for r in _fetchall(conn, "SELECT * FROM businesses"):
             if _normalize_phone(r["owner_phone"])[-10:] == clean[-10:]:
                 return r
+            for p in (r.get("alert_phones") or "").split(","):
+                if p.strip() and _normalize_phone(p.strip())[-10:] == clean[-10:]:
+                    return r
     return None
 
 
@@ -184,6 +210,11 @@ def get_message_by_id(msg_id):
 def get_recent_flagged(biz_id, limit=5):
     with get_db() as conn:
         return _fetchall(conn, _q("SELECT * FROM messages WHERE business_id=? AND tier IN (1,2) ORDER BY created_at DESC LIMIT ?"), (biz_id, limit))
+
+
+def get_recent_all(biz_id, limit=5):
+    with get_db() as conn:
+        return _fetchall(conn, _q("SELECT * FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT ?"), (biz_id, limit))
 
 
 def get_recent_alert_count(biz_id, minutes=10):
@@ -410,13 +441,28 @@ def _fmt_ts(iso):
 
 def handle_owner_command(text, business):
     biz_id = business["id"]
-    cmd = text.strip().upper()
+    raw = text.strip()
+    cmd = raw.upper()
+
+    # --- Acknowledgment: 👍, OK, GOT IT, DONE, ON IT, ACK ---
+    ack_words = {"OK", "GOT IT", "DONE", "ON IT", "ACK"}
+    is_thumbs_up = any(c in raw for c in "\U0001f44d\U0001f44d\U0001f3fb\U0001f44d\U0001f3fc\U0001f44d\U0001f3fd\U0001f44d\U0001f3fe\U0001f44d\U0001f3ff")
+    # iMessage reactions sent as SMS: "Liked ...", "Loved ...", "Thumbed up ..."
+    is_reaction_ack = any(cmd.startswith(w) for w in ["LIKED", "LOVED", "THUMBED UP"])
+
+    if cmd in ack_words or is_thumbs_up or is_reaction_ack:
+        msg = get_message_by_id(_owner_context.get(biz_id, 0)) if biz_id in _owner_context else None
+        if not msg: msg = get_latest_unacked(biz_id)
+        if not msg: return "No active alerts to acknowledge."
+        if msg["acknowledged"]: return f"Alert #{msg['id']} already acknowledged."
+        mark_acknowledged(msg["id"])
+        return f"✅ Alert #{msg['id']} acknowledged."
 
     if cmd == "HELP":
-        return ("Commands:\nDETAILS — View latest alert\nACK — Acknowledge alert\n"
-                "LIST — Last 5 flagged issues\nSTATUS — Alert status\n"
-                "MUTE 2H — Silence for 2 hours\nPAUSE — Stop all alerts\n"
-                "RESUME — Resume alerts\nHELP — This message")
+        return ("Commands:\nDETAILS — View latest alert\n👍 or OK — Acknowledge alert\n"
+                "LIST — Last 5 flagged issues\nLIST ALL — Last 5 messages (all types)\n"
+                "STATUS — Alert status\nMUTE 2H — Silence for 2 hours\n"
+                "PAUSE — Stop all alerts\nRESUME — Resume alerts\nHELP — This message")
 
     if cmd == "DETAILS":
         msg = get_message_by_id(_owner_context.get(biz_id, 0)) if biz_id in _owner_context else None
@@ -425,16 +471,21 @@ def handle_owner_command(text, business):
         set_context(biz_id, msg["id"])
         ack = "✅ Acknowledged" if msg["acknowledged"] else "⏳ Pending"
         return (f"Alert #{msg['id']} — {ack}\nTime: {_fmt_ts(msg['created_at'])}\n"
-                f"Category: {msg['category']}\nTier: {msg['tier']} | Confidence: {msg['confidence']:.0%}\n"
-                f"Message: \"{msg['message_text']}\"\nReply ACK to acknowledge.")
+                f"Category: {msg['category']}\n"
+                f"From: {msg['from_number']}\n"
+                f"Message: \"{msg['message_text']}\"\n"
+                f"Reply 👍 or OK to acknowledge.")
 
-    if cmd == "ACK":
-        msg = get_message_by_id(_owner_context.get(biz_id, 0)) if biz_id in _owner_context else None
-        if not msg: msg = get_latest_unacked(biz_id)
-        if not msg: return "No active alerts to acknowledge."
-        if msg["acknowledged"]: return f"Alert #{msg['id']} already acknowledged."
-        mark_acknowledged(msg["id"])
-        return f"✅ Alert #{msg['id']} marked as acknowledged."
+    if cmd == "LIST ALL":
+        msgs = get_recent_all(biz_id, 5)
+        if not msgs: return "No messages yet."
+        tier_icons = {1: "🚨", 2: "⚠️", 3: "😐", 4: "💬"}
+        lines = ["Last 5 messages:\n"]
+        for m in msgs:
+            icon = tier_icons.get(m["tier"], "💬")
+            ack = " ✅" if m["acknowledged"] else ""
+            lines.append(f"{icon} #{m['id']} — {m['summary']} ({_fmt_ts(m['created_at'])}){ack}")
+        return "\n".join(lines)
 
     if cmd == "LIST":
         msgs = get_recent_flagged(biz_id, 5)
@@ -442,7 +493,7 @@ def handle_owner_command(text, business):
         lines = ["Last 5 flagged issues:\n"]
         for m in msgs:
             a = "✅" if m["acknowledged"] else "⚠️"
-            lines.append(f"{a} #{m['id']} T{m['tier']} — {m['summary']} ({_fmt_ts(m['created_at'])})")
+            lines.append(f"{a} #{m['id']} — {m['summary']} ({_fmt_ts(m['created_at'])})")
         return "\n".join(lines)
 
     if cmd == "STATUS":
@@ -482,7 +533,11 @@ def handle_owner_command(text, business):
             set_muted_until(biz_id, datetime.now(timezone.utc) + timedelta(hours=amt))
             return f"🔇 Alerts muted for {amt} hour{'s' if amt!=1 else ''}. Reply RESUME to unmute."
 
-    return f"Unknown command: \"{text.strip()[:20]}\"\nReply HELP for commands."
+    # iMessage reactions that aren't acknowledgments
+    if any(cmd.startswith(w) for w in ["EMPHASIZED", "QUESTIONED", "LAUGHED AT", "DISLIKED"]):
+        return ""  # Silently ignore non-ack reactions
+
+    return f"Unknown command: \"{raw[:20]}\"\nReply HELP for commands."
 
 
 # ---------------------------------------------------------------------------
@@ -562,15 +617,16 @@ Your customers can now text {twilio} with feedback and you'll get alerts here wh
 
 Commands you can text back:
 DETAILS — See the full message
-ACK — Mark alert as handled
-LIST — Last 5 issues
-STATUS — Check if alerts are on
+👍 or OK — Acknowledge alert
+LIST — Last 5 flagged issues
+LIST ALL — Last 5 messages (all types)
+STATUS — Alert status
 MUTE 2H — Silence for 2 hours
 PAUSE — Stop alerts until RESUME
 RESUME — Turn alerts back on
 HELP — Get this list anytime
 
-Emergencies always get through, even when muted. You'll also get a weekly summary every Sunday."""
+Emergencies always get through, even when muted."""
 
 
 @app.get("/admin/add")
@@ -798,15 +854,19 @@ async def incoming_sms(From: str = Form(...), Body: str = Form(...), To: str = F
     msg_id = store_message(biz["id"], sender, body, c)
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
 
-    # Alert owner
-    owner_phone = biz["owner_phone"]
-    if owner_phone and not (is_alerts_silenced(biz) and tier != 1):
+    # Alert all contacts
+    alert_phones = get_alert_phones(biz)
+    if alert_phones and not (is_alerts_silenced(biz) and tier != 1):
         if get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW) < RATE_LIMIT_MAX:
             alert = None
             if tier == 1: alert = "🚨 URGENT: Possible emergency reported\nReply: DETAILS"
-            elif tier == 2 and conf > 0.7: alert = f"⚠️ Issue detected: {summary}\nReply: DETAILS or ACK"
+            elif tier == 2 and conf > 0.7: alert = f"⚠️ Issue reported: {summary}\nReply 👍 or OK to acknowledge"
             if alert:
-                if send_sms(owner_phone, alert, from_number=biz["twilio_number"]):
+                sent_any = False
+                for phone in alert_phones:
+                    if send_sms(phone, alert, from_number=biz["twilio_number"]):
+                        sent_any = True
+                if sent_any:
                     mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
                     set_context(biz["id"], msg_id)
 
@@ -908,7 +968,7 @@ footer{text-align:center;padding:32px 24px;color:#52525b;font-size:13px;border-t
 <h2>See it in action</h2>
 <div class="bubble in"><div class="label">Customer texts</div>Bathroom is disgusting and nobody is at the front desk</div>
 <div class="bubble out"><div class="label">Auto-reply to customer</div>We've flagged this as a cleanliness issue and notified the manager. Thank you.</div>
-<div class="bubble alert"><div class="label">You get an alert</div>&#9888;&#65039; Issue detected: Cleanliness and staffing issue<br>Reply: DETAILS or ACK</div>
+<div class="bubble alert"><div class="label">You get an alert</div>&#9888;&#65039; Issue reported: Cleanliness and staffing issue<br>Reply &#128077; or OK to acknowledge</div>
 <div class="bubble in" style="background:#18181b;border:1px solid #27272a"><div class="label">You reply</div>ACK</div>
 <div class="bubble out" style="background:#27272a;color:#e4e4e7"><div class="label">System confirms</div>&#9989; Alert #14 marked as acknowledged.</div>
 </div>
@@ -1095,7 +1155,7 @@ h1{font-size:22px;font-weight:600;margin-bottom:4px}
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
-<div class="cmd-btn" onclick="ownerCmd('ACK')">ACK</div>
+<div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
 <div class="cmd-btn" onclick="ownerCmd('HELP')">HELP</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
@@ -1148,10 +1208,10 @@ function ownerCmd(raw) {
     document.getElementById('owner-inp').value = '';
     if (!cmd) return;
 
-    addB(mo, 'cmd', '', cmd);
+    addB(mo, 'cmd', '', raw.trim());
 
     if (cmd === 'HELP') {
-        addB(mo, 'resp', '', 'Commands:\\nDETAILS \\u2014 View latest alert\\nACK \\u2014 Acknowledge alert\\nLIST \\u2014 Last 5 flagged issues\\nSTATUS \\u2014 Alert status\\nMUTE 2H \\u2014 Silence for 2 hours\\nPAUSE \\u2014 Stop all alerts\\nRESUME \\u2014 Resume alerts\\nHELP \\u2014 This message');
+        addB(mo, 'resp', '', 'Commands:\\nDETAILS \\u2014 View latest alert\\n\\ud83d\\udc4d or OK \\u2014 Acknowledge alert\\nLIST \\u2014 Last 5 flagged issues\\nLIST ALL \\u2014 Last 5 messages (all types)\\nSTATUS \\u2014 Alert status\\nMUTE 2H \\u2014 Silence for 2 hours\\nPAUSE \\u2014 Stop all alerts\\nRESUME \\u2014 Resume alerts\\nHELP \\u2014 This message');
         return;
     }
 
@@ -1164,16 +1224,16 @@ function ownerCmd(raw) {
         const d = lastData;
         const now = new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
         const ackLabel = acked ? '\\u2705 Acknowledged' : '\\u23f3 Pending';
-        addB(mo, 'resp', '', 'Alert \\u2014 ' + ackLabel + '\\nTime: ' + now + '\\nCategory: ' + d.category.replace('_',' ') + '\\nTier: ' + d.tier + ' | Confidence: ' + Math.round(d.confidence*100) + '%\\nMessage: "' + d.original_message + '"\\nReply ACK to acknowledge.');
+        addB(mo, 'resp', '', 'Alert \\u2014 ' + ackLabel + '\\nTime: ' + now + '\\nCategory: ' + d.category.replace('_',' ') + '\\nFrom: (555) 867-5309\\nMessage: "' + d.original_message + '"\\nReply \\ud83d\\udc4d or OK to acknowledge.');
         return;
     }
 
-    if (cmd === 'ACK') {
+    if (['OK','GOT IT','DONE','ON IT','ACK'].includes(cmd) || raw.includes('\\ud83d\\udc4d')) {
         if (acked) {
             addB(mo, 'resp', '', 'Already acknowledged.');
         } else {
             acked = true;
-            addB(mo, 'resp', '', '\\u2705 Alert marked as acknowledged.');
+            addB(mo, 'resp', '', '\\u2705 Alert acknowledged.');
         }
         return;
     }
@@ -1215,13 +1275,12 @@ async function sendDemo() {
         const tags = '<div class="meta">'
             + '<span class="tag ' + tierCls + '">' + d.tier_label + '</span>'
             + '<span class="tag ' + tierCls + '">' + d.category.replace('_',' ') + '</span>'
-            + '<span class="tag ' + tierCls + '">' + Math.round(d.confidence*100) + '%</span>'
             + '</div>';
 
         if (d.would_alert) {
             const alertText = d.tier === 1
                 ? '\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS'
-                : '\\u26a0\\ufe0f Issue detected: ' + d.summary + '\\nReply: DETAILS or ACK';
+                : '\\u26a0\\ufe0f Issue reported: ' + d.summary + '\\nReply \\ud83d\\udc4d or OK to acknowledge';
             addB(mo, 'alert', 'Alert', alertText + tags);
             showOwnerInput();
         } else {
