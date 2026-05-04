@@ -825,22 +825,22 @@ SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="vi
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#09090b;color:#fafafa;line-height:1.6;-webkit-font-smoothing:antialiased}a{color:#f97316;text-decoration:none}
-.hero{padding:60px 24px 40px;text-align:center;max-width:640px;margin:0 auto}.logo{font-size:15px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#f97316;margin-bottom:32px;display:inline-block}.logo span{background:#f97316;color:#09090b;padding:3px 8px;border-radius:4px;margin-right:6px}h1{font-size:clamp(32px,6vw,48px);font-weight:700;line-height:1.15;margin-bottom:16px;letter-spacing:-0.02em}h1 em{font-style:normal;color:#f97316}.sub{font-size:18px;color:#a1a1aa;max-width:480px;margin:0 auto 40px;line-height:1.5}
-.card{background:#18181b;border:1px solid #27272a;border-radius:16px;padding:32px;max-width:440px;margin:0 auto 48px;text-align:left}.trial{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:20px;text-align:center}label{display:block;font-size:13px;font-weight:500;color:#71717a;margin-bottom:4px;margin-top:14px}label:first-of-type{margin-top:0}input[type=text],input[type=tel],input[type=email]{width:100%;padding:12px 14px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;font-size:16px;color:#fafafa;font-family:inherit;transition:border-color 0.2s}input::placeholder{color:#52525b}input:focus{outline:none;border-color:#f97316}
-.btn{width:100%;padding:14px;background:#f97316;color:#09090b;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit;transition:background 0.2s}.btn:hover{background:#ea580c}.btn:disabled{opacity:0.4;cursor:not-allowed}
-.result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}.ok{background:rgba(34,197,94,0.1);color:#4ade80;border:1px solid rgba(34,197,94,0.25)}.err{background:rgba(239,68,68,0.1);color:#f87171;border:1px solid rgba(239,68,68,0.25)}
-.spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #09090b;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}@keyframes spin{to{transform:rotate(360deg)}}
-.proof{text-align:center;max-width:640px;margin:0 auto;padding:0 24px 48px}.proof h2{font-size:14px;font-weight:500;color:#71717a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:24px}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:48px}.step{background:#18181b;border:1px solid #27272a;border-radius:12px;padding:20px;text-align:center}.step-num{width:32px;height:32px;border-radius:50%;background:rgba(249,115,22,0.15);color:#f97316;font-weight:700;font-size:14px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px}.step h3{font-size:15px;font-weight:600;margin-bottom:4px}.step p{font-size:13px;color:#a1a1aa;line-height:1.4}
-.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 48px;padding:0 24px}.feat{background:#18181b;border:1px solid #27272a;border-radius:10px;padding:16px 18px}.feat strong{font-size:14px;display:block;margin-bottom:2px}.feat p{font-size:13px;color:#71717a;margin:0;line-height:1.4}
-.sms-demo{max-width:360px;margin:0 auto 48px;padding:0 24px}.sms-demo h2{font-size:14px;font-weight:500;color:#71717a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;text-align:center}.bubble{padding:10px 14px;border-radius:16px;font-size:14px;margin-bottom:8px;max-width:85%;line-height:1.4;animation:fadeUp 0.4s ease both}.bubble.in{background:#27272a;color:#e4e4e7;border-bottom-left-radius:4px}.bubble.out{background:#f97316;color:#09090b;margin-left:auto;border-bottom-right-radius:4px}.bubble.alert{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;border-bottom-left-radius:4px}.bubble .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;opacity:0.6;margin-bottom:4px}@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}.bubble:nth-child(2){animation-delay:0.15s}.bubble:nth-child(3){animation-delay:0.3s}.bubble:nth-child(4){animation-delay:0.45s}.bubble:nth-child(5){animation-delay:0.6s}
-footer{text-align:center;padding:32px 24px;color:#52525b;font-size:13px;border-top:1px solid #1e1e22}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;line-height:1.6;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+.hero{padding:60px 24px 40px;text-align:center;max-width:640px;margin:0 auto}.logo{font-size:15px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;margin-bottom:32px;display:inline-block}.logo span{background:#ea580c;color:#fff;padding:3px 8px;border-radius:4px;margin-right:6px}h1{font-size:clamp(32px,6vw,48px);font-weight:700;line-height:1.15;margin-bottom:16px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}.sub{font-size:18px;color:#888;max-width:480px;margin:0 auto 40px;line-height:1.5}
+.card{background:#fff;border:1px solid #e0e0dc;border-radius:16px;padding:32px;max-width:440px;margin:0 auto 48px;text-align:left;box-shadow:0 4px 20px rgba(0,0,0,0.04)}.trial{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:20px;text-align:center}label{display:block;font-size:13px;font-weight:500;color:#888;margin-bottom:4px;margin-top:14px}label:first-of-type{margin-top:0}input[type=text],input[type=tel],input[type=email]{width:100%;padding:12px 14px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:16px;color:#1a1a1a;font-family:inherit;transition:border-color 0.2s}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
+.btn{width:100%;padding:14px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit;transition:background 0.2s}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4;cursor:not-allowed}
+.result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}@keyframes spin{to{transform:rotate(360deg)}}
+.proof{text-align:center;max-width:640px;margin:0 auto;padding:0 24px 48px}.proof h2{font-size:14px;font-weight:500;color:#aaa;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:24px}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:48px}.step{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.step-num{width:32px;height:32px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:14px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px}.step h3{font-size:15px;font-weight:600;margin-bottom:4px;color:#1a1a1a}.step p{font-size:13px;color:#888;line-height:1.4}
+.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 48px;padding:0 24px}.feat{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.feat strong{font-size:14px;display:block;margin-bottom:2px;color:#1a1a1a}.feat p{font-size:13px;color:#888;margin:0;line-height:1.4}
+.sms-demo{max-width:360px;margin:0 auto 48px;padding:0 24px}.sms-demo h2{font-size:14px;font-weight:500;color:#aaa;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;text-align:center}.bubble{padding:10px 14px;border-radius:16px;font-size:14px;margin-bottom:8px;max-width:85%;line-height:1.4;animation:fadeUp 0.4s ease both}.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}.bubble.out{background:#ea580c;color:#fff;margin-left:auto;border-bottom-right-radius:4px}.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}.bubble .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:4px}@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}.bubble:nth-child(2){animation-delay:0.15s}.bubble:nth-child(3){animation-delay:0.3s}.bubble:nth-child(4){animation-delay:0.45s}.bubble:nth-child(5){animation-delay:0.6s}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 @media(max-width:600px){.steps{grid-template-columns:1fr}.features{grid-template-columns:1fr}}
 </style></head><body>
 <div class="hero"><div class="logo"><span>H</span> HOTLINE</div>
 <h1>Stop losing customers to <em>fixable problems</em></h1>
 <p class="sub">Your customers text you when something's wrong. AI filters the noise and alerts you instantly. No app to install \u2014 just SMS.</p>
-<a href="/demo" style="display:inline-block;padding:10px 22px;border:1px solid rgba(249,115,22,0.4);border-radius:8px;color:#fb923c;font-size:14px;font-weight:500;margin-bottom:8px">Try the live demo &rarr;</a></div>
+<a href="/demo" style="display:inline-block;padding:10px 22px;border:1px solid #e0e0dc;border-radius:8px;color:#ea580c;font-size:14px;font-weight:500;margin-bottom:8px">Try the live demo &rarr;</a></div>
 <div class="card"><div class="trial">14-day free trial &middot; No credit card required</div><div class="result" id="result"></div>
 <label>Business name</label><input type="text" id="f-name" placeholder="Joe's Coffee">
 <label>Your cell phone (where you'll get alerts)</label><input type="tel" id="f-phone" placeholder="(727) 555-1234">
@@ -856,8 +856,8 @@ footer{text-align:center;padding:32px 24px;color:#52525b;font-size:13px;border-t
 <div class="bubble in"><div class="label">Customer texts</div>Bathroom is disgusting and nobody is at the front desk</div>
 <div class="bubble out"><div class="label">Auto-reply to customer</div>We've flagged this as a cleanliness issue and notified management. Thank you for letting us know.</div>
 <div class="bubble alert"><div class="label">You get an alert</div>&#9888;&#65039; Issue reported: Cleanliness and staffing issue<br>Reply &#128077; or OK to acknowledge</div>
-<div class="bubble in" style="background:#18181b;border:1px solid #27272a"><div class="label">You reply</div>&#128077;</div>
-<div class="bubble out" style="background:#27272a;color:#e4e4e7"><div class="label">System confirms</div>&#9989; Alert acknowledged.</div></div>
+<div class="bubble in" style="background:#f0f0ec"><div class="label">You reply</div>&#128077;</div>
+<div class="bubble out" style="background:#e8e8e4;color:#333"><div class="label">System confirms</div>&#9989; Alert acknowledged.</div></div>
 <div class="features">
 <div class="feat"><strong>AI-powered filtering</strong><p>Only alerts on real issues. Positive feedback stays quiet.</p></div>
 <div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, LIST, MUTE, PAUSE \u2014 all via SMS.</p></div>
@@ -886,6 +886,34 @@ def signup_page():
     return Response(content=SIGNUP_HTML, media_type="text/html")
 
 
+DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo. You will receive customer messages and must respond naturally.
+
+You have two jobs:
+1. CLASSIFY the message (tier, category, sentiment, summary)
+2. Write a natural AUTO-REPLY to the customer
+
+CLASSIFICATION TIERS:
+- Tier 1: Emergency ONLY for actual physical danger (fire, injury, flooding, violence). NOT for figurative language like "fire her", "killing it", "blowing up"
+- Tier 2: Business-Critical — operations broken, no staff present, equipment failure, health hazard, extreme waits
+- Tier 3: Reputation Risk — unhappy customer, complaint, bad experience, frustration
+- Tier 4: Routine — general inquiry, positive feedback, neutral message
+
+CONTEXT RULES (critical):
+- If conversation history is provided, READ IT. A follow-up to a complaint is still part of that complaint.
+- "fire her" means terminate employment. "this place is a dumpster fire" means it's bad. Neither is a Tier 1 emergency.
+- Use the full conversation to understand intent, not just keywords in the latest message.
+
+AUTO-REPLY TONE:
+- Tier 1: Urgent. Tell customer to call 911. Never claim emergency services contacted. Example: "If this is an emergency, please call 911 immediately. We have notified the business owner."
+- Tier 2: Professional, serious. Confirm issue type. Say management notified. No exclamation marks.
+- Tier 3: Empathetic. Acknowledge frustration. Gently invite more details so the business can address it. No exclamation marks. If they ARE sharing details (follow-up), thank them and assure management will review.
+- Tier 4: Warm, friendly, use exclamation marks. Genuine appreciation.
+
+Keep auto_reply under 160 characters. Be natural — vary your responses, don't repeat the same template.
+
+Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
+
+
 @app.post("/demo/classify")
 async def demo_classify(request_data: dict = None):
     _ensure_init()
@@ -895,28 +923,26 @@ async def demo_classify(request_data: dict = None):
     if not text: return {"error": "No message provided"}
     if len(text) > 500: return {"error": "Message too long"}
 
-    # Rate limit: 20/hr per session (tracked client-side, but we cap total)
-    # For server-side we just ensure the API call isn't too expensive
     if _ai_client:
         try:
-            # Build conversation context for follow-ups
-            system = CLASSIFICATION_PROMPT
+            user_msg = ""
             if history:
-                context = "Previous messages in this conversation:\\n"
-                for h in history[-6:]:  # last 6 messages max
-                    context += f"- Customer: \"{h.get('customer','')}\"\n  Auto-reply: \"{h.get('reply','')}\"\n"
-                context += f"\\nNow classify this NEW follow-up message from the same customer:"
-                user_msg = f"{context}\\n\\n\"{text}\""
+                user_msg = "Conversation so far:\n"
+                for h in history[-6:]:
+                    user_msg += f'Customer: "{h.get("customer","")}"'
+                    user_msg += f'\nSystem reply: "{h.get("reply","")}"'
+                    user_msg += "\n\n"
+                user_msg += f'New message from same customer: "{text}"\n\nClassify this new message with full conversation context.'
             else:
-                user_msg = f'Classify this customer SMS:\\n\\n"{text}"'
+                user_msg = f'Classify this customer SMS:\n\n"{text}"'
 
             resp = _ai_client.messages.create(
                 model="claude-haiku-4-5-20251001", max_tokens=300,
-                system=system,
+                system=DEMO_PROMPT,
                 messages=[{"role": "user", "content": user_msg}])
             raw = resp.content[0].text.strip()
             if raw.startswith("```"):
-                raw = raw.split("\\n", 1)[1].rsplit("```", 1)[0].strip()
+                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             c = json.loads(raw)
             c["tier"] = max(1, min(4, int(c.get("tier", 4))))
             c["confidence"] = max(0.0, min(1.0, float(c.get("confidence", 0.5))))
