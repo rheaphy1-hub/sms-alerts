@@ -22,7 +22,7 @@ logger = logging.getLogger("sms")
 # Database — Postgres (production) or SQLite (local dev)
 # ---------------------------------------------------------------------------
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
-
+USE_POSTGRES = DATABASE_URL.startswith("postgres")
 if USE_POSTGRES:
     import psycopg2
     import psycopg2.extras
