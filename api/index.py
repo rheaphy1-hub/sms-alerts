@@ -530,7 +530,7 @@ def _ensure_init():
 @app.get("/")
 def root():
     _ensure_init()
-    return {"service": "SMS Alert System", "status": "ok"}
+    return Response(content=SIGNUP_HTML, media_type="text/html")
 
 
 @app.get("/health")
@@ -816,72 +816,102 @@ def _twiml(msg):
 # Self-serve signup
 # ---------------------------------------------------------------------------
 SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Get SMS Alerts for Your Business</title>
+<title>Hotline — Stop losing customers to fixable problems</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,sans-serif;background:#fafaf8;color:#1a1a1a;line-height:1.6}
-.wrap{max-width:520px;margin:0 auto;padding:40px 24px}
-h1{font-size:28px;font-weight:700;margin-bottom:8px}
-.sub{font-size:16px;color:#666;margin-bottom:32px}
-.card{background:#fff;border:1px solid #e5e5e0;border-radius:12px;padding:28px}
-label{display:block;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px}
-input[type=text],input[type=tel]{width:100%;padding:12px 14px;border:1px solid #ddd;border-radius:8px;font-size:16px;margin-bottom:16px;transition:border-color 0.2s}
-input:focus{outline:none;border-color:#111}
-.btn{width:100%;padding:14px;background:#111;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:opacity 0.2s}
-.btn:hover{opacity:0.85}
+body{font-family:'DM Sans',system-ui,sans-serif;background:#09090b;color:#fafafa;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:#f97316;text-decoration:none}
+.hero{padding:60px 24px 40px;text-align:center;max-width:640px;margin:0 auto}
+.logo{font-size:15px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#f97316;margin-bottom:32px;display:inline-block}
+.logo span{background:#f97316;color:#09090b;padding:3px 8px;border-radius:4px;margin-right:6px}
+h1{font-size:clamp(32px,6vw,48px);font-weight:700;line-height:1.15;margin-bottom:16px;letter-spacing:-0.02em}
+h1 em{font-style:normal;color:#f97316}
+.sub{font-size:18px;color:#a1a1aa;max-width:480px;margin:0 auto 40px;line-height:1.5}
+.card{background:#18181b;border:1px solid #27272a;border-radius:16px;padding:32px;max-width:440px;margin:0 auto 48px;text-align:left}
+.trial{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:20px;text-align:center}
+label{display:block;font-size:13px;font-weight:500;color:#71717a;margin-bottom:4px;margin-top:14px}
+label:first-of-type{margin-top:0}
+input[type=text],input[type=tel]{width:100%;padding:12px 14px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;font-size:16px;color:#fafafa;font-family:inherit;transition:border-color 0.2s}
+input::placeholder{color:#52525b}
+input:focus{outline:none;border-color:#f97316}
+.btn{width:100%;padding:14px;background:#f97316;color:#09090b;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit;transition:background 0.2s}
+.btn:hover{background:#ea580c}
 .btn:disabled{opacity:0.4;cursor:not-allowed}
 .result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}
-.ok{background:#f0fdf4;color:#166534;border:1px solid #b8e8c8}
-.err{background:#fef2f2;color:#991b1b;border:1px solid #f5c2c2}
-.how{margin-top:32px;font-size:14px;color:#888}
-.how h3{font-size:15px;color:#444;font-weight:600;margin-bottom:8px}
-.how ol{padding-left:20px}
-.how li{margin-bottom:6px}
-.feat{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:24px 0 0}
-.feat div{background:#f5f5f0;padding:12px 14px;border-radius:8px;font-size:13px;color:#444}
-.feat strong{display:block;font-size:14px;color:#1a1a1a;margin-bottom:2px}
-.spinner{display:inline-block;width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
+.ok{background:rgba(34,197,94,0.1);color:#4ade80;border:1px solid rgba(34,197,94,0.25)}
+.err{background:rgba(239,68,68,0.1);color:#f87171;border:1px solid rgba(239,68,68,0.25)}
+.spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #09090b;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.trial{background:#eef4ff;border:1px solid #c2d6f5;color:#1a4480;padding:12px 16px;border-radius:8px;font-size:14px;margin-bottom:20px}
+.proof{text-align:center;max-width:640px;margin:0 auto;padding:0 24px 48px}
+.proof h2{font-size:14px;font-weight:500;color:#71717a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:24px}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:48px}
+.step{background:#18181b;border:1px solid #27272a;border-radius:12px;padding:20px;text-align:center}
+.step-num{width:32px;height:32px;border-radius:50%;background:rgba(249,115,22,0.15);color:#f97316;font-weight:700;font-size:14px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px}
+.step h3{font-size:15px;font-weight:600;margin-bottom:4px}
+.step p{font-size:13px;color:#a1a1aa;line-height:1.4}
+.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 48px;padding:0 24px}
+.feat{background:#18181b;border:1px solid #27272a;border-radius:10px;padding:16px 18px}
+.feat strong{font-size:14px;display:block;margin-bottom:2px}
+.feat p{font-size:13px;color:#71717a;margin:0;line-height:1.4}
+.sms-demo{max-width:360px;margin:0 auto 48px;padding:0 24px}
+.sms-demo h2{font-size:14px;font-weight:500;color:#71717a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;text-align:center}
+.bubble{padding:10px 14px;border-radius:16px;font-size:14px;margin-bottom:8px;max-width:85%;line-height:1.4;animation:fadeUp 0.4s ease both}
+.bubble.in{background:#27272a;color:#e4e4e7;border-bottom-left-radius:4px}
+.bubble.out{background:#f97316;color:#09090b;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.alert{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#fb923c;border-bottom-left-radius:4px}
+.bubble .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;opacity:0.6;margin-bottom:4px}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.bubble:nth-child(2){animation-delay:0.15s}.bubble:nth-child(3){animation-delay:0.3s}.bubble:nth-child(4){animation-delay:0.45s}.bubble:nth-child(5){animation-delay:0.6s}
+footer{text-align:center;padding:32px 24px;color:#52525b;font-size:13px;border-top:1px solid #1e1e22}
+@media(max-width:600px){.steps{grid-template-columns:1fr}.features{grid-template-columns:1fr}}
 </style></head><body>
-<div class="wrap">
-<h1>SMS alerts for your business</h1>
-<p class="sub">Customers text you feedback. You get alerts when something needs attention. No app needed.</p>
+
+<div class="hero">
+<div class="logo"><span>H</span> HOTLINE</div>
+<h1>Stop losing customers to <em>fixable problems</em></h1>
+<p class="sub">Your customers text you when something's wrong. AI filters the noise and alerts you instantly. No app to install — just SMS.</p>
+</div>
 
 <div class="card">
-<div class="trial">14-day free trial. No credit card required.</div>
+<div class="trial">14-day free trial &middot; No credit card required</div>
 <div class="result" id="result"></div>
-
 <label>Business name</label>
 <input type="text" id="f-name" placeholder="Joe's Coffee">
-
-<label>Your cell phone number (where you'll get alerts)</label>
-<input type="tel" id="f-phone" placeholder="+1 (727) 555-1234">
-
+<label>Your cell phone (where you'll get alerts)</label>
+<input type="tel" id="f-phone" placeholder="(727) 555-1234">
 <label>Preferred area code (optional)</label>
-<input type="text" id="f-area" placeholder="727" maxlength="3" style="width:120px">
-
-<button class="btn" id="f-btn" onclick="signup()">Get my number</button>
+<input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
+<button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
 </div>
 
-<div class="feat">
-<div><strong>Smart alerts</strong>AI filters noise, only alerts on real issues</div>
-<div><strong>Text to manage</strong>Reply DETAILS, ACK, MUTE, PAUSE</div>
-<div><strong>Weekly digest</strong>Summary of all feedback every Sunday</div>
-<div><strong>Works instantly</strong>Post the number in your business, done</div>
+<div class="proof">
+<h2>How it works</h2>
+<div class="steps">
+<div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get a unique phone number for your business in seconds</p></div>
+<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Put the number on a sign, sticker, or receipt in your location</p></div>
+<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you when something needs attention</p></div>
+</div>
 </div>
 
-<div class="how">
-<h3>How it works</h3>
-<ol>
-<li>Sign up and get your unique business phone number</li>
-<li>Display the number in your business (sign, sticker, receipt)</li>
-<li>Customers text feedback to that number</li>
-<li>AI reads each message and alerts you on your phone if something needs attention</li>
-<li>You manage everything by texting back (DETAILS, ACK, MUTE, etc.)</li>
-</ol>
+<div class="sms-demo">
+<h2>See it in action</h2>
+<div class="bubble in"><div class="label">Customer texts</div>Bathroom is disgusting and nobody is at the front desk</div>
+<div class="bubble out"><div class="label">Auto-reply to customer</div>We've flagged this as a cleanliness issue and notified the manager. Thank you.</div>
+<div class="bubble alert"><div class="label">You get an alert</div>&#9888;&#65039; Issue detected: Cleanliness and staffing issue<br>Reply: DETAILS or ACK</div>
+<div class="bubble in" style="background:#18181b;border:1px solid #27272a"><div class="label">You reply</div>ACK</div>
+<div class="bubble out" style="background:#27272a;color:#e4e4e7"><div class="label">System confirms</div>&#9989; Alert #14 marked as acknowledged.</div>
 </div>
+
+<div class="features">
+<div class="feat"><strong>AI-powered filtering</strong><p>Only alerts on real issues. Positive feedback and spam stay quiet.</p></div>
+<div class="feat"><strong>Manage by text</strong><p>DETAILS, ACK, LIST, MUTE, PAUSE — all via SMS from your phone.</p></div>
+<div class="feat"><strong>Weekly digest</strong><p>Every Sunday: message count, top issues, and what needs follow-up.</p></div>
+<div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div>
 </div>
+
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 
 <script>
 async function signup() {
@@ -911,7 +941,7 @@ async function signup() {
         const d = await r.json();
         if (d.success) {
             res.className='result ok';
-            res.innerHTML = '<strong>You are live!</strong><br><br>Your business number: <strong>'+d.twilio_number+'</strong><br><br>We just sent a welcome text to '+d.owner_phone+' with your commands. Display your number in your business and customers can start texting right away.';
+            res.innerHTML = '<strong>You are live!</strong><br><br>Your business number: <strong>'+d.twilio_number+'</strong><br><br>A welcome text with your commands has been sent to '+d.owner_phone+'. Display your new number in your business and customers can start texting right away.';
             res.style.display='block';
             btn.textContent='Done!';
         } else {
@@ -919,14 +949,14 @@ async function signup() {
             res.textContent=d.error || 'Something went wrong. Please try again.';
             res.style.display='block';
             btn.disabled=false;
-            btn.textContent='Get my number';
+            btn.innerHTML='Get my number &rarr;';
         }
     } catch(e) {
         res.className='result err';
         res.textContent='Connection error. Please try again.';
         res.style.display='block';
         btn.disabled=false;
-        btn.textContent='Get my number';
+        btn.innerHTML='Get my number &rarr;';
     }
 }
 </script>
