@@ -972,7 +972,7 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
-<div class="cmd-btn" onclick="ownerCmd('\U0001f44d')">&#128077;</div>
+<div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
 <div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
 <div class="cmd-btn" onclick="ownerCmd('HELP')">HELP</div>
 </div>
@@ -997,7 +997,7 @@ addB(mo,'cmd','',raw.trim());
 if(cmd==='HELP'){addB(mo,'resp','','Commands:\\nDETAILS \\u2014 View latest alert\\n\\ud83d\\udc4d or OK \\u2014 Acknowledge alert\\nLIST \\u2014 Last 5 flagged issues\\nLIST ALL \\u2014 All recent messages\\nSTATUS \\u2014 Alert status\\nMUTE 2H \\u2014 Silence for 2 hours\\nPAUSE / RESUME \\u2014 Stop or start alerts\\nDIGEST DAILY / WEEKLY \\u2014 Set email frequency\\nHELP \\u2014 This message');return}
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
 if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply \\ud83d\\udc4d or OK to acknowledge.');return}
-if(['OK','GOT IT','DONE','ON IT','ACK'].includes(cmd)||raw.includes('\\ud83d\\udc4d')||raw.includes('\ud83d\udc4d')){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
+if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)||raw.includes('\\ud83d\\udc4d')||raw.includes('\ud83d\udc4d')){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
 addB(mo,'resp','','Unknown command: "'+cmd+'"\\nReply HELP for commands.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;inp.value='';btn.disabled=true;hideOwnerInput();acked=false;
 addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
