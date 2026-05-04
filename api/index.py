@@ -23,6 +23,7 @@ logger = logging.getLogger("sms")
 # ---------------------------------------------------------------------------
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres")
+
 if USE_POSTGRES:
     import psycopg2
     import psycopg2.extras
@@ -483,6 +484,7 @@ _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER", "")
 _ENV_NAME = os.getenv("BUSINESS_NAME", "MyBusiness")
 _ADMIN_KEY = os.getenv("ADMIN_KEY", "changeme")
 
+
 def _ensure_init():
     global _initialized
     if _initialized: return
@@ -511,7 +513,232 @@ def digest():
     return {"digests_sent": send_all_digests()}
 
 
-@app.post("/sms/incoming")
+# ---------------------------------------------------------------------------
+# Admin — add a new business customer
+# ---------------------------------------------------------------------------
+WELCOME_MSG = """Welcome to {name} SMS Alerts! 🎉
+
+Your customers can now text {twilio} with feedback and you'll get alerts here when something needs attention.
+
+Commands you can text back:
+DETAILS — See the full message
+ACK — Mark alert as handled
+LIST — Last 5 issues
+STATUS — Check if alerts are on
+MUTE 2H — Silence for 2 hours
+PAUSE — Stop alerts until RESUME
+RESUME — Turn alerts back on
+HELP — Get this list anytime
+
+Emergencies always get through, even when muted. You'll also get a weekly summary every Sunday."""
+
+
+@app.get("/admin/add")
+def admin_add(
+    key: str = Query(...),
+    name: str = Query(...),
+    owner: str = Query(...),
+    twilio: str = Query(...),
+    biz_id: str = Query(""),
+):
+    _ensure_init()
+
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+
+    owner = owner.strip()
+    twilio = twilio.strip()
+    name = name.strip()
+
+    if not owner.startswith("+") or not twilio.startswith("+"):
+        return {"error": "Phone numbers must start with + (e.g. +17275551234)"}
+
+    if not biz_id:
+        biz_id = name.lower().replace(" ", "-").replace("'", "")[:30]
+
+    ok = create_business(biz_id, name, owner, twilio)
+    if not ok:
+        return {"error": f"Business '{biz_id}' already exists or Twilio number already in use"}
+
+    return {
+        "success": True,
+        "business_id": biz_id,
+        "name": name,
+        "owner_phone": owner,
+        "twilio_number": twilio,
+        "next_step": f"Set webhook on {twilio} to https://sms-alerts.vercel.app/sms/incoming",
+        "send_welcome": f"Visit /admin/welcome?key={key}&biz_id={biz_id} to send the welcome text",
+    }
+
+
+@app.get("/admin/welcome")
+def admin_welcome(
+    key: str = Query(...),
+    biz_id: str = Query(...),
+):
+    _ensure_init()
+
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+
+    with get_db() as conn:
+        biz = _fetchone(conn, _q("SELECT * FROM businesses WHERE id = ?"), (biz_id,))
+
+    if not biz:
+        return {"error": f"Business '{biz_id}' not found"}
+
+    msg = WELCOME_MSG.format(name=biz["name"], twilio=biz["twilio_number"])
+    ok = send_sms(biz["owner_phone"], msg, from_number=biz["twilio_number"])
+
+    if ok:
+        return {"success": True, "sent_to": biz["owner_phone"], "message_preview": msg[:100] + "..."}
+    else:
+        return {"error": "Failed to send welcome SMS"}
+
+
+@app.get("/admin/list")
+def admin_list(key: str = Query(...)):
+    _ensure_init()
+
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+
+    businesses = get_all_businesses()
+    return {
+        "count": len(businesses),
+        "businesses": [
+            {"id": b["id"], "name": b["name"], "owner": b["owner_phone"],
+             "twilio": b["twilio_number"], "paused": bool(b.get("paused"))}
+            for b in businesses
+        ],
+    }
+
+
+@app.get("/admin/stats")
+def admin_stats(key: str = Query(...), biz_id: str = Query(...)):
+    _ensure_init()
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+    stats = get_weekly_stats(biz_id)
+    with get_db() as conn:
+        recent = _fetchall(conn, _q("SELECT id,tier,category,summary,acknowledged,created_at FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT 10"), (biz_id,))
+    return {"stats": stats, "recent_messages": recent}
+
+
+@app.get("/admin/remove")
+def admin_remove(key: str = Query(...), biz_id: str = Query(...)):
+    _ensure_init()
+    if key != _ADMIN_KEY:
+        return {"error": "Invalid admin key"}
+    with get_db() as conn:
+        _execute(conn, _q("DELETE FROM businesses WHERE id=?"), (biz_id,))
+    return {"success": True, "removed": biz_id}
+
+
+@app.get("/admin")
+def admin_ui(key: str = Query("")):
+    _ensure_init()
+    if key != _ADMIN_KEY:
+        return Response(content="""<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#fafaf8">
+<div style="text-align:center"><h2 style="margin:0 0 16px">SMS Alert Admin</h2>
+<form style="display:flex;gap:8px" onsubmit="location.href='/admin?key='+document.getElementById('k').value;return false">
+<input id="k" type="password" placeholder="Admin key" style="padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;width:220px">
+<button style="padding:10px 20px;background:#111;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Enter</button>
+</form></div></body></html>""", media_type="text/html")
+
+    businesses = get_all_businesses()
+    biz_rows = ""
+    for b in businesses:
+        s = get_weekly_stats(b["id"])
+        paused = "Paused" if b.get("paused") else "Active"
+        biz_rows += f"""<tr>
+<td style="padding:12px 16px;font-weight:600">{b["name"]}</td>
+<td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["twilio_number"]}</td>
+<td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["owner_phone"]}</td>
+<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>
+<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>
+<td style="padding:12px 16px;text-align:center">{paused}</td>
+<td style="padding:12px 16px">
+<a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;text-decoration:none;font-size:13px;margin-right:12px">Resend welcome</a>
+<a href="#" onclick="if(confirm('Remove {b["name"]}?'))location.href='/admin/remove?key={key}&biz_id={b["id"]}';return false" style="color:#dc2626;text-decoration:none;font-size:13px">Remove</a>
+</td></tr>"""
+
+    if not biz_rows:
+        biz_rows = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#999">No businesses yet. Add your first one below.</td></tr>'
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SMS Alert Admin</title></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;margin:0;padding:24px;background:#fafaf8;color:#1a1a1a;line-height:1.5">
+<div style="max-width:960px;margin:0 auto">
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:32px">
+<div><h1 style="margin:0;font-size:24px;font-weight:700">SMS Alert Admin</h1>
+<p style="margin:4px 0 0;color:#888;font-size:14px">{len(businesses)} business{"es" if len(businesses)!=1 else ""} registered</p></div>
+</div>
+
+<div style="background:#fff;border:1px solid #e5e5e0;border-radius:10px;overflow:hidden;margin-bottom:32px">
+<table style="width:100%;border-collapse:collapse;font-size:14px">
+<thead><tr style="background:#f5f5f0;border-bottom:1px solid #e5e5e0">
+<th style="padding:10px 16px;text-align:left;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Business</th>
+<th style="padding:10px 16px;text-align:left;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Twilio #</th>
+<th style="padding:10px 16px;text-align:left;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Owner</th>
+<th style="padding:10px 16px;text-align:center;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Msgs (7d)</th>
+<th style="padding:10px 16px;text-align:center;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Flagged</th>
+<th style="padding:10px 16px;text-align:center;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Status</th>
+<th style="padding:10px 16px;text-align:left;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#888">Actions</th>
+</tr></thead>
+<tbody>{biz_rows}</tbody>
+</table>
+</div>
+
+<div style="background:#fff;border:1px solid #e5e5e0;border-radius:10px;padding:24px;margin-bottom:32px">
+<h2 style="margin:0 0 20px;font-size:18px;font-weight:600">Add new business</h2>
+<div id="result" style="display:none;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px"></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div>
+<label style="display:block;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Business name</label>
+<input id="f-name" type="text" placeholder="Joe's Coffee" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:15px;box-sizing:border-box">
+</div>
+<div>
+<label style="display:block;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Owner phone</label>
+<input id="f-owner" type="tel" placeholder="+17275551234" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:15px;box-sizing:border-box">
+</div>
+<div>
+<label style="display:block;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Twilio number (bought for this customer)</label>
+<input id="f-twilio" type="tel" placeholder="+17275559999" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:15px;box-sizing:border-box">
+</div>
+<div style="display:flex;align-items:end">
+<button onclick="addBiz()" style="padding:10px 24px;background:#111;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer;width:100%">Add business</button>
+</div>
+</div>
+<p style="margin:12px 0 0;font-size:13px;color:#999">Phone numbers must include +1 country code. The welcome text with commands is sent automatically.</p>
+</div>
+
+<div style="background:#fff;border:1px solid #e5e5e0;border-radius:10px;padding:24px">
+<h2 style="margin:0 0 12px;font-size:18px;font-weight:600">Webhook reminder</h2>
+<p style="font-size:14px;color:#666;margin:0">Every Twilio number needs its webhook set to:</p>
+<p style="font-family:monospace;font-size:14px;background:#f5f5f0;padding:10px 14px;border-radius:6px;margin:8px 0 0">https://sms-alerts.vercel.app/sms/incoming</p>
+</div>
+
+</div>
+<script>
+async function addBiz() {{
+    const name = document.getElementById('f-name').value.trim();
+    const owner = document.getElementById('f-owner').value.trim();
+    const twilio = document.getElementById('f-twilio').value.trim();
+    const res = document.getElementById('result');
+    if (!name || !owner || !twilio) {{ res.style.display='block'; res.style.background='#fef2f2'; res.style.color='#991b1b'; res.textContent='Please fill in all fields.'; return; }}
+    try {{
+        const r = await fetch('/admin/add?key={key}&name='+encodeURIComponent(name)+'&owner='+encodeURIComponent(owner)+'&twilio='+encodeURIComponent(twilio));
+        const d = await r.json();
+        if (d.success) {{ res.style.display='block'; res.style.background='#f0fdf4'; res.style.color='#166534'; res.textContent='Added '+name+'! Welcome text sent. Refreshing...'; setTimeout(()=>location.reload(),1500); }}
+        else {{ res.style.display='block'; res.style.background='#fef2f2'; res.style.color='#991b1b'; res.textContent=d.error; }}
+    }} catch(e) {{ res.style.display='block'; res.style.background='#fef2f2'; res.style.color='#991b1b'; res.textContent='Something went wrong: '+e.message; }}
+}}
+</script>
+</body></html>"""
+    return Response(content=html, media_type="text/html")
+
+
 async def incoming_sms(From: str = Form(...), Body: str = Form(...), To: str = Form("")):
     _ensure_init()
     sender, body, twilio_num = From.strip(), Body.strip(), To.strip()
@@ -551,50 +778,3 @@ def _twiml(msg):
            + msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
            + '</Message></Response>')
     return Response(content=xml, media_type="application/xml")
-# ---------------------------------------------------------------------------
-# Admin
-# ---------------------------------------------------------------------------
-WELCOME_MSG = """Welcome to {name} SMS Alerts!
-
-Your customers can now text {twilio} with feedback and you'll get alerts here when something needs attention.
-
-Commands you can text back:
-DETAILS - See the full message
-ACK - Mark alert as handled
-LIST - Last 5 issues
-STATUS - Check if alerts are on
-MUTE 2H - Silence for 2 hours
-PAUSE - Stop alerts until RESUME
-RESUME - Turn alerts back on
-HELP - Get this list anytime
-
-Emergencies always get through, even when muted."""
-
-
-@app.get("/admin/add")
-def admin_add(key: str = Query(...), name: str = Query(...), owner: str = Query(...), twilio: str = Query(...), biz_id: str = Query("")):
-    _ensure_init()
-    if key != _ADMIN_KEY:
-        return {"error": "Invalid admin key"}
-    owner = owner.strip()
-    twilio = twilio.strip()
-    name = name.strip()
-    if not owner.startswith("+") or not twilio.startswith("+"):
-        return {"error": "Phone numbers must start with + (e.g. +17275551234)"}
-    if not biz_id:
-        biz_id = name.lower().replace(" ", "-").replace("'", "")[:30]
-    ok = create_business(biz_id, name, owner, twilio)
-    if not ok:
-        return {"error": f"Business '{biz_id}' already exists or Twilio number already in use"}
-    msg = WELCOME_MSG.format(name=name, twilio=twilio)
-    send_sms(owner, msg, from_number=twilio)
-    return {"success": True, "business_id": biz_id, "name": name, "owner_phone": owner, "twilio_number": twilio, "welcome_sent": True}
-
-
-@app.get("/admin/list")
-def admin_list(key: str = Query(...)):
-    _ensure_init()
-    if key != _ADMIN_KEY:
-        return {"error": "Invalid admin key"}
-    businesses = get_all_businesses()
-    return {"count": len(businesses), "businesses": [{"id": b["id"], "name": b["name"], "owner": b["owner_phone"], "twilio": b["twilio_number"]} for b in businesses]}
