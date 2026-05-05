@@ -617,6 +617,26 @@ def _twiml(msg):
     return Response(content='<?xml version="1.0" encoding="UTF-8"?><Response><Message>'+msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")+'</Message></Response>', media_type="application/xml")
 
 
+
+# --- Shared nav + styles ---
+NAV_CSS = """
+.nav{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;max-width:960px;margin:0 auto}
+.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none}
+.nav .logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
+.nav-links{display:flex;gap:20px;align-items:center}
+.nav-links a{font-size:14px;color:#666;text-decoration:none;font-weight:500}
+.nav-links a:hover{color:#1a1a1a}
+.nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
+.nav-links .signup-btn:hover{background:#dc2626;color:#fff}
+.hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
+@media(max-width:600px){.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10}.nav-links.open{display:flex}.hamburger{display:block}}
+"""
+
+NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
+<div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
+<div class="nav-links"><a href="/">Demo</a><a href="/industries">Who We Support</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+
+
 # --- Demo page (homepage) ---
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
@@ -634,6 +654,7 @@ CRITICAL RULES:
 - For complaints (Tier 2-3): acknowledge receipt and say management has been notified. Do NOT promise specific action (don't say "we'll fix it" or "we'll change that"). Invite more details for Tier 3.
 - For positive (Tier 4): warm, friendly, use exclamation marks.
 - For emergencies: tell them to call 911.
+- For ALL tiers: acknowledge receipt and forward. NEVER promise action will be taken.
 - Vary your responses naturally. Don't repeat the same template.
 - Keep auto_reply under 160 characters.
 
@@ -674,24 +695,29 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 <title>Hotline \u2014 Stop losing customers to fixable problems</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}
-a{color:#ea580c;text-decoration:none}
-.wrap{max-width:860px;margin:0 auto;padding:32px 20px}
-.top{text-align:center;margin-bottom:24px}.logo{font-size:15px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;margin-bottom:12px;display:inline-block;text-decoration:none}.logo span{background:#ea580c;color:#fff;padding:3px 8px;border-radius:4px;margin-right:6px}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.top{text-align:center;padding:32px 24px 20px;max-width:640px;margin:0 auto}
 h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}
-.sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 24px}
-.phones{display:flex;gap:24px;margin-bottom:20px;justify-content:center;align-items:flex-start}
+.sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}
+.phones{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}
 .device{width:320px;flex-shrink:0}
 .frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
 .notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
 .statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
 .phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
 .phone-label-bar.customer{color:#2563eb}.phone-label-bar.owner{color:#ea580c}
-.msgs{height:340px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
+.filter-bar{display:flex;gap:4px;padding:6px 12px;background:#fafaf8;border-bottom:1px solid #f0f0ec}
+.filter-btn{font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600}
+.filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
+.msgs{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
 .bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
 .bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
 .bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
+.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}
+.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}
+.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}
 .bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}
 .bubble.cmd{background:#e8e8e4;color:#333;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
 .bubble.resp{background:#f5f5f0;color:#555;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
@@ -706,19 +732,17 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .input-row button:disabled{opacity:0.3;cursor:not-allowed}
 .owner-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}
 .cmd-btn{font-size:11px;padding:5px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;font-family:monospace;font-weight:600}.cmd-btn:hover{border-color:#ea580c;color:#1a1a1a}
-.owner-input{display:none}
-.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
-.examples{margin-bottom:20px}.examples p{font-size:12px;color:#aaa;margin-bottom:6px;text-align:center}
+.owner-input{display:none}.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
+.examples{margin-bottom:20px;padding:0 20px}.examples p{font-size:12px;color:#aaa;margin-bottom:6px;text-align:center}
 .ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.ex{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04)}.ex:hover{border-color:#2563eb;color:#1a1a1a}
-.cta{text-align:center;margin:24px 0}.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
-.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 32px}.feat{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.feat strong{font-size:14px;display:block;margin-bottom:2px;color:#1a1a1a}.feat p{font-size:13px;color:#888;margin:0;line-height:1.4}
+.cta{text-align:center;margin:24px 0;padding:0 20px}.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+.features{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px;margin:0 auto 32px;padding:0 20px}.feat{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}.feat strong{font-size:14px;display:block;margin-bottom:2px;color:#1a1a1a}.feat p{font-size:13px;color:#888;margin:0;line-height:1.4}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:360px}.features{grid-template-columns:1fr}}
 </style></head><body>
-<div class="wrap">
+""" + NAV_HTML + """
 <div class="top">
-<a href="/" class="logo"><span>H</span> HOTLINE</a>
 <h1>Stop losing customers to <em>fixable problems</em></h1>
 <p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you when something needs attention. Try it below.</p>
 </div>
@@ -726,11 +750,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
 <div class="ex" onclick="tryEx(this)">No one is at the front desk</div>
 <div class="ex" onclick="tryEx(this)">Great coffee today!</div>
+<div class="ex" onclick="tryEx(this)">Bathroom is flooding!</div>
 <div class="ex" onclick="tryEx(this)">We're out of toilet paper!</div>
-<div class="ex" onclick="tryEx(this)">We can't get in the front door</div>
 <div class="ex" onclick="tryEx(this)">The music is way too loud</div>
 <div class="ex" onclick="tryEx(this)">What time do you close?</div>
 <div class="ex" onclick="tryEx(this)">Terrible service, very rude</div>
+<div class="ex" onclick="tryEx(this)">We can't get in the front door</div>
 </div></div>
 <div class="phones">
 <div class="device"><div class="frame">
@@ -745,6 +770,10 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
 <div class="phone-label-bar owner">Owner</div>
+<div class="filter-bar">
+<button class="filter-btn active" id="filt-all" onclick="setFilter('all')">All</button>
+<button class="filter-btn" id="filt-crit" onclick="setFilter('critical')">Critical only</button>
+</div>
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
@@ -764,15 +793,16 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
 <div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-<footer><a href="/" class="logo" style="font-size:12px"><span>H</span> HOTLINE</a> &middot; AI-powered customer alerts for small businesses</footer>
-</div>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 <script>
-let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10;
+let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='all';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
-function addB(c,cls,label,text){const d=document.createElement('div');d.className='bubble '+cls;let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;return d}
+function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
+function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
+function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
 if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
 addB(mo,'cmd','',raw.trim());
@@ -789,10 +819,10 @@ try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':
 history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
 await new Promise(r=>setTimeout(r,300));addB(mc,'in','Auto-reply',d.auto_reply);await new Promise(r=>setTimeout(r,400));
 const tierCls='t'+d.tier;const tags='<div class="meta"><span class="tag '+tierCls+'">'+d.tier_label+'</span><span class="tag '+tierCls+'">'+d.category.replace('_',' ')+'</span></div>';
-if(d.tier===1){addB(mo,'alert','Alert','\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS'+tags);showOwnerInput()}
-else if(d.tier===2){addB(mo,'alert','Alert','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge'+tags);showOwnerInput()}
-else if(d.tier===3){addB(mo,'alert','Feedback','\\ud83d\\ude14 '+d.summary+tags);showOwnerInput()}
-else{addB(mo,'system','','\\ud83d\\udcac '+d.summary+tags);showOwnerInput()}}
+if(d.tier===1){addB(mo,'alert-red','Emergency','\\ud83d\\udea8 URGENT: '+d.summary+'\\nReply: DETAILS',1);showOwnerInput()}
+else if(d.tier===2){addB(mo,'alert','Alert','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge',2);showOwnerInput()}
+else if(d.tier===3){addB(mo,'feedback','Feedback','\\ud83d\\ude14 '+d.summary+tags,3);showOwnerInput()}
+else{addB(mo,'info','Message','\\ud83d\\udcac '+d.summary+tags,4);showOwnerInput()}}
 catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
 </script></body></html>"""
 
@@ -800,14 +830,84 @@ catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn
 def demo_page(): _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
 
 
+# --- Industries page ---
+INDUSTRIES_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Who We Support \u2014 Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.hero{text-align:center;padding:40px 24px 32px;max-width:600px;margin:0 auto}
+h1{font-size:clamp(24px,4vw,36px);font-weight:700;margin-bottom:12px}
+.sub{font-size:16px;color:#888;margin-bottom:32px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;max-width:800px;margin:0 auto 48px;padding:0 24px}
+.card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.card-top{padding:18px 20px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.card-top h3{font-size:16px;font-weight:600;margin:0}
+.card-top .icon{font-size:20px;margin-right:10px}
+.card-top .arrow{font-size:14px;color:#bbb;transition:transform 0.2s}
+.card.open .arrow{transform:rotate(90deg)}
+.card-body{display:none;padding:0 20px 16px;font-size:13px;color:#666;line-height:1.5}
+.card.open .card-body{display:block}
+.tag-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.tag-sm{font-size:11px;padding:3px 8px;background:#f5f5f0;border-radius:4px;color:#888}
+.cta{text-align:center;padding:0 24px 48px}
+.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="hero">
+<h1>Built for any business with a front door</h1>
+<p class="sub">If customers walk in, Hotline works. Here are some of the businesses we support.</p>
+</div>
+<div class="grid">
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9749;</span><h3 style="display:inline">Restaurants & Cafes</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Catch cleanliness issues, long waits, and staffing gaps before they become 1-star reviews.<div class="tag-row"><span class="tag-sm">cleanliness</span><span class="tag-sm">wait times</span><span class="tag-sm">food quality</span><span class="tag-sm">staffing</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128722;</span><h3 style="display:inline">Retail Stores</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Know instantly when the floor is unstaffed, a fitting room is messy, or a customer needs help.<div class="tag-row"><span class="tag-sm">staffing</span><span class="tag-sm">inventory</span><span class="tag-sm">customer service</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127947;</span><h3 style="display:inline">Gyms & Fitness Studios</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Get alerts about broken equipment, dirty locker rooms, or overcrowding before members leave.<div class="tag-row"><span class="tag-sm">equipment</span><span class="tag-sm">cleanliness</span><span class="tag-sm">overcrowding</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9986;</span><h3 style="display:inline">Salons & Barbershops</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Manage walk-in expectations, monitor wait times, and catch service complaints early.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">service quality</span><span class="tag-sm">scheduling</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#129499;</span><h3 style="display:inline">Laundromats</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Know which machines are broken, when supplies run out, or if the space needs attention \u2014 even when you're not there.<div class="tag-row"><span class="tag-sm">equipment</span><span class="tag-sm">supply</span><span class="tag-sm">cleanliness</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128295;</span><h3 style="display:inline">Auto Repair Shops</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Customers can text about long waits or unclear pricing. You get the alert and can respond directly.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">pricing</span><span class="tag-sm">communication</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127976;</span><h3 style="display:inline">Hotels & Airbnbs</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Guests text about room issues, missing amenities, or check-in problems. You fix it before the review.<div class="tag-row"><span class="tag-sm">room issues</span><span class="tag-sm">amenities</span><span class="tag-sm">check-in</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127973;</span><h3 style="display:inline">Medical & Dental Offices</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Patients can flag long wait times or front desk issues privately, without posting publicly.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">front desk</span><span class="tag-sm">privacy</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128187;</span><h3 style="display:inline">Coworking Spaces</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Members report noise issues, broken printers, or AC problems. Management stays on top of the space.<div class="tag-row"><span class="tag-sm">facilities</span><span class="tag-sm">noise</span><span class="tag-sm">equipment</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128663;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body">Customers text about equipment issues, missed spots, or long lines. You respond before they drive away angry.<div class="tag-row"><span class="tag-sm">equipment</span><span class="tag-sm">quality</span><span class="tag-sm">wait times</span></div></div></div>
+</div>
+
+<div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
+</body></html>"""
+
+@app.get("/industries")
+def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, media_type="text/html")
+
+
 # --- Signup page ---
 SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign Up \u2014 Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}
-.wrap{max-width:480px;margin:0 auto;padding:40px 24px}
-.logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;margin-bottom:24px;display:inline-block;text-decoration:none}.logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.wrap{max-width:480px;margin:0 auto;padding:24px}
 h1{font-size:24px;font-weight:700;margin-bottom:8px}
 .sub{font-size:15px;color:#888;margin-bottom:24px}
 .card{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.04)}
@@ -817,9 +917,15 @@ input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;pa
 .btn{width:100%;padding:14px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
 .result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
 .spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}@keyframes spin{to{transform:rotate(360deg)}}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:32px 0 0}
+.step{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.step-num{width:28px;height:28px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:13px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:8px}
+.step h3{font-size:14px;font-weight:600;margin-bottom:3px}.step p{font-size:12px;color:#888;line-height:1.4}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
+@media(max-width:500px){.steps{grid-template-columns:1fr}}
 </style></head><body>
+""" + NAV_HTML + """
 <div class="wrap">
-<a href="/" class="logo"><span>H</span> HOTLINE</a>
 <h1>Get your business number</h1>
 <p class="sub">Set up takes about 30 seconds. You'll get a unique phone number and a welcome text with all your commands.</p>
 <div class="card">
@@ -832,7 +938,14 @@ input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;pa
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
 <label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
 <button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
-</div></div>
+</div>
+<div class="steps">
+<div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get your unique number in seconds</p></div>
+<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Post a sign, sticker, or add to receipts</p></div>
+<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
+</div>
+</div>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 <script>
 async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');
 if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
