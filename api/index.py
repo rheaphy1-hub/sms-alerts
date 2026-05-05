@@ -254,26 +254,44 @@ _ai_client = None
 
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
-Tiers:
-- Tier 1: Emergency ONLY for actual physical danger (fire, injury, flooding, violence, gas leak). NOT figurative language.
-- Tier 2: Business-Critical - operations broken, no staff, equipment failure, health hazard, extreme waits, supply issues (out of toilet paper, soap, etc)
-- Tier 3: Reputation Risk - unhappy customer, complaint, bad experience
-- Tier 4: Routine - general inquiry, positive feedback, neutral
+TIER DEFINITIONS:
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, flooding, gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, water damage in progress (burst pipe, overflowing toilet/sink). Flooding IS always Tier 1 (slip hazards, electrical risk, property damage).
+  NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
+- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. No staff present, equipment broken/out of order, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary).
+- Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
+- Tier 4: Routine (Gray) — No action needed. Positive feedback, compliments, general questions (hours, location, menu), neutral messages.
 
 Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
+- "inquiry" = any question about the business (hours, directions, menu, policies, parking, accessibility)
+- "supply" = out of something (toilet paper, soap, napkins, cups)
+- "safety" = anything involving physical danger (Tier 1)
 
-CRITICAL RULES:
-- Category "inquiry" is for questions about the business (hours, location, menu, directions, policies). NEVER answer these questions with fabricated information. You do not know the answer. Always forward to management.
-- "fire her/him" = employment complaint, NOT emergency. "this place is a dumpster fire" = complaint, NOT emergency.
-- For Tier 2 and 3: acknowledge receipt and say management has been notified. Do NOT promise any specific action will be taken (e.g. don't say "we'll adjust that" or "we'll fix it"). The business may have reasons for their choices.
-- For Tier 3: also invite the customer to share more details.
-- For Tier 4 positive: be warm, use exclamation marks.
-- For Tier 1: tell customer to call 911. Never claim emergency services contacted.
-- For inquiries: say you've forwarded their question to management and someone will get back to them.
+AUTO-REPLY TONE:
+- Tier 1: Urgent, direct. ALWAYS tell customer to call 911. NEVER say "we've contacted emergency services." You haven't.
+- Tier 2: Professional, serious. Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action ("we'll fix it", "we'll change that").
+- Tier 3: Empathetic. Acknowledge frustration. Invite more details — gives customer an outlet, prevents public reviews. No exclamation marks.
+- Tier 4 positive: Warm, friendly, use exclamation marks. Genuine appreciation.
+- Tier 4 inquiry: NEVER answer factual questions about the business. Not hours, not address, not menu, not prices, not directions. Always say forwarded to management.
+
+HARD RULES:
+- NEVER fabricate business information.
+- NEVER promise action will be taken. Business decides. You acknowledge and forward.
+- NEVER claim to have contacted emergency services.
+- NEVER ask follow-up questions for Tier 1 or 2. Just acknowledge and notify.
+- For Tier 3 only, you MAY gently invite more detail.
+- Keep auto_reply under 160 characters.
+- Vary responses naturally. Don't repeat same template.
+
+EDGE CASES:
+- "Music is too loud" = Tier 3 (preference, not operational). Acknowledge, don't promise change.
+- "Can't get in the front door" = Tier 2 (access blocked = operational).
+- "What time do you close?" = Tier 4, inquiry. Don't answer. Forward.
+- "You should fire her" = Tier 3, staffing. Employment complaint, NOT emergency.
+- "Bathroom is flooding!" = Tier 1, safety. Always emergency.
+- "Out of toilet paper" = Tier 2, supply.
 
 {website_context}
 
-Keep auto_reply under 160 characters. Be natural.
 Respond ONLY with JSON: {{"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}}"""
 
 def init_classifier():
@@ -640,23 +658,42 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</
 # --- Demo page (homepage) ---
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
-CLASSIFICATION TIERS:
-- Tier 1: Emergency ONLY for actual physical danger. NOT figurative ("fire her", "killing it", "blowing up")
-- Tier 2: Business-Critical - operations broken, no staff, equipment failure, supply issues
-- Tier 3: Reputation Risk - unhappy customer, complaint
-- Tier 4: Routine - inquiry, positive feedback, neutral
+TIER DEFINITIONS:
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, flooding, gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, water damage in progress. Flooding IS always Tier 1 (slip hazards, electrical risk, property damage).
+  NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
+- Tier 2: Business-Critical — Operations broken. No staff, equipment broken, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues.
+- Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
+- Tier 4: Routine — Positive feedback, compliments, questions, neutral.
 
 Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
 
-CRITICAL RULES:
-- Use conversation history to understand context. Follow-ups to complaints stay as complaints.
-- NEVER fabricate business information (hours, location, menu, directions). For questions, say you've forwarded to management.
-- For complaints (Tier 2-3): acknowledge receipt and say management has been notified. Do NOT promise specific action (don't say "we'll fix it" or "we'll change that"). Invite more details for Tier 3.
-- For positive (Tier 4): warm, friendly, use exclamation marks.
-- For emergencies: tell them to call 911.
-- For ALL tiers: acknowledge receipt and forward. NEVER promise action will be taken.
-- Vary your responses naturally. Don't repeat the same template.
+AUTO-REPLY TONE:
+- Tier 1: Urgent. ALWAYS tell customer to call 911. NEVER say "we've contacted emergency services."
+- Tier 2: Professional, serious. Confirm issue, say management notified. No exclamation marks. NEVER promise action.
+- Tier 3: Empathetic. Acknowledge frustration. Invite more details. No exclamation marks.
+- Tier 4 positive: Warm, friendly, exclamation marks.
+- Tier 4 inquiry: NEVER answer business questions (hours, menu, prices, directions). Forward to management.
+
+HARD RULES:
+- NEVER fabricate business information.
+- NEVER promise action will be taken.
+- NEVER claim to have contacted emergency services.
+- NEVER ask follow-up questions for Tier 1 or 2.
 - Keep auto_reply under 160 characters.
+- Vary responses. Don't repeat templates.
+
+CONTEXT AWARENESS:
+- If conversation history is provided, USE IT. A follow-up to a complaint stays in that complaint's context.
+- "Yeah she was so mean" after "terrible service" = still Tier 3, same complaint.
+- Don't reclassify follow-ups from scratch. Read the thread.
+
+EDGE CASES:
+- "Music is too loud" = Tier 3. Acknowledge, don't promise change.
+- "Can't get in the front door" = Tier 2 (access blocked).
+- "What time do you close?" = Tier 4, inquiry. Don't answer.
+- "You should fire her" = Tier 3, staffing complaint. NOT emergency.
+- "Bathroom is flooding!" = Tier 1, safety. ALWAYS emergency.
+- "Out of toilet paper" = Tier 2, supply.
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
@@ -707,9 +744,12 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
 .phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
 .phone-label-bar.customer{color:#2563eb}.phone-label-bar.owner{color:#ea580c}
-.filter-bar{display:flex;gap:4px;padding:6px 12px;background:#fafaf8;border-bottom:1px solid #f0f0ec}
-.filter-btn{font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600}
+.pref-bar{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;flex-wrap:wrap}
+.pref-label{font-size:13px;color:#888;font-weight:500}
+.filter-btn{font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.2s}
 .filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:#333;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;opacity:0;transition:all 0.4s;pointer-events:none;z-index:100;white-space:nowrap}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 .msgs{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
 .bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
@@ -771,10 +811,6 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
 <div class="phone-label-bar owner">Owner</div>
-<div class="filter-bar">
-<button class="filter-btn active" id="filt-all" onclick="setFilter('all')">All</button>
-<button class="filter-btn" id="filt-crit" onclick="setFilter('critical')">Critical only</button>
-</div>
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
@@ -788,6 +824,11 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div><div class="home-bar"></div>
 </div></div>
 </div>
+<div class="pref-bar"><span class="pref-label">Owner notification preference:</span>
+<button class="filter-btn" id="filt-crit" onclick="setFilter('critical')">Critical only</button>
+<button class="filter-btn" id="filt-all" onclick="setFilter('all')">All messages</button>
+</div>
+<div class="toast" id="toast">Owner sets their notification preferences via text</div>
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 <div class="features">
 <div class="feat"><strong>AI-powered filtering</strong><p>Only alerts on real issues. Positive feedback stays quiet.</p></div>
@@ -796,15 +837,16 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
 <footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 <script>
-let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='all';
+let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
 function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
-function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
+function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter();showToast('Owner sets their notification preferences via text')}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
-function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2500)}
+(function(){document.getElementById('filt-crit').classList.add('active');showToast('Owner sets their notification preferences via text')})();function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
 if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
 addB(mo,'cmd','',raw.trim());
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
