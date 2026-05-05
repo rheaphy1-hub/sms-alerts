@@ -744,7 +744,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 """ + NAV_HTML + """
 <div class="top">
 <h1>Stop losing customers to <em>fixable problems</em></h1>
-<p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you when something needs attention. Try it below.</p>
+<p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you when something needs attention.</p>
+<p style="font-size:14px;font-weight:600;color:#ea580c;letter-spacing:0.02em;margin-bottom:8px">No app. No software. No setup. No training. Get your number instantly.</p>
 </div>
 <div class="examples"><p>Try an example:</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
@@ -857,39 +858,39 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>Built for any business with a front door</h1>
-<p class="sub">If customers walk in, Hotline works. Here are some of the businesses we support.</p>
+<h1>Know what's happening before it costs you</h1>
+<p class="sub">Hotline alerts owners and senior management to the things that matter most: safety risks, operational failures, and the moments that make or break your reputation.</p>
 </div>
 <div class="grid">
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9749;</span><h3 style="display:inline">Restaurants & Cafes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Catch cleanliness issues, long waits, and staffing gaps before they become 1-star reviews.<div class="tag-row"><span class="tag-sm">cleanliness</span><span class="tag-sm">wait times</span><span class="tag-sm">food quality</span><span class="tag-sm">staffing</span></div></div></div>
+<div class="card-body"><em>"There's no one at the register and the bathroom is flooded."</em> You're across town. Without Hotline, this becomes a 1-star review. With it, you know in seconds.<div class="tag-row"><span class="tag-sm">flooding</span><span class="tag-sm">unstaffed</span><span class="tag-sm">food safety</span><span class="tag-sm">walk-outs</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128722;</span><h3 style="display:inline">Retail Stores</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Know instantly when the floor is unstaffed, a fitting room is messy, or a customer needs help.<div class="tag-row"><span class="tag-sm">staffing</span><span class="tag-sm">inventory</span><span class="tag-sm">customer service</span></div></div></div>
+<div class="card-body"><em>"I've been waiting 15 minutes and there's nobody on the floor."</em> That customer is about to walk out and never come back. Hotline puts that message on your phone immediately.<div class="tag-row"><span class="tag-sm">no staff</span><span class="tag-sm">theft risk</span><span class="tag-sm">customer walkouts</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127947;</span><h3 style="display:inline">Gyms & Fitness Studios</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Get alerts about broken equipment, dirty locker rooms, or overcrowding before members leave.<div class="tag-row"><span class="tag-sm">equipment</span><span class="tag-sm">cleanliness</span><span class="tag-sm">overcrowding</span></div></div></div>
+<div class="card-body"><em>"The cable machine snapped and almost hit someone."</em> Equipment failure is a liability nightmare. Hotline makes sure you hear about it before your insurance company does.<div class="tag-row"><span class="tag-sm">equipment failure</span><span class="tag-sm">injury risk</span><span class="tag-sm">locker room issues</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9986;</span><h3 style="display:inline">Salons & Barbershops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Manage walk-in expectations, monitor wait times, and catch service complaints early.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">service quality</span><span class="tag-sm">scheduling</span></div></div></div>
+<div class="card-body"><em>"I waited 40 minutes past my appointment and just left."</em> You lost the appointment revenue, the rebooking, and the referrals. Hotline catches it while you can still save the relationship.<div class="tag-row"><span class="tag-sm">long waits</span><span class="tag-sm">no-show staff</span><span class="tag-sm">unhappy clients</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#129499;</span><h3 style="display:inline">Laundromats</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Know which machines are broken, when supplies run out, or if the space needs attention \u2014 even when you're not there.<div class="tag-row"><span class="tag-sm">equipment</span><span class="tag-sm">supply</span><span class="tag-sm">cleanliness</span></div></div></div>
+<div class="card-body"><em>"Machine #4 is leaking water all over the floor."</em> You might not visit for hours. By then, it's water damage and a slip-and-fall. Hotline tells you when it starts, not after.<div class="tag-row"><span class="tag-sm">equipment leaks</span><span class="tag-sm">safety hazards</span><span class="tag-sm">out of supplies</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128295;</span><h3 style="display:inline">Auto Repair Shops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Customers can text about long waits or unclear pricing. You get the alert and can respond directly.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">pricing</span><span class="tag-sm">communication</span></div></div></div>
+<div class="card-body"><em>"I was told 2 hours. It's been 5. Nobody's told me anything."</em> That customer is writing a review right now. Hotline gives you the chance to respond before they hit publish.<div class="tag-row"><span class="tag-sm">broken promises</span><span class="tag-sm">communication gaps</span><span class="tag-sm">angry customers</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127976;</span><h3 style="display:inline">Hotels & Airbnbs</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Guests text about room issues, missing amenities, or check-in problems. You fix it before the review.<div class="tag-row"><span class="tag-sm">room issues</span><span class="tag-sm">amenities</span><span class="tag-sm">check-in</span></div></div></div>
+<div class="card-body"><em>"The room smells like smoke and the AC doesn't work."</em> That guest is about to request a refund and leave a review that kills your next 50 bookings. Hotline gets you there first.<div class="tag-row"><span class="tag-sm">room complaints</span><span class="tag-sm">refund risk</span><span class="tag-sm">review prevention</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127973;</span><h3 style="display:inline">Medical & Dental Offices</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Patients can flag long wait times or front desk issues privately, without posting publicly.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">front desk</span><span class="tag-sm">privacy</span></div></div></div>
+<div class="card-body"><em>"I've been in the waiting room for over an hour and nobody's updated me."</em> Patients don't complain to your face. They leave quietly and post online. Hotline gives them a private channel to reach you.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">front desk gaps</span><span class="tag-sm">patient retention</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128187;</span><h3 style="display:inline">Coworking Spaces</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Members report noise issues, broken printers, or AC problems. Management stays on top of the space.<div class="tag-row"><span class="tag-sm">facilities</span><span class="tag-sm">noise</span><span class="tag-sm">equipment</span></div></div></div>
+<div class="card-body"><em>"The internet has been down for 30 minutes and nobody seems to know."</em> Members pay for productivity. When the space fails, they leave. Hotline keeps you ahead of it.<div class="tag-row"><span class="tag-sm">internet outages</span><span class="tag-sm">facilities</span><span class="tag-sm">member retention</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128663;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body">Customers text about equipment issues, missed spots, or long lines. You respond before they drive away angry.<div class="tag-row"><span class="tag-sm">equipment</span><span class="tag-sm">quality</span><span class="tag-sm">wait times</span></div></div></div>
+<div class="card-body"><em>"The dryer scratched my paint."</em> That's a damage claim waiting to happen. Hotline makes sure you know about it while the customer is still on-site, not when the lawyer calls.<div class="tag-row"><span class="tag-sm">damage claims</span><span class="tag-sm">equipment issues</span><span class="tag-sm">quality complaints</span></div></div></div>
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
@@ -927,7 +928,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 """ + NAV_HTML + """
 <div class="wrap">
 <h1>Get your business number</h1>
-<p class="sub">Set up takes about 30 seconds. You'll get a unique phone number and a welcome text with all your commands.</p>
+<p class="sub">No app. No software. No training required. Get your number in 30 seconds and start receiving alerts immediately.</p>
 <div class="card">
 <div class="trial">14-day free trial &middot; No credit card required</div>
 <div class="result" id="result"></div>
