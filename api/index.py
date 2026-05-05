@@ -230,7 +230,7 @@ def buy_twilio_number(area_code="", webhook_url=""):
         avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
         if not avail and "area_code" in kw: del kw["area_code"]; avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
         if not avail: return None
-        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://sms-alerts.vercel.app/sms/incoming", sms_method="POST")
+        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://hotline-sms.vercel.app/sms/incoming", sms_method="POST")
         return num.phone_number
     except Exception as e: logger.error(f"Buy number failed: {e}"); return None
 
@@ -835,7 +835,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
 <div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 <script>
 let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
@@ -936,7 +936,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/industries")
@@ -980,6 +980,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
 <label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
+<label style="display:flex;align-items:flex-start;gap:8px;margin-top:18px;cursor:pointer;color:#888;font-size:12px;font-weight:400;line-height:1.5"><input type="checkbox" id="f-consent" style="margin-top:2px;flex-shrink:0;accent-color:#ea580c"> I agree to the <a href="/terms" style="color:#ea580c">Terms</a> and <a href="/privacy" style="color:#ea580c">Privacy Policy</a>. I consent to receive SMS messages. Msg &amp; data rates may apply. Reply STOP to cancel.</label>
 <button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
 </div>
 <div class="steps">
@@ -988,9 +989,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 <script>
-async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');
+async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const consent=document.getElementById('f-consent');const res=document.getElementById('result');if(!consent.checked){res.className='result err';res.style.display='block';res.textContent='Please agree to the Terms and Privacy Policy to continue.';return}const btn=document.getElementById('f-btn');
 if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
 if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
 if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
@@ -1027,13 +1028,13 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h1>Privacy Policy</h1>
 <p class="meta">Hotline AI &nbsp;&middot;&nbsp; Effective Date: May 5, 2025 &nbsp;&middot;&nbsp; Last updated: May 5, 2025</p>
 <div class="highlight"><strong>SMS short summary:</strong> We collect your phone number to send you SMS messages you&#39;ve opted into. We do not sell your personal information or phone number to third parties. Reply STOP at any time to unsubscribe.</div>
-<p>This Privacy Policy describes how Hotline AI (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;) collects, uses, and protects your information when you use our SMS-based customer feedback service at <a href="https://sms-alerts.vercel.app/">https://sms-alerts.vercel.app/</a>.</p>
+<p>This Privacy Policy describes how Hotline AI (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;) collects, uses, and protects your information when you use our SMS-based customer feedback service at <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a>.</p>
 <h2>1. Information We Collect</h2>
 <p>We collect the following types of information:</p>
 <ul>
 <li><strong>Phone number:</strong> Collected when you opt in to receive SMS messages.</li>
 <li><strong>Message content:</strong> The feedback or communications you send via SMS.</li>
-<li><strong>Usage data:</strong> Timestamps of messages sent and received, opt-in/opt-out records.</li>
+<li><strong>Usage data:</strong> Timestamps of messages sent and received, opt-in/opt-out records, including START and STOP keywords used to manage your consent status.</li>
 <li><strong>Device and carrier information:</strong> Basic carrier data provided by our SMS infrastructure (Twilio).</li>
 </ul>
 <h2>2. How We Use Your Information</h2>
@@ -1049,10 +1050,10 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p>You will only receive SMS messages from Hotline AI if you have explicitly opted in. Message frequency varies depending on your interactions with the service.</p>
 <p><strong>To opt out:</strong> Reply <strong>STOP</strong> to any message at any time. You will receive a final confirmation message and will not be contacted again unless you re-subscribe.<br>
 <strong>To re-subscribe:</strong> Reply <strong>START</strong>.<br>
-<strong>For help:</strong> Reply <strong>HELP</strong> or email us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
+<strong>For help:</strong> Reply <strong>HELP</strong> or email us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>.</p>
 <p><strong>Message and data rates may apply</strong> depending on your mobile carrier plan.</p>
 <h2>4. Data Sharing</h2>
-<p><strong>We do not sell, rent, or trade your personal information or phone number to any third party.</strong></p>
+<p><strong>We do not sell, rent, or trade your personal information or phone number to any third party.</strong> Mobile information will not be shared with third parties or affiliates for marketing or promotional purposes. This exclusion does not apply to sharing data with SMS originator opt-in data and consent; this information will not be shared with any third parties.</p>
 <p>We may share information only in the following limited circumstances:</p>
 <ul>
 <li><strong>Service providers:</strong> We use Twilio, Inc. to transmit SMS messages. Twilio processes message data on our behalf and is bound by its own privacy and security policies.</li>
@@ -1064,18 +1065,18 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>6. Data Security</h2>
 <p>We implement reasonable technical and organizational measures to protect your information from unauthorized access, disclosure, or loss. However, no method of electronic transmission is 100% secure.</p>
 <h2>7. Your Rights (Texas Residents)</h2>
-<p>Under applicable Texas law, you may have the right to access, correct, or request deletion of your personal information. To exercise these rights, contact us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
+<p>Under applicable Texas law, you may have the right to access, correct, or request deletion of your personal information. To exercise these rights, contact us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>.</p>
 <h2>8. Children&#39;s Privacy</h2>
 <p>Hotline AI is not intended for use by anyone under the age of 18. We do not knowingly collect personal information from minors.</p>
 <h2>9. Changes to This Policy</h2>
 <p>We may update this Privacy Policy from time to time. We will update the &ldquo;Last updated&rdquo; date at the top of this page when changes are made. Continued use of the service constitutes acceptance of the updated policy.</p>
 <h2>10. Contact Us</h2>
 <p>For privacy questions or data requests, contact:<br>
-<strong>Hotline AI / Ryan Heaphy Consulting</strong><br>
-Email: <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a><br>
-Website: <a href="https://sms-alerts.vercel.app/">https://sms-alerts.vercel.app/</a></p>
+<strong>Hotline AI / Hotline AI</strong><br>
+Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
+Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/privacy")
@@ -1100,34 +1101,35 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="wrap">
 <h1>Terms of Service</h1>
 <p class="meta">Hotline AI &nbsp;&middot;&nbsp; Effective Date: May 5, 2025 &nbsp;&middot;&nbsp; Last updated: May 5, 2025</p>
-<p>These Terms of Service (&ldquo;Terms&rdquo;) govern your use of Hotline AI (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;), accessible at <a href="https://sms-alerts.vercel.app/">https://sms-alerts.vercel.app/</a> and through our SMS-based customer feedback service. By using Hotline AI, you agree to these Terms.</p>
+<p>These Terms of Service (&ldquo;Terms&rdquo;) govern your use of Hotline AI (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;), accessible at <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a> and through our SMS-based customer feedback service. By using Hotline AI, you agree to these Terms.</p>
 <h2>1. Description of Service</h2>
 <p>Hotline AI provides customers with a way to share feedback and concerns with business owners via SMS text messaging. Our platform enables opted-in users to communicate directly with businesses through a dedicated phone number operated via Twilio.</p>
 <h2>2. SMS Messaging</h2>
 <p>By providing your phone number and opting in to receive SMS messages from Hotline AI, you consent to receive text messages related to customer service and support communications. Message frequency varies based on your interactions with the service.</p>
 <p><strong>Message and data rates may apply.</strong> Contact your wireless carrier for details about your plan.</p>
-<p>To opt out of SMS messages at any time, reply <strong>STOP</strong> to any message you receive from us. You will receive a confirmation and no further messages will be sent. To opt back in, reply <strong>START</strong>. For help, reply <strong>HELP</strong> or contact us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
+<p>To opt out of SMS messages at any time, reply <strong>STOP</strong> to any message you receive from us. You will receive a confirmation and no further messages will be sent. To opt back in, reply <strong>START</strong>. For help, reply <strong>HELP</strong> or contact us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>. Reply STOP to opt-out at any time, HELP for help. Message and data rates may apply.</p>
+<p>Users may opt in to receive SMS messages by submitting the web sign-up form or by texting the keyword <strong>START</strong> to our number. Upon opting in, you will receive a confirmation SMS.</p>
 <h2>3. Eligibility</h2>
 <p>You must be at least 18 years old and a resident of the United States to use this service. By using Hotline AI, you represent that you meet these requirements.</p>
 <h2>4. User Conduct</h2>
 <p>You agree not to use Hotline AI to send spam, harassment, threats, or any unlawful content. You agree not to impersonate others or misrepresent your identity. We reserve the right to terminate access to any user who violates these Terms.</p>
 <h2>5. Intellectual Property</h2>
-<p>All content, branding, and technology associated with Hotline AI are owned by or licensed to Ryan Heaphy Consulting. You may not reproduce, distribute, or create derivative works without our express written permission.</p>
+<p>All content, branding, and technology associated with Hotline AI are owned by or licensed to Hotline AI. You may not reproduce, distribute, or create derivative works without our express written permission.</p>
 <h2>6. Disclaimer of Warranties</h2>
 <p>Hotline AI is provided &ldquo;as is&rdquo; without warranties of any kind, either express or implied. We do not guarantee uninterrupted or error-free operation of the service.</p>
 <h2>7. Limitation of Liability</h2>
-<p>To the fullest extent permitted by Texas law, Hotline AI and Ryan Heaphy Consulting shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the service.</p>
+<p>To the fullest extent permitted by Texas law, Hotline AI and Hotline AI shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the service.</p>
 <h2>8. Governing Law</h2>
 <p>These Terms are governed by the laws of the State of Texas, USA. Any disputes shall be resolved in the courts of Texas.</p>
 <h2>9. Changes to These Terms</h2>
 <p>We may update these Terms from time to time. Continued use of the service after changes are posted constitutes your acceptance of the revised Terms. We will note the &ldquo;Last updated&rdquo; date at the top of this page.</p>
 <h2>10. Contact</h2>
 <p>For questions about these Terms, contact us at:<br>
-<strong>Hotline AI / Ryan Heaphy Consulting</strong><br>
-Email: <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a><br>
-Website: <a href="https://sms-alerts.vercel.app/">https://sms-alerts.vercel.app/</a></p>
+<strong>Hotline AI / Hotline AI</strong><br>
+Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
+Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/terms")
@@ -1149,7 +1151,7 @@ async def signup_create(request_data:dict=None):
     with get_db() as c:
         if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
             biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
-    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://sms-alerts.vercel.app/sms/incoming")
+    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotline-sms.vercel.app/sms/incoming")
     if not twilio_number: return {"error":"Could not provision number. Try again."}
     extra = phone2 if phone2 and phone2.startswith("+") else ""
     ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
