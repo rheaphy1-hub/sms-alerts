@@ -652,7 +652,9 @@ NAV_CSS = """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
-<div class="nav-links"><a href="/">Demo</a><a href="/industries">Who We Support</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+<div class="nav-links"><a href="/">Demo</a><a href="/industries">Who We Support</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+
+FOOTER_HTML = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>"""
 
 
 # --- Demo page (homepage) ---
@@ -835,7 +837,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
 <div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+""" + FOOTER_HTML + """
 <script>
 let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
@@ -936,7 +938,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+""" + FOOTER_HTML + """
 </body></html>"""
 
 @app.get("/industries")
@@ -989,9 +991,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+""" + FOOTER_HTML + """
 <script>
-async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const consent=document.getElementById('f-consent');const res=document.getElementById('result');if(!consent.checked){res.className='result err';res.style.display='block';res.textContent='Please agree to the Terms and Privacy Policy to continue.';return}const btn=document.getElementById('f-btn');
+async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');if(!document.getElementById('f-consent').checked){res.className='result err';res.style.display='block';res.textContent='Please agree to the Terms and Privacy Policy to continue.';return}
 if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
 if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
 if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
@@ -1005,6 +1007,33 @@ catch(e){res.className='result err';res.textContent='Connection error.';res.styl
 @app.get("/signup")
 def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
 
+@app.post("/signup/create")
+async def signup_create(request_data:dict=None):
+    _ensure_init()
+    if not request_data: return {"error":"Missing data"}
+    name = (request_data.get("name") or "").strip()
+    phone = (request_data.get("phone") or "").strip()
+    phone2 = (request_data.get("phone2") or "").strip()
+    email = (request_data.get("email") or "").strip()
+    website_url = (request_data.get("website_url") or "").strip()
+    area_code = (request_data.get("area_code") or "").strip()
+    if not name: return {"error":"Business name required"}
+    if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
+    biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
+    with get_db() as c:
+        if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
+            biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
+    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotline-sms.vercel.app/sms/incoming")
+    if not twilio_number: return {"error":"Could not provision number. Try again."}
+    extra = phone2 if phone2 and phone2.startswith("+") else ""
+    ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
+    if not ok: return {"error":"Could not create business."}
+    msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
+    send_sms(phone, msg, from_number=twilio_number)
+    if extra: send_sms(extra, msg, from_number=twilio_number)
+    logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
+    return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
+
 
 # --- Privacy Policy page ---
 PRIVACY_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1016,12 +1045,11 @@ PRIVACY_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="v
 .wrap{max-width:760px;margin:0 auto;padding:32px 24px 80px}
 .meta{color:#999;font-size:13px;margin-bottom:32px}
 h1{font-size:clamp(24px,4vw,32px);font-weight:700;margin-bottom:6px}
-h2{font-size:16px;font-weight:700;margin-top:32px;margin-bottom:8px;color:#1a1a1a}
+h2{font-size:16px;font-weight:700;margin-top:32px;margin-bottom:8px}
 p{font-size:15px;color:#444;line-height:1.7;margin-bottom:12px}
-ul{margin:0 0 14px;padding-left:22px}
-li{font-size:15px;color:#444;line-height:1.7;margin-bottom:5px}
+ul{margin:0 0 14px;padding-left:22px}li{font-size:15px;color:#444;line-height:1.7;margin-bottom:5px}
 .highlight{background:#fff7ed;border-left:3px solid #ea580c;padding:12px 16px;border-radius:0 6px 6px 0;margin-bottom:24px;font-size:14px;color:#7c2d12;line-height:1.6}
-footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:0}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
@@ -1072,11 +1100,11 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p>We may update this Privacy Policy from time to time. We will update the &ldquo;Last updated&rdquo; date at the top of this page when changes are made. Continued use of the service constitutes acceptance of the updated policy.</p>
 <h2>10. Contact Us</h2>
 <p>For privacy questions or data requests, contact:<br>
-<strong>Hotline AI / Hotline AI</strong><br>
+<strong>Hotline AI</strong><br>
 Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
 Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+""" + FOOTER_HTML + """
 </body></html>"""
 
 @app.get("/privacy")
@@ -1093,9 +1121,9 @@ TERMS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="vie
 .wrap{max-width:760px;margin:0 auto;padding:32px 24px 80px}
 .meta{color:#999;font-size:13px;margin-bottom:32px}
 h1{font-size:clamp(24px,4vw,32px);font-weight:700;margin-bottom:6px}
-h2{font-size:16px;font-weight:700;margin-top:32px;margin-bottom:8px;color:#1a1a1a}
+h2{font-size:16px;font-weight:700;margin-top:32px;margin-bottom:8px}
 p{font-size:15px;color:#444;line-height:1.7;margin-bottom:12px}
-footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:0}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
@@ -1106,9 +1134,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p>Hotline AI provides customers with a way to share feedback and concerns with business owners via SMS text messaging. Our platform enables opted-in users to communicate directly with businesses through a dedicated phone number operated via Twilio.</p>
 <h2>2. SMS Messaging</h2>
 <p>By providing your phone number and opting in to receive SMS messages from Hotline AI, you consent to receive text messages related to customer service and support communications. Message frequency varies based on your interactions with the service.</p>
-<p><strong>Message and data rates may apply.</strong> Contact your wireless carrier for details about your plan.</p>
-<p>To opt out of SMS messages at any time, reply <strong>STOP</strong> to any message you receive from us. You will receive a confirmation and no further messages will be sent. To opt back in, reply <strong>START</strong>. For help, reply <strong>HELP</strong> or contact us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>. Reply STOP to opt-out at any time, HELP for help. Message and data rates may apply.</p>
-<p>Users may opt in to receive SMS messages by submitting the web sign-up form or by texting the keyword <strong>START</strong> to our number. Upon opting in, you will receive a confirmation SMS.</p>
+<p>Users may opt in to receive SMS messages by submitting the web sign-up form or by texting the keyword <strong>START</strong> to our number. Upon opting in, you will receive a confirmation SMS. Reply <strong>STOP</strong> to opt out at any time. Reply <strong>HELP</strong> for help. Message and data rates may apply.</p>
 <h2>3. Eligibility</h2>
 <p>You must be at least 18 years old and a resident of the United States to use this service. By using Hotline AI, you represent that you meet these requirements.</p>
 <h2>4. User Conduct</h2>
@@ -1118,46 +1144,19 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>6. Disclaimer of Warranties</h2>
 <p>Hotline AI is provided &ldquo;as is&rdquo; without warranties of any kind, either express or implied. We do not guarantee uninterrupted or error-free operation of the service.</p>
 <h2>7. Limitation of Liability</h2>
-<p>To the fullest extent permitted by Texas law, Hotline AI and Hotline AI shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the service.</p>
+<p>To the fullest extent permitted by Texas law, Hotline AI shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the service.</p>
 <h2>8. Governing Law</h2>
 <p>These Terms are governed by the laws of the State of Texas, USA. Any disputes shall be resolved in the courts of Texas.</p>
 <h2>9. Changes to These Terms</h2>
 <p>We may update these Terms from time to time. Continued use of the service after changes are posted constitutes your acceptance of the revised Terms. We will note the &ldquo;Last updated&rdquo; date at the top of this page.</p>
 <h2>10. Contact</h2>
 <p>For questions about these Terms, contact us at:<br>
-<strong>Hotline AI / Hotline AI</strong><br>
+<strong>Hotline AI</strong><br>
 Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
 Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+""" + FOOTER_HTML + """
 </body></html>"""
 
 @app.get("/terms")
 def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
-
-@app.post("/signup/create")
-async def signup_create(request_data:dict=None):
-    _ensure_init()
-    if not request_data: return {"error":"Missing data"}
-    name = (request_data.get("name") or "").strip()
-    phone = (request_data.get("phone") or "").strip()
-    phone2 = (request_data.get("phone2") or "").strip()
-    email = (request_data.get("email") or "").strip()
-    website_url = (request_data.get("website_url") or "").strip()
-    area_code = (request_data.get("area_code") or "").strip()
-    if not name: return {"error":"Business name required"}
-    if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
-    biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
-    with get_db() as c:
-        if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
-            biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
-    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotline-sms.vercel.app/sms/incoming")
-    if not twilio_number: return {"error":"Could not provision number. Try again."}
-    extra = phone2 if phone2 and phone2.startswith("+") else ""
-    ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
-    if not ok: return {"error":"Could not create business."}
-    msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
-    send_sms(phone, msg, from_number=twilio_number)
-    if extra: send_sms(extra, msg, from_number=twilio_number)
-    logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
-    return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
