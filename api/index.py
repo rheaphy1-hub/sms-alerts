@@ -837,7 +837,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
 <div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-""" + FOOTER_HTML + """
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 <script>
 let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
@@ -938,7 +938,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-""" + FOOTER_HTML + """
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/industries")
@@ -991,7 +991,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
 </div>
 </div>
-""" + FOOTER_HTML + """
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 <script>
 async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');if(!document.getElementById('f-consent').checked){res.className='result err';res.style.display='block';res.textContent='Please agree to the Terms and Privacy Policy to continue.';return}
 if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
@@ -1081,7 +1081,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <strong>For help:</strong> Reply <strong>HELP</strong> or email us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>.</p>
 <p><strong>Message and data rates may apply</strong> depending on your mobile carrier plan.</p>
 <h2>4. Data Sharing</h2>
-<p><strong>We do not sell, rent, or trade your personal information or phone number to any third party.</strong> Mobile information will not be shared with third parties or affiliates for marketing or promotional purposes. This exclusion does not apply to sharing data with SMS originator opt-in data and consent; this information will not be shared with any third parties.</p>
+<p><strong>We do not sell, rent, or trade your personal information or phone number to any third party.</strong> Mobile information will not be shared with third parties/affiliates for marketing/promotional purposes. All the above categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.</p>
 <p>We may share information only in the following limited circumstances:</p>
 <ul>
 <li><strong>Service providers:</strong> We use Twilio, Inc. to transmit SMS messages. Twilio processes message data on our behalf and is bound by its own privacy and security policies.</li>
@@ -1104,7 +1104,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
 Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-""" + FOOTER_HTML + """
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/privacy")
@@ -1155,7 +1155,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
 Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-""" + FOOTER_HTML + """
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/terms")
