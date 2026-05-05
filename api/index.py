@@ -654,7 +654,7 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
 <div class="nav-links"><a href="/">Demo</a><a href="/industries">Who We Support</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
-FOOTER_HTML = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>"""
+FOOTER_HTML = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>"""
 
 
 # --- Demo page (homepage) ---
@@ -837,7 +837,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
 <div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
 <script>
 let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
@@ -938,7 +938,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/industries")
@@ -982,7 +982,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
 <label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
-<label style="display:flex;align-items:flex-start;gap:8px;margin-top:18px;cursor:pointer;color:#888;font-size:12px;font-weight:400;line-height:1.5"><input type="checkbox" id="f-consent" style="margin-top:2px;flex-shrink:0;accent-color:#ea580c"> I agree to the <a href="/terms" style="color:#ea580c">Terms</a> and <a href="/privacy" style="color:#ea580c">Privacy Policy</a>. I consent to receive SMS messages. Msg &amp; data rates may apply. Reply STOP to cancel.</label>
+<div style="display:flex;align-items:flex-start;gap:10px;margin-top:18px"><input type="checkbox" id="f-consent" style="margin-top:3px;flex-shrink:0;accent-color:#ea580c;width:15px;height:15px"><label for="f-consent" style="font-size:12px;color:#888;line-height:1.6;cursor:pointer">I agree to the <a href="/terms" style="color:#ea580c">Terms of Service</a> and <a href="/privacy" style="color:#ea580c">Privacy Policy</a>. I consent to receive SMS messages from Hotline AI. Msg &amp; data rates may apply. Reply STOP to cancel.</label></div>
 <button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
 </div>
 <div class="steps">
@@ -991,7 +991,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
 <script>
 async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');if(!document.getElementById('f-consent').checked){res.className='result err';res.style.display='block';res.textContent='Please agree to the Terms and Privacy Policy to continue.';return}
 if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
@@ -1078,7 +1078,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p>You will only receive SMS messages from Hotline AI if you have explicitly opted in. Message frequency varies depending on your interactions with the service.</p>
 <p><strong>To opt out:</strong> Reply <strong>STOP</strong> to any message at any time. You will receive a final confirmation message and will not be contacted again unless you re-subscribe.<br>
 <strong>To re-subscribe:</strong> Reply <strong>START</strong>.<br>
-<strong>For help:</strong> Reply <strong>HELP</strong> or email us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>.</p>
+<strong>For help:</strong> Reply <strong>HELP</strong> or email us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
 <p><strong>Message and data rates may apply</strong> depending on your mobile carrier plan.</p>
 <h2>4. Data Sharing</h2>
 <p><strong>We do not sell, rent, or trade your personal information or phone number to any third party.</strong> Mobile information will not be shared with third parties/affiliates for marketing/promotional purposes. All the above categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.</p>
@@ -1093,7 +1093,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>6. Data Security</h2>
 <p>We implement reasonable technical and organizational measures to protect your information from unauthorized access, disclosure, or loss. However, no method of electronic transmission is 100% secure.</p>
 <h2>7. Your Rights (Texas Residents)</h2>
-<p>Under applicable Texas law, you may have the right to access, correct, or request deletion of your personal information. To exercise these rights, contact us at <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a>.</p>
+<p>Under applicable Texas law, you may have the right to access, correct, or request deletion of your personal information. To exercise these rights, contact us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
 <h2>8. Children&#39;s Privacy</h2>
 <p>Hotline AI is not intended for use by anyone under the age of 18. We do not knowingly collect personal information from minors.</p>
 <h2>9. Changes to This Policy</h2>
@@ -1101,10 +1101,10 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>10. Contact Us</h2>
 <p>For privacy questions or data requests, contact:<br>
 <strong>Hotline AI</strong><br>
-Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
+Email: <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a><br>
 Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/privacy")
@@ -1152,10 +1152,10 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>10. Contact</h2>
 <p>For questions about these Terms, contact us at:<br>
 <strong>Hotline AI</strong><br>
-Email: <a href="mailto:support@hotline-sms.com">support@hotline-sms.com</a><br>
+Email: <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a><br>
 Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:support@hotline-sms.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
 </body></html>"""
 
 @app.get("/terms")
