@@ -784,8 +784,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 """ + NAV_HTML + """
 <div class="top">
 <h1>Stop losing customers to <em>fixable problems</em></h1>
-<p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you when something needs attention.</p>
-<p style="font-size:14px;font-weight:600;color:#ea580c;letter-spacing:0.02em;margin-bottom:8px">No app. No software. No setup. No training. Get your number instantly.</p>
+<p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you via SMS when something needs attention.</p>
+<p style="font-size:14px;font-weight:600;color:#ea580c;letter-spacing:0.02em;margin-bottom:8px">No app. No software. No setup. No training. Get urgent text alerts instantly.</p>
 </div>
 <div class="examples"><p>Try an example:</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
