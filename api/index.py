@@ -766,9 +766,9 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
 """ + NAV_CSS + """
 .top{text-align:center;padding:32px 24px 20px;max-width:640px;margin:0 auto}
-.nav{justify-content:center;position:relative}
-.nav .logo{font-size:15px;letter-spacing:0.12em}
-.nav-links{position:absolute;right:24px;top:50%;transform:translateY(-50%)}
+.nav{justify-content:center;gap:0}
+.nav .logo{position:absolute;left:50%;transform:translateX(-50%)}
+.nav-links{margin-left:auto}
 h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}
 .sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}
 .phones{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}
@@ -870,7 +870,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
 <footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
 <script>
-let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='all';
+let lastData=null,acked=false,replyMode=false,msgHistory=[],demoCount=0,maxDemo=10,filterMode='all';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
 function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.style.whiteSpace='pre-line';d.textContent=text;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
@@ -883,9 +883,9 @@ function showToast(msg){const t=document.getElementById('toast');t.textContent=m
 if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','',raw.trim());inp.placeholder='Type a command...';return}
 addB(mo,'cmd','',raw.trim());
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\u2705 Acknowledged':'\u23f3 Pending';addB(mo,'resp','','Alert \u2014 '+ackLabel+'\nTime: '+now+'\nCategory: '+d.category.replace('_',' ')+'\nFrom: (555) 867-5309\nMessage: "'+d.original_message+'"\nReply OK or REPLY to respond.');return}
+if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK or REPLY to respond.');return}
 if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to reply to (555) 867-5309? Type your message now.');inp.placeholder='Type your reply...';inp.focus();return}
-if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\u2705 Alert acknowledged.')}return}
+if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
 addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
 if(demoCount>=maxDemo){const lim=document.createElement('div');lim.className='bubble system';lim.innerHTML='Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!';mc.appendChild(lim);mc.scrollTop=mc.scrollHeight;return}
@@ -893,14 +893,14 @@ inp.value='';btn.disabled=true;demoCount++;acked=false;replyMode=false;
 addB(mc,'out-blue','',text);
 const spinEl=document.createElement('div');spinEl.className='bubble system';spinEl.innerHTML='<span class="spinner"></span> Processing...';mo.appendChild(spinEl);mo.scrollTop=mo.scrollHeight;
 try{
-  const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});
+  const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:msgHistory})});
   const d=await r.json();d.original_message=text;lastData=d;spinEl.remove();
-  history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
+  msgHistory.push({customer:text,reply:d.auto_reply});if(msgHistory.length>10)msgHistory.shift();
   await new Promise(res=>setTimeout(res,300));addB(mc,'in','',d.auto_reply);await new Promise(res=>setTimeout(res,400));
-  if(d.tier===1){addB(mo,'alert-red','','\U0001F6A8 URGENT: Possible emergency reported\nReply: DETAILS',1);}
-  else if(d.tier===2){addB(mo,'alert','','\u26a0\ufe0f Issue reported: '+d.summary+'\nReply OK to acknowledge',2);}
-  else if(d.tier===3){addB(mo,'info','','\U0001F614 Feedback noted: '+d.summary,3);}
-  else{addB(mo,'info','','\U0001F4AC Message received: '+d.summary,4);}
+  if(d.tier===1){addB(mo,'alert-red','','\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS',1);}
+  else if(d.tier===2){addB(mo,'alert','','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge',2);}
+  else if(d.tier===3){addB(mo,'info','','\\ud83d\\ude14 Feedback noted: '+d.summary,3);}
+  else{addB(mo,'info','','\\ud83d\\udcac Message received: '+d.summary,4);}
   showOwnerInput();
 }catch(e){if(spinEl.parentNode)spinEl.remove();addB(mo,'system','','Demo error. Try again.');}
 btn.disabled=false;inp.focus();}
