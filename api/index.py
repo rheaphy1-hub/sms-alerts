@@ -888,17 +888,22 @@ if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to reply
 if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\u2705 Alert acknowledged.')}return}
 addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
-if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
+if(demoCount>=maxDemo){const lim=document.createElement('div');lim.className='bubble system';lim.innerHTML='Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!';mc.appendChild(lim);mc.scrollTop=mc.scrollHeight;return}
 inp.value='';btn.disabled=true;demoCount++;acked=false;replyMode=false;
-addB(mc,'out-blue','',text);const spinEl=document.createElement('div');spinEl.className='bubble system';spinEl.innerHTML='<span class="spinner"></span> Processing...';mo.appendChild(spinEl);mo.scrollTop=mo.scrollHeight;
-try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;spinEl.remove();
-history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
-await new Promise(r=>setTimeout(r,300));addB(mc,'in','',d.auto_reply);await new Promise(r=>setTimeout(r,400));
-if(d.tier===1){addB(mo,'alert-red','','\ud83d\udea8 URGENT: Possible emergency reported\nReply: DETAILS',1);showOwnerInput()}
-else if(d.tier===2){addB(mo,'alert','','\u26a0\ufe0f Issue reported: '+d.summary+'\nReply OK to acknowledge',2);showOwnerInput()}
-else if(d.tier===3){addB(mo,'bubble in','','\ud83d\ude14 Feedback: '+d.summary,3);showOwnerInput()}
-else{addB(mo,'bubble in','','\ud83d\udcac Message: '+d.summary,4);showOwnerInput()}}
-catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
+addB(mc,'out-blue','',text);
+const spinEl=document.createElement('div');spinEl.className='bubble system';spinEl.innerHTML='<span class="spinner"></span> Processing...';mo.appendChild(spinEl);mo.scrollTop=mo.scrollHeight;
+try{
+  const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});
+  const d=await r.json();d.original_message=text;lastData=d;spinEl.remove();
+  history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
+  await new Promise(res=>setTimeout(res,300));addB(mc,'in','',d.auto_reply);await new Promise(res=>setTimeout(res,400));
+  if(d.tier===1){addB(mo,'alert-red','','\ud83d\udea8 URGENT: Possible emergency reported\nReply: DETAILS',1);}
+  else if(d.tier===2){addB(mo,'alert','','\u26a0\ufe0f Issue reported: '+d.summary+'\nReply OK to acknowledge',2);}
+  else if(d.tier===3){addB(mo,'info','','\ud83d\ude14 Feedback noted: '+d.summary,3);}
+  else{addB(mo,'info','','\ud83d\udcac Message received: '+d.summary,4);}
+  showOwnerInput();
+}catch(e){if(spinEl.parentNode)spinEl.remove();addB(mo,'system','','Demo error. Try again.');}
+btn.disabled=false;inp.focus();}
 </script></body></html>"""
 
 @app.get("/demo")
