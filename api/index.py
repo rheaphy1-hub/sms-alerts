@@ -897,10 +897,10 @@ try{
   const d=await r.json();d.original_message=text;lastData=d;spinEl.remove();
   history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
   await new Promise(res=>setTimeout(res,300));addB(mc,'in','',d.auto_reply);await new Promise(res=>setTimeout(res,400));
-  if(d.tier===1){addB(mo,'alert-red','','\ud83d\udea8 URGENT: Possible emergency reported\nReply: DETAILS',1);}
+  if(d.tier===1){addB(mo,'alert-red','','\U0001F6A8 URGENT: Possible emergency reported\nReply: DETAILS',1);}
   else if(d.tier===2){addB(mo,'alert','','\u26a0\ufe0f Issue reported: '+d.summary+'\nReply OK to acknowledge',2);}
-  else if(d.tier===3){addB(mo,'info','','\ud83d\ude14 Feedback noted: '+d.summary,3);}
-  else{addB(mo,'info','','\ud83d\udcac Message received: '+d.summary,4);}
+  else if(d.tier===3){addB(mo,'info','','\U0001F614 Feedback noted: '+d.summary,3);}
+  else{addB(mo,'info','','\U0001F4AC Message received: '+d.summary,4);}
   showOwnerInput();
 }catch(e){if(spinEl.parentNode)spinEl.remove();addB(mo,'system','','Demo error. Try again.');}
 btn.disabled=false;inp.focus();}
