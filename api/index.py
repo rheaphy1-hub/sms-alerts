@@ -793,9 +793,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1>The bathroom is flooding.<br><em>You're across town.</em></h1>
-<p class="sub">One text from a customer. One alert to your phone. Crisis handled before anyone leaves a review.</p>
-<p style="font-size:13px;color:#aaa;margin-bottom:4px">No app. No software. No training required.</p>
+<h1>You can't be everywhere.<br><em>Now you don't have to be.</em></h1>
+<p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
+<p style="font-size:13px;color:#aaa;margin-bottom:8px">No app. No software. No setup. No training.</p>
 </div>
 <div class="howitworks"><div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>Display your number</strong><p>Post it in your business \u2014 bathroom, counter, receipt. Customers scan the QR code or text directly when something's wrong.</p></div></div>
@@ -807,15 +807,15 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sign-caption">We'll help you set up your sign. Customers scan, you get alerted.</p>
 </div>
 <div class="examples"><p>See it in action \u2014 try a real scenario:</p><div class="ex-row">
-<div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
-<div class="ex" onclick="tryEx(this)">No one is at the front desk</div>
-<div class="ex" onclick="tryEx(this)">Great coffee today!</div>
-<div class="ex" onclick="tryEx(this)">Bathroom is flooding!</div>
-<div class="ex" onclick="tryEx(this)">We're out of toilet paper!</div>
-<div class="ex" onclick="tryEx(this)">The music is way too loud</div>
-<div class="ex" onclick="tryEx(this)">What time do you close?</div>
-<div class="ex" onclick="tryEx(this)">Terrible service, very rude</div>
-<div class="ex" onclick="tryEx(this)">We can't get in the front door</div>
+<div class="ex" onclick="tryEx(this)">There's water all over the bathroom floor</div>
+<div class="ex" onclick="tryEx(this)">I've been waiting 25 minutes, nobody's helped me</div>
+<div class="ex" onclick="tryEx(this)">The front door is locked and there's a line outside</div>
+<div class="ex" onclick="tryEx(this)">The machine by the entrance isn't working</div>
+<div class="ex" onclick="tryEx(this)">Guy at the counter was really rude to me</div>
+<div class="ex" onclick="tryEx(this)">Music is way too loud in here</div>
+<div class="ex" onclick="tryEx(this)">Honestly one of the best experiences I've had</div>
+<div class="ex" onclick="tryEx(this)">What time do you guys close tonight?</div>
+<div class="ex" onclick="tryEx(this)">Do you have oat milk?</div>
 </div></div>
 <div class="phones">
 <div class="device"><div class="frame">
