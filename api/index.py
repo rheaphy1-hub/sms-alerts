@@ -5,6 +5,7 @@ import os, re, json, logging
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sms")
@@ -230,7 +231,7 @@ def buy_twilio_number(area_code="", webhook_url=""):
         avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
         if not avail and "area_code" in kw: del kw["area_code"]; avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
         if not avail: return None
-        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://hotline-sms.vercel.app/sms/incoming", sms_method="POST")
+        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://sms-alerts.vercel.app/sms/incoming", sms_method="POST")
         return num.phone_number
     except Exception as e: logger.error(f"Buy number failed: {e}"); return None
 
@@ -266,36 +267,21 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry
 - "supply" = out of something (toilet paper, soap, napkins, cups)
 - "safety" = anything involving physical danger (Tier 1)
 
-AUTO-REPLY RULES — READ CAREFULLY:
-Your auto_reply IS the actual SMS the customer receives. It must sound human, natural, and specific to what they said. Not a template.
-
-- Tier 1: Urgent tone. ALWAYS tell customer to call 911 immediately. Say their specific concern has been flagged. NEVER say "we've contacted emergency services" — you haven't.
-  Example: "If you're in danger, call 911 now. We've flagged this as an emergency and the owner is being notified immediately."
-
-- Tier 2: Professional, direct. Reference the specific issue they mentioned (bathroom, equipment, wait, staffing, etc.). Say management is being notified. No exclamation marks. No hollow promises like "we'll get right on it." Just acknowledge and confirm.
-  Example for bathroom: "Noted — we've flagged the bathroom condition and management is being notified now."
-  Example for wait time: "We hear you on the wait. That's not acceptable and management is being notified."
-  Example for staffing: "Thanks for the heads up — we've flagged that there's no one at the desk and the owner is being notified."
-
-- Tier 3: Empathetic, genuine. Acknowledge the specific frustration without being dismissive or corporate. Optionally invite them to share more — this gives them an outlet and reduces the chance of a public review. No exclamation marks.
-  Example for rude staff: "That's not the experience we want for anyone. If you're open to it, we'd love to hear more about what happened."
-  Example for temp complaint: "Sorry it was uncomfortable — we appreciate you letting us know."
-
-- Tier 4 positive: Warm, genuine, specific. Actually reflect what they complimented. Use exclamation marks.
-  Example: "That means a lot — we'll pass it along to the team!"
-
-- Tier 4 inquiry: NEVER answer factual questions about the business. Not hours, not address, not menu, not prices, not directions. Always forward.
-  Example: "Great question — we've sent this along to the team and someone will follow up with you."
+AUTO-REPLY TONE:
+- Tier 1: Urgent, direct. ALWAYS tell customer to call 911. NEVER say "we've contacted emergency services." You haven't.
+- Tier 2: Professional, serious. Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action ("we'll fix it", "we'll change that").
+- Tier 3: Empathetic. Acknowledge frustration. Invite more details — gives customer an outlet, prevents public reviews. No exclamation marks.
+- Tier 4 positive: Warm, friendly, use exclamation marks. Genuine appreciation.
+- Tier 4 inquiry: NEVER answer factual questions about the business. Not hours, not address, not menu, not prices, not directions. Always say forwarded to management.
 
 HARD RULES:
 - NEVER fabricate business information.
-- NEVER promise specific action will be taken. You acknowledge and forward. The business decides.
+- NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
 - NEVER ask follow-up questions for Tier 1 or 2. Just acknowledge and notify.
 - For Tier 3 only, you MAY gently invite more detail.
 - Keep auto_reply under 160 characters.
-- Sound like a real person texted this. Vary phrasing naturally. No copy-paste templates.
-- Reference the specific topic the customer mentioned whenever possible.
+- Vary responses naturally. Don't repeat same template.
 
 EDGE CASES:
 - "Music is too loud" = Tier 3 (preference, not operational). Acknowledge, don't promise change.
@@ -516,6 +502,11 @@ def send_all_digests(force_freq=None):
 
 # --- FastAPI ---
 app = FastAPI(title="Hotline", version="3.0.0")
+import os as _os2
+if _os2.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+elif _os2.path.exists("api/static"):
+    app.mount("/static", StaticFiles(directory="api/static"), name="static")
 RATE_LIMIT_MAX = 5; RATE_LIMIT_WINDOW = 10; _initialized = False
 _ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER",""); _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER","")
 _ENV_NAME = os.getenv("BUSINESS_NAME","MyBusiness"); _ADMIN_KEY = os.getenv("ADMIN_KEY","changeme")
@@ -669,8 +660,6 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
 <div class="nav-links"><a href="/">Demo</a><a href="/industries">Who We Support</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
-FOOTER_HTML = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>"""
-
 
 # --- Demo page (homepage) ---
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
@@ -684,26 +673,12 @@ TIER DEFINITIONS:
 
 Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
 
-AUTO-REPLY RULES — READ CAREFULLY:
-Your auto_reply IS the actual SMS the customer receives. It must sound human, natural, and specific to what they said. Not a template.
-
-- Tier 1: Urgent. ALWAYS tell customer to call 911 immediately. Reference their specific concern. NEVER say "we've contacted emergency services."
-  Example: "If there's a real emergency, call 911 now. We've flagged this and the owner is being alerted immediately."
-
-- Tier 2: Professional, direct. Reference the specific issue they mentioned. Say management is being notified. No exclamation marks. No hollow promises.
-  Example for bathroom: "Noted — we've flagged the bathroom condition and management is being notified now."
-  Example for wait: "We hear you on the wait. Management has been notified."
-  Example for staffing: "Thanks for the heads up — the owner is being notified now."
-  Example for supply: "Got it — we've notified the team about the supply issue."
-
-- Tier 3: Empathetic, genuine. Acknowledge their specific frustration. Optionally invite more detail to give them an outlet and prevent a public review. No exclamation marks.
-  Example: "That's not the experience we want for you. We appreciate you letting us know."
-
-- Tier 4 positive: Warm, genuine, specific to what they said. Use exclamation marks.
-  Example: "That means a lot — we'll let the team know!"
-
+AUTO-REPLY TONE:
+- Tier 1: Urgent. ALWAYS tell customer to call 911. NEVER say "we've contacted emergency services."
+- Tier 2: Professional, serious. Confirm issue, say management notified. No exclamation marks. NEVER promise action.
+- Tier 3: Empathetic. Acknowledge frustration. Invite more details. No exclamation marks.
+- Tier 4 positive: Warm, friendly, exclamation marks.
 - Tier 4 inquiry: NEVER answer business questions (hours, menu, prices, directions). Forward to management.
-  Example: "Good question — we've sent this to the team and someone will follow up."
 
 HARD RULES:
 - NEVER fabricate business information.
@@ -711,7 +686,7 @@ HARD RULES:
 - NEVER claim to have contacted emergency services.
 - NEVER ask follow-up questions for Tier 1 or 2.
 - Keep auto_reply under 160 characters.
-- Sound like a real person texted this. Reference the specific thing they mentioned.
+- Vary responses. Don't repeat templates.
 
 CONTEXT AWARENESS:
 - If conversation history is provided, USE IT. A follow-up to a complaint stays in that complaint's context.
@@ -766,9 +741,6 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
 """ + NAV_CSS + """
 .top{text-align:center;padding:32px 24px 20px;max-width:640px;margin:0 auto}
-.nav{justify-content:center;gap:0}
-.nav .logo{position:absolute;left:50%;transform:translateX(-50%)}
-.nav-links{margin-left:auto}
 h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}
 .sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}
 .phones{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}
@@ -795,8 +767,9 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}
 .bubble.cmd{background:#e8e8e4;color:#333;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
 .bubble.resp{background:#f5f5f0;color:#555;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
-.bubble .lbl{display:none}
-.meta{display:none}
+.bubble .lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:3px}
+.meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.tag{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}
+.tag.t1{background:#fee2e2;color:#dc2626}.tag.t2{background:#fff7ed;color:#b45309}.tag.t3{background:#fef9c3;color:#a16207}.tag.t4{background:#f0f0ec;color:#888}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .input-area{padding:8px 12px 12px;border-top:1px solid #f0f0ec;background:#fff}
 .input-row{display:flex;gap:6px}.input-row input{flex:1;padding:10px 12px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:20px;font-size:14px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
@@ -813,14 +786,32 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:360px}.features{grid-template-columns:1fr}}
+.howitworks{max-width:640px;margin:0 auto;padding:0 20px 28px}
+.hiw-steps{display:flex;flex-direction:column;gap:14px}
+.hiw-step{display:flex;align-items:flex-start;gap:14px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px}
+.hiw-num{width:28px;height:28px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:13px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+.hiw-step strong{font-size:14px;display:block;margin-bottom:2px}
+.hiw-step p{font-size:13px;color:#888;margin:0;line-height:1.4}
+.sign-graphic{text-align:center;padding:0 20px 24px;max-width:400px;margin:0 auto}
+.sign-graphic img{width:100%;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10)}
+.sign-caption{font-size:12px;color:#aaa;margin-top:10px}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1>Stop losing customers to <em>fixable problems</em></h1>
-<p class="sub">Customers text feedback to your business number. AI filters the noise and alerts you via SMS when something needs attention.</p>
-<p style="font-size:14px;font-weight:600;color:#ea580c;letter-spacing:0.02em;margin-bottom:8px">No app. No software. No setup. No training. Get urgent text alerts instantly.</p>
+<h1>The bathroom is flooding.<br><em>You're across town.</em></h1>
+<p class="sub">One text from a customer. One alert to your phone. Crisis handled before anyone leaves a review.</p>
+<p style="font-size:13px;color:#aaa;margin-bottom:4px">No app. No software. No training required.</p>
 </div>
-<div class="examples"><p>Try an example:</p><div class="ex-row">
+<div class="howitworks"><div class="hiw-steps">
+<div class="hiw-step"><div class="hiw-num">1</div><div><strong>Display your number</strong><p>Post it in your business \u2014 bathroom, counter, receipt. Customers scan the QR code or text directly when something's wrong.</p></div></div>
+<div class="hiw-step"><div class="hiw-num">2</div><div><strong>AI reads every message</strong><p>Emergencies, operational issues, complaints, and compliments \u2014 each one triaged instantly.</p></div></div>
+<div class="hiw-step"><div class="hiw-num">3</div><div><strong>You get alerted by text</strong><p>Only for things that matter. Reply OK to acknowledge, REPLY to respond directly to the customer.</p></div></div>
+</div></div>
+<div class="sign-graphic">
+<img src="/static/sign.png" alt="Hotline sign mounted in a bathroom" />
+<p class="sign-caption">We'll help you set up your sign. Customers scan, you get alerted.</p>
+</div>
+<div class="examples"><p>See it in action \u2014 try a real scenario:</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Bathroom is disgusting</div>
 <div class="ex" onclick="tryEx(this)">No one is at the front desk</div>
 <div class="ex" onclick="tryEx(this)">Great coffee today!</div>
@@ -864,23 +855,22 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="toast" id="toast">Owner sets their notification preferences via text</div>
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 <div class="features">
-<div class="feat"><strong>AI-powered filtering</strong><p>Only alerts on real issues. Positive feedback stays quiet.</p></div>
-<div class="feat"><strong>Manage by text</strong><p>DETAILS, OK, REPLY, MUTE, PAUSE \u2014 all via SMS.</p></div>
-<div class="feat"><strong>Reply to customers</strong><p>Respond directly to any message through the alert system.</p></div>
-<div class="feat"><strong>Mute when busy</strong><p>Text MUTE 2H before a rush. Emergencies always get through.</p></div></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<div class="feat"><strong>Only alerts what matters</strong><p>AI filters the noise. You hear about flooding, not feedback about the music.</p></div>
+<div class="feat"><strong>Manage everything by text</strong><p>DETAILS, OK, REPLY, MUTE \u2014 no app, no dashboard, no new habits.</p></div>
+</div>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 <script>
-let lastData=null,acked=false,replyMode=false,msgHistory=[],demoCount=0,maxDemo=10,filterMode='all';
+let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
-function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.style.whiteSpace='pre-line';d.textContent=text;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
+function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
-function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
+function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter();showToast('Owner sets their notification preferences via text')}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2500)}
-(function(){document.getElementById('filt-all').classList.add('active')})();function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
-if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','',raw.trim());inp.placeholder='Type a command...';return}
+(function(){document.getElementById('filt-crit').classList.add('active');showToast('Owner sets their notification preferences via text')})();function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
+if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
 addB(mo,'cmd','',raw.trim());
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
 if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK or REPLY to respond.');return}
@@ -888,22 +878,18 @@ if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to reply
 if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
 addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
-if(demoCount>=maxDemo){const lim=document.createElement('div');lim.className='bubble system';lim.innerHTML='Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!';mc.appendChild(lim);mc.scrollTop=mc.scrollHeight;return}
+if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
 inp.value='';btn.disabled=true;demoCount++;acked=false;replyMode=false;
-addB(mc,'out-blue','',text);
-const spinEl=document.createElement('div');spinEl.className='bubble system';spinEl.innerHTML='<span class="spinner"></span> Processing...';mo.appendChild(spinEl);mo.scrollTop=mo.scrollHeight;
-try{
-  const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:msgHistory})});
-  const d=await r.json();d.original_message=text;lastData=d;spinEl.remove();
-  msgHistory.push({customer:text,reply:d.auto_reply});if(msgHistory.length>10)msgHistory.shift();
-  await new Promise(res=>setTimeout(res,300));addB(mc,'in','',d.auto_reply);await new Promise(res=>setTimeout(res,400));
-  if(d.tier===1){addB(mo,'alert-red','','\\ud83d\\udea8 URGENT: Possible emergency reported\\nReply: DETAILS',1);}
-  else if(d.tier===2){addB(mo,'alert','','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge',2);}
-  else if(d.tier===3){addB(mo,'info','','\\ud83d\\ude14 Feedback noted: '+d.summary,3);}
-  else{addB(mo,'info','','\\ud83d\\udcac Message received: '+d.summary,4);}
-  showOwnerInput();
-}catch(e){if(spinEl.parentNode)spinEl.remove();addB(mo,'system','','Demo error. Try again.');}
-btn.disabled=false;inp.focus();}
+addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
+try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
+history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
+await new Promise(r=>setTimeout(r,300));addB(mc,'in','Auto-reply',d.auto_reply);await new Promise(r=>setTimeout(r,400));
+const tierCls='t'+d.tier;const tags='<div class="meta"><span class="tag '+tierCls+'">'+d.tier_label+'</span><span class="tag '+tierCls+'">'+d.category.replace('_',' ')+'</span></div>';
+if(d.tier===1){addB(mo,'alert-red','Emergency','\\ud83d\\udea8 URGENT: '+d.summary+'\\nReply: DETAILS',1);showOwnerInput()}
+else if(d.tier===2){addB(mo,'alert','Alert','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge',2);showOwnerInput()}
+else if(d.tier===3){addB(mo,'feedback','Feedback','\\ud83d\\ude14 '+d.summary+tags,3);showOwnerInput()}
+else{addB(mo,'info','Message','\\ud83d\\udcac '+d.summary+tags,4);showOwnerInput()}}
+catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
 </script></body></html>"""
 
 @app.get("/demo")
@@ -973,7 +959,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 </body></html>"""
 
 @app.get("/industries")
@@ -1016,7 +1002,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Partner or manager phone (optional)</label><input type="tel" id="f-phone2" placeholder="(727) 555-5678">
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
-<div style="display:flex;align-items:flex-start;gap:10px;margin-top:18px"><input type="checkbox" id="f-consent" style="margin-top:3px;flex-shrink:0;accent-color:#ea580c;width:15px;height:15px"><label for="f-consent" style="font-size:12px;color:#888;line-height:1.6;cursor:pointer">I agree to the <a href="/terms" style="color:#ea580c">Terms of Service</a> and <a href="/privacy" style="color:#ea580c">Privacy Policy</a>. I consent to receive SMS messages from Hotline AI. Msg &amp; data rates may apply. Reply STOP to cancel.</label></div>
+<label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
 <button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
 </div>
 <div class="steps">
@@ -1025,14 +1011,14 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
 <script>
-async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');if(!document.getElementById('f-consent').checked){res.className='result err';res.style.display='block';res.textContent='Please agree to the Terms and Privacy Policy to continue.';return}
+async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');
 if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
 if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
 if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
 btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
-try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url})});const d=await r.json();
+try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,area_code:area})});const d=await r.json();
 if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';res.style.display='block';btn.textContent='Done!'}
 else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
 catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
@@ -1057,7 +1043,7 @@ async def signup_create(request_data:dict=None):
     with get_db() as c:
         if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
             biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
-    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotline-sms.vercel.app/sms/incoming")
+    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://sms-alerts.vercel.app/sms/incoming")
     if not twilio_number: return {"error":"Could not provision number. Try again."}
     extra = phone2 if phone2 and phone2.startswith("+") else ""
     ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
@@ -1067,130 +1053,3 @@ async def signup_create(request_data:dict=None):
     if extra: send_sms(extra, msg, from_number=twilio_number)
     logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
     return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
-
-
-# --- Privacy Policy page ---
-PRIVACY_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Privacy Policy \u2014 Hotline</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
-""" + NAV_CSS + """
-.wrap{max-width:760px;margin:0 auto;padding:32px 24px 80px}
-.meta{color:#999;font-size:13px;margin-bottom:32px}
-h1{font-size:clamp(24px,4vw,32px);font-weight:700;margin-bottom:6px}
-h2{font-size:16px;font-weight:700;margin-top:32px;margin-bottom:8px}
-p{font-size:15px;color:#444;line-height:1.7;margin-bottom:12px}
-ul{margin:0 0 14px;padding-left:22px}li{font-size:15px;color:#444;line-height:1.7;margin-bottom:5px}
-.highlight{background:#fff7ed;border-left:3px solid #ea580c;padding:12px 16px;border-radius:0 6px 6px 0;margin-bottom:24px;font-size:14px;color:#7c2d12;line-height:1.6}
-footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
-</style></head><body>
-""" + NAV_HTML + """
-<div class="wrap">
-<h1>Privacy Policy</h1>
-<p class="meta">Hotline AI &nbsp;&middot;&nbsp; Effective Date: May 5, 2025 &nbsp;&middot;&nbsp; Last updated: May 5, 2025</p>
-<div class="highlight"><strong>SMS short summary:</strong> We collect your phone number to send you SMS messages you&#39;ve opted into. We do not sell your personal information or phone number to third parties. Reply STOP at any time to unsubscribe.</div>
-<p>This Privacy Policy describes how Hotline AI (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;) collects, uses, and protects your information when you use our SMS-based customer feedback service at <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a>.</p>
-<h2>1. Information We Collect</h2>
-<p>We collect the following types of information:</p>
-<ul>
-<li><strong>Phone number:</strong> Collected when you opt in to receive SMS messages.</li>
-<li><strong>Message content:</strong> The feedback or communications you send via SMS.</li>
-<li><strong>Usage data:</strong> Timestamps of messages sent and received, opt-in/opt-out records, including START and STOP keywords used to manage your consent status.</li>
-<li><strong>Device and carrier information:</strong> Basic carrier data provided by our SMS infrastructure (Twilio).</li>
-</ul>
-<h2>2. How We Use Your Information</h2>
-<p>We use the information we collect to:</p>
-<ul>
-<li>Deliver SMS customer service and feedback communications you have opted into</li>
-<li>Route your feedback to the appropriate business owner</li>
-<li>Maintain records of opt-in and opt-out preferences</li>
-<li>Comply with legal obligations and Twilio&rsquo;s messaging policies</li>
-<li>Improve and troubleshoot the service</li>
-</ul>
-<h2>3. SMS Messaging Practices</h2>
-<p>You will only receive SMS messages from Hotline AI if you have explicitly opted in. Message frequency varies depending on your interactions with the service.</p>
-<p><strong>To opt out:</strong> Reply <strong>STOP</strong> to any message at any time. You will receive a final confirmation message and will not be contacted again unless you re-subscribe.<br>
-<strong>To re-subscribe:</strong> Reply <strong>START</strong>.<br>
-<strong>For help:</strong> Reply <strong>HELP</strong> or email us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
-<p><strong>Message and data rates may apply</strong> depending on your mobile carrier plan.</p>
-<h2>4. Data Sharing</h2>
-<p><strong>We do not sell, rent, or trade your personal information or phone number to any third party.</strong> Mobile information will not be shared with third parties/affiliates for marketing/promotional purposes. All the above categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.</p>
-<p>We may share information only in the following limited circumstances:</p>
-<ul>
-<li><strong>Service providers:</strong> We use Twilio, Inc. to transmit SMS messages. Twilio processes message data on our behalf and is bound by its own privacy and security policies.</li>
-<li><strong>Business owners:</strong> Feedback messages you submit are shared with the business owner you are providing feedback to, which is the core function of the service.</li>
-<li><strong>Legal requirements:</strong> We may disclose information if required by law, court order, or government authority.</li>
-</ul>
-<h2>5. Data Retention</h2>
-<p>We retain message logs and opt-in records for up to 2 years to comply with telecommunications regulations and to honor opt-out requests. You may request deletion of your data at any time by contacting us.</p>
-<h2>6. Data Security</h2>
-<p>We implement reasonable technical and organizational measures to protect your information from unauthorized access, disclosure, or loss. However, no method of electronic transmission is 100% secure.</p>
-<h2>7. Your Rights (Texas Residents)</h2>
-<p>Under applicable Texas law, you may have the right to access, correct, or request deletion of your personal information. To exercise these rights, contact us at <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a>.</p>
-<h2>8. Children&#39;s Privacy</h2>
-<p>Hotline AI is not intended for use by anyone under the age of 18. We do not knowingly collect personal information from minors.</p>
-<h2>9. Changes to This Policy</h2>
-<p>We may update this Privacy Policy from time to time. We will update the &ldquo;Last updated&rdquo; date at the top of this page when changes are made. Continued use of the service constitutes acceptance of the updated policy.</p>
-<h2>10. Contact Us</h2>
-<p>For privacy questions or data requests, contact:<br>
-<strong>Hotline AI</strong><br>
-Email: <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a><br>
-Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
-</div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
-</body></html>"""
-
-@app.get("/privacy")
-def privacy_page(): _ensure_init(); return Response(content=PRIVACY_HTML, media_type="text/html")
-
-
-# --- Terms of Service page ---
-TERMS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Terms of Service \u2014 Hotline</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
-""" + NAV_CSS + """
-.wrap{max-width:760px;margin:0 auto;padding:32px 24px 80px}
-.meta{color:#999;font-size:13px;margin-bottom:32px}
-h1{font-size:clamp(24px,4vw,32px);font-weight:700;margin-bottom:6px}
-h2{font-size:16px;font-weight:700;margin-top:32px;margin-bottom:8px}
-p{font-size:15px;color:#444;line-height:1.7;margin-bottom:12px}
-footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
-</style></head><body>
-""" + NAV_HTML + """
-<div class="wrap">
-<h1>Terms of Service</h1>
-<p class="meta">Hotline AI &nbsp;&middot;&nbsp; Effective Date: May 5, 2025 &nbsp;&middot;&nbsp; Last updated: May 5, 2025</p>
-<p>These Terms of Service (&ldquo;Terms&rdquo;) govern your use of Hotline AI (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;), accessible at <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a> and through our SMS-based customer feedback service. By using Hotline AI, you agree to these Terms.</p>
-<h2>1. Description of Service</h2>
-<p>Hotline AI provides customers with a way to share feedback and concerns with business owners via SMS text messaging. Our platform enables opted-in users to communicate directly with businesses through a dedicated phone number operated via Twilio.</p>
-<h2>2. SMS Messaging</h2>
-<p>By providing your phone number and opting in to receive SMS messages from Hotline AI, you consent to receive text messages related to customer service and support communications. Message frequency varies based on your interactions with the service.</p>
-<p>Users may opt in to receive SMS messages by submitting the web sign-up form or by texting the keyword <strong>START</strong> to our number. Upon opting in, you will receive a confirmation SMS. Reply <strong>STOP</strong> to opt out at any time. Reply <strong>HELP</strong> for help. Message and data rates may apply.</p>
-<h2>3. Eligibility</h2>
-<p>You must be at least 18 years old and a resident of the United States to use this service. By using Hotline AI, you represent that you meet these requirements.</p>
-<h2>4. User Conduct</h2>
-<p>You agree not to use Hotline AI to send spam, harassment, threats, or any unlawful content. You agree not to impersonate others or misrepresent your identity. We reserve the right to terminate access to any user who violates these Terms.</p>
-<h2>5. Intellectual Property</h2>
-<p>All content, branding, and technology associated with Hotline AI are owned by or licensed to Hotline AI. You may not reproduce, distribute, or create derivative works without our express written permission.</p>
-<h2>6. Disclaimer of Warranties</h2>
-<p>Hotline AI is provided &ldquo;as is&rdquo; without warranties of any kind, either express or implied. We do not guarantee uninterrupted or error-free operation of the service.</p>
-<h2>7. Limitation of Liability</h2>
-<p>To the fullest extent permitted by Texas law, Hotline AI shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the service.</p>
-<h2>8. Governing Law</h2>
-<p>These Terms are governed by the laws of the State of Texas, USA. Any disputes shall be resolved in the courts of Texas.</p>
-<h2>9. Changes to These Terms</h2>
-<p>We may update these Terms from time to time. Continued use of the service after changes are posted constitutes your acceptance of the revised Terms. We will note the &ldquo;Last updated&rdquo; date at the top of this page.</p>
-<h2>10. Contact</h2>
-<p>For questions about these Terms, contact us at:<br>
-<strong>Hotline AI</strong><br>
-Email: <a href="mailto:Connect@RyanHeaphyConsulting.com">Connect@RyanHeaphyConsulting.com</a><br>
-Website: <a href="https://hotline-sms.vercel.app/">https://hotline-sms.vercel.app/</a></p>
-</div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &nbsp;&middot;&nbsp; <a href="/privacy" style="color:#aaa">Privacy</a> &nbsp;&middot;&nbsp; <a href="/terms" style="color:#aaa">Terms</a> &nbsp;&middot;&nbsp; <a href="mailto:Connect@RyanHeaphyConsulting.com" style="color:#aaa">Contact</a></footer>
-</body></html>"""
-
-@app.get("/terms")
-def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
