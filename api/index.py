@@ -1149,7 +1149,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
      ============================================================ -->
 <div class="optin-wrap">
   <input type="checkbox" id="f-optin">
-  <label for="f-optin">By checking this box, you agree to receive SMS messages from Hotline AI. Message and data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to unsubscribe, <strong>HELP</strong> for help. View our <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</label>
+  <label for="f-optin">By checking this box, you agree to receive recurring SMS alerts from Hotline (the Hotline business alert service). Msg &amp; data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to cancel, <strong>HELP</strong> for help. View our <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</label>
 </div>
 <div class="optin-err" id="optin-err">&#9888; You must agree to receive SMS messages to continue.</div>
 <!-- ============================================================
