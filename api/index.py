@@ -230,14 +230,14 @@ def buy_twilio_number(area_code="", webhook_url=""):
         avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
         if not avail and "area_code" in kw: del kw["area_code"]; avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
         if not avail: return None
-        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://sms-alerts.vercel.app/sms/incoming", sms_method="POST")
+        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://hotlinetxt.com/sms/incoming", sms_method="POST")
         return num.phone_number
     except Exception as e: logger.error(f"Buy number failed: {e}"); return None
 
 
 # --- Email (SendGrid) ---
 SENDGRID_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
-DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "alerts@hotline.so")
+DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Connect@HotlineTXT.com")
 
 def send_email(to_email, subject, html_body):
     if not SENDGRID_KEY: logger.info(f"[DRY-RUN] Email to {to_email}: {subject}"); return True
@@ -836,7 +836,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 
-<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
 let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
@@ -911,7 +911,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p>We'll help you design your sign. Customers scan or text \u2014 you get alerted.</p>
 </div>
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 </body></html>"""
 
 @app.get("/how-it-works")
@@ -983,7 +983,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 </body></html>"""
 
 @app.get("/industries")
@@ -991,6 +991,15 @@ def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, 
 
 
 # --- Signup page ---
+# ============================================================
+# TWILIO COMPLIANCE NOTE — DO NOT REMOVE OR MODIFY opt-in block
+# The SMS opt-in checkbox below (id="f-optin") is required for
+# Twilio A2P 10DLC and toll-free verification (error 30445).
+# It must remain: unchecked by default, required before submit,
+# and include the exact disclosure text with STOP/HELP/rates.
+# Removing or pre-checking this checkbox will cause Twilio
+# campaign registration to fail. — Last reviewed: 2025
+# ============================================================
 SIGNUP_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign Up \u2014 Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
@@ -1012,6 +1021,13 @@ input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;pa
 .step-num{width:28px;height:28px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:13px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:8px}
 .step h3{font-size:14px;font-weight:600;margin-bottom:3px}.step p{font-size:12px;color:#888;line-height:1.4}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
+/* --- TWILIO COMPLIANCE: opt-in disclosure styles --- DO NOT REMOVE --- */
+.optin-wrap{display:flex;align-items:flex-start;gap:10px;margin-top:18px;padding:14px 16px;background:#f8f8f6;border:1px solid #e0e0dc;border-radius:8px}
+.optin-wrap input[type=checkbox]{width:18px;height:18px;min-width:18px;margin-top:2px;accent-color:#ea580c;cursor:pointer}
+.optin-wrap label{font-size:12px;color:#555;line-height:1.55;margin:0;font-weight:400}
+.optin-wrap label a{color:#ea580c;text-decoration:underline}
+.optin-err{display:none;color:#991b1b;font-size:12px;margin-top:6px}
+/* --- END TWILIO COMPLIANCE STYLES --- */
 @media(max-width:500px){.steps{grid-template-columns:1fr}}
 </style></head><body>
 """ + NAV_HTML + """
@@ -1027,6 +1043,23 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
 <label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
+
+<!-- ============================================================
+     TWILIO COMPLIANCE — SMS OPT-IN DISCLOSURE — DO NOT REMOVE
+     Required for A2P 10DLC and toll-free verification (30445).
+     Checkbox must be: unchecked by default, required to submit.
+     Disclosure text, STOP/HELP instructions, and policy links
+     must remain intact and unmodified. — Last reviewed: 2025
+     ============================================================ -->
+<div class="optin-wrap">
+  <input type="checkbox" id="f-optin">
+  <label for="f-optin">By checking this box, you agree to receive SMS messages from Hotline AI. Message and data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to unsubscribe, <strong>HELP</strong> for help. View our <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</label>
+</div>
+<div class="optin-err" id="optin-err">&#9888; You must agree to receive SMS messages to continue.</div>
+<!-- ============================================================
+     END TWILIO COMPLIANCE BLOCK
+     ============================================================ -->
+
 <button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
 </div>
 <div class="steps">
@@ -1035,21 +1068,208 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses</footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
-async function signup(){const name=document.getElementById('f-name').value.trim();let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');const email=document.getElementById('f-email').value.trim();const url=document.getElementById('f-url').value.trim();const area=document.getElementById('f-area').value.trim();const res=document.getElementById('result');const btn=document.getElementById('f-btn');
-if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
-if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
-if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
-btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
-try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,area_code:area})});const d=await r.json();
-if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';res.style.display='block';btn.textContent='Done!'}
-else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
-catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
+async function signup(){
+  const name=document.getElementById('f-name').value.trim();
+  let phone=document.getElementById('f-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
+  let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
+  const email=document.getElementById('f-email').value.trim();
+  const url=document.getElementById('f-url').value.trim();
+  const area=document.getElementById('f-area').value.trim();
+  const res=document.getElementById('result');
+  const btn=document.getElementById('f-btn');
+
+  // --- TWILIO COMPLIANCE: validate opt-in checkbox --- DO NOT REMOVE ---
+  const optinChecked=document.getElementById('f-optin').checked;
+  const optinErr=document.getElementById('optin-err');
+  if(!optinChecked){optinErr.style.display='block';optinErr.scrollIntoView({behavior:'smooth',block:'nearest'});return;}
+  optinErr.style.display='none';
+  // --- END TWILIO COMPLIANCE VALIDATION ---
+
+  if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
+  if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
+  if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
+  try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,area_code:area})});const d=await r.json();
+  if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';res.style.display='block';btn.textContent='Done!'}
+  else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
+  catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}
+}
 </script></body></html>"""
 
 @app.get("/signup")
 def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
+
+
+# --- Privacy Policy page ---
+PRIVACY_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy &mdash; Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.wrap{max-width:720px;margin:0 auto;padding:32px 24px 64px}
+h1{font-size:28px;font-weight:700;margin-bottom:6px}
+.meta{font-size:13px;color:#aaa;margin-bottom:32px}
+h2{font-size:17px;font-weight:700;margin:28px 0 8px}
+p,li{font-size:15px;line-height:1.7;color:#333}
+ul{padding-left:20px;margin-top:6px}
+ul li{margin-bottom:4px}
+.highlight{background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px 20px;margin:24px 0}
+.highlight p{color:#7c2d12;font-weight:500}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
+footer a{color:#aaa}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="wrap">
+<h1>Privacy Policy</h1>
+<p class="meta">Effective date: January 1, 2025 &nbsp;&middot;&nbsp; HotlineTXT.com</p>
+
+<div class="highlight"><p>&#128241; Hotline is an SMS-based customer feedback system. Customers text a business number and business owners receive alerts. This policy explains how we handle that data.</p></div>
+
+<h2>1. Who We Are</h2>
+<p>Hotline is operated by HotlineTXT.com (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;). We provide SMS-based customer alerting services to small businesses. For questions, contact us at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
+
+<h2>2. Information We Collect</h2>
+<p>We collect the following information when you use Hotline:</p>
+<ul>
+<li><strong>Customer SMS messages:</strong> The text content of messages sent to a Hotline business number, along with the sender&rsquo;s phone number and timestamp.</li>
+<li><strong>Business owner information:</strong> Business name, owner phone number, optional email address, and optional website URL provided during signup.</li>
+<li><strong>Usage data:</strong> Message tiers, categories, sentiment classifications, and acknowledgment records generated by our AI system.</li>
+</ul>
+
+<h2>3. How We Use Your Information</h2>
+<p>We use collected information solely to operate the Hotline service:</p>
+<ul>
+<li>Classify and route customer messages to business owners via SMS</li>
+<li>Send alert notifications to registered business owner phone numbers</li>
+<li>Generate weekly digest summaries for business owners (if opted in)</li>
+<li>Maintain message logs accessible to the business owner via SMS commands</li>
+</ul>
+<p>We do <strong>not</strong> sell, rent, or share your personal information with third parties for marketing purposes.</p>
+
+<h2>4. SMS Messaging and Opt-In</h2>
+<p><strong>Business owners:</strong> By signing up for Hotline, you consent to receive SMS alerts and notifications from your assigned Hotline number. You may opt out at any time by texting <strong>STOP</strong> to your Hotline number. Standard message and data rates from your carrier may apply.</p>
+<p><strong>Customers texting a business:</strong> When you text a Hotline-powered business number, your message and phone number are stored and forwarded to the business owner. You are not opted in to any marketing list. The business may reply to your message directly via SMS.</p>
+
+<h2>5. Data Retention</h2>
+<p>Customer messages and associated data are stored for up to 90 days by default. Business owner accounts and associated message history are retained for the duration of the account. You may request deletion by contacting <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
+
+<h2>6. Third-Party Services</h2>
+<p>Hotline uses the following third-party services to operate:</p>
+<ul>
+<li><strong>Twilio:</strong> SMS sending and receiving. Twilio handles phone number provisioning and message delivery. See <a href="https://www.twilio.com/legal/privacy" target="_blank">Twilio&rsquo;s Privacy Policy</a>.</li>
+<li><strong>Anthropic:</strong> AI message classification. Customer message text is sent to Anthropic&rsquo;s API for analysis. See <a href="https://www.anthropic.com/privacy" target="_blank">Anthropic&rsquo;s Privacy Policy</a>.</li>
+</ul>
+
+<h2>7. Security</h2>
+<p>We use industry-standard security practices to protect your data. However, no method of transmission over the internet or electronic storage is 100% secure. We encourage you to contact us immediately at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a> if you suspect any unauthorized access.</p>
+
+<h2>8. Children&rsquo;s Privacy</h2>
+<p>Hotline is not directed at children under 13. We do not knowingly collect personal information from children under 13. If you believe a child has provided us with personal information, please contact us.</p>
+
+<h2>9. Changes to This Policy</h2>
+<p>We may update this Privacy Policy from time to time. We will notify registered business owners of material changes via SMS or email. Continued use of Hotline after changes constitutes acceptance of the updated policy.</p>
+
+<h2>10. Contact</h2>
+<p>For privacy questions, data deletion requests, or to opt out of SMS communications, contact:</p>
+<p style="margin-top:8px"><strong>Email:</strong> <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a><br>
+<strong>Website:</strong> <a href="https://HotlineTXT.com">HotlineTXT.com</a><br>
+<strong>Mailing Address:</strong> Hotline / HotlineTXT.com, 8405 Siskin CV, Austin, TX 78745</p>
+</div>
+<footer>Hotline &middot; <a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Service</a> &middot; <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a></footer>
+</body></html>"""
+
+@app.get("/privacy")
+def privacy_page(): _ensure_init(); return Response(content=PRIVACY_HTML, media_type="text/html")
+
+
+# --- Terms of Service page ---
+TERMS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Terms of Service &mdash; Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.wrap{max-width:720px;margin:0 auto;padding:32px 24px 64px}
+h1{font-size:28px;font-weight:700;margin-bottom:6px}
+.meta{font-size:13px;color:#aaa;margin-bottom:32px}
+h2{font-size:17px;font-weight:700;margin:28px 0 8px}
+p,li{font-size:15px;line-height:1.7;color:#333}
+ul{padding-left:20px;margin-top:6px}
+ul li{margin-bottom:4px}
+.highlight{background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px 20px;margin:24px 0}
+.highlight p{color:#7c2d12;font-weight:500}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
+footer a{color:#aaa}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="wrap">
+<h1>Terms of Service</h1>
+<p class="meta">Effective date: January 1, 2025 &nbsp;&middot;&nbsp; HotlineTXT.com</p>
+
+<div class="highlight"><p>&#128241; By using Hotline, you agree to these terms. Hotline provides SMS-based customer alerting for small businesses. Please read these terms carefully.</p></div>
+
+<h2>1. Acceptance of Terms</h2>
+<p>By signing up for or using Hotline (&ldquo;the Service&rdquo;) operated by HotlineTXT.com, you agree to be bound by these Terms of Service. If you do not agree, do not use the Service.</p>
+
+<h2>2. Description of Service</h2>
+<p>Hotline is an SMS-based system that allows customers to send text messages to a business phone number. The Service uses AI to classify incoming messages and notifies registered business owners of important issues via SMS. Business owners interact with the Service entirely via SMS commands.</p>
+
+<h2>3. SMS Messaging &mdash; Opt-In and Opt-Out</h2>
+<p><strong>Business owners:</strong> By completing signup and providing your phone number, you expressly consent to receive SMS messages from Hotline, including:</p>
+<ul>
+<li>Alert notifications when customers send flagged messages</li>
+<li>Weekly digest summaries (if enabled)</li>
+<li>Onboarding and setup messages</li>
+</ul>
+<p>Message frequency varies based on customer activity. Standard message and data rates may apply.</p>
+<p>To opt out of SMS alerts at any time, text <strong>STOP</strong> to your assigned Hotline number. You will receive one confirmation message and no further messages will be sent. Text <strong>HELP</strong> for assistance or contact <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
+<p><strong>Customers:</strong> Customers who text a Hotline business number are not opting in to any marketing messages. Their messages are forwarded to the relevant business owner only.</p>
+
+<h2>4. Permitted Use</h2>
+<p>You may use Hotline only for lawful business purposes. You agree not to:</p>
+<ul>
+<li>Use Hotline to send spam, unsolicited messages, or harassing communications</li>
+<li>Impersonate any person or business</li>
+<li>Use the Service in violation of any applicable law or regulation</li>
+<li>Attempt to circumvent any security or rate-limiting measures</li>
+<li>Use Hotline for any purpose that violates Twilio&rsquo;s Acceptable Use Policy</li>
+</ul>
+
+<h2>5. Account Responsibilities</h2>
+<p>You are responsible for keeping your phone number and account information current and accurate. You are responsible for all activity associated with your Hotline account. Notify us immediately at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a> if you suspect unauthorized use.</p>
+
+<h2>6. Pricing and Billing</h2>
+<p>Hotline offers a 14-day free trial with no credit card required. After the trial period, continued use of the Service is subject to the then-current pricing listed on <a href="https://HotlineTXT.com">HotlineTXT.com</a>. We reserve the right to change pricing with reasonable notice.</p>
+
+<h2>7. Termination</h2>
+<p>Either party may terminate the Service at any time. We reserve the right to suspend or terminate accounts that violate these Terms. Upon termination, your data may be deleted after 90 days.</p>
+
+<h2>8. Disclaimer of Warranties</h2>
+<p>Hotline is provided &ldquo;as is&rdquo; without warranty of any kind. We do not guarantee that the Service will be uninterrupted, error-free, or that alerts will be delivered within any specific timeframe. AI message classification is probabilistic and may not be 100% accurate.</p>
+
+<h2>9. Limitation of Liability</h2>
+<p>To the maximum extent permitted by law, HotlineTXT.com shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the Service, including any missed or delayed alerts.</p>
+
+<h2>10. Governing Law</h2>
+<p>These Terms are governed by the laws of the United States. Any disputes shall be resolved through binding arbitration or in the courts of applicable jurisdiction.</p>
+
+<h2>11. Changes to Terms</h2>
+<p>We may update these Terms from time to time. We will notify registered users of material changes via SMS or email. Continued use after changes constitutes acceptance.</p>
+
+<h2>12. Contact</h2>
+<p>For questions about these Terms, contact:</p>
+<p style="margin-top:8px"><strong>Email:</strong> <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a><br>
+<strong>Website:</strong> <a href="https://HotlineTXT.com">HotlineTXT.com</a><br>
+<strong>Mailing Address:</strong> Hotline / HotlineTXT.com, 8405 Siskin CV, Austin, TX 78745</p>
+</div>
+<footer>Hotline &middot; <a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Service</a> &middot; <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a></footer>
+</body></html>"""
+
+@app.get("/terms")
+def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
 
 @app.post("/signup/create")
 async def signup_create(request_data:dict=None):
@@ -1067,7 +1287,7 @@ async def signup_create(request_data:dict=None):
     with get_db() as c:
         if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
             biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
-    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://sms-alerts.vercel.app/sms/incoming")
+    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotlinetxt.com/sms/incoming")
     if not twilio_number: return {"error":"Could not provision number. Try again."}
     extra = phone2 if phone2 and phone2.startswith("+") else ""
     ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
