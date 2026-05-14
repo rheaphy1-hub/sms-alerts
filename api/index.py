@@ -47,33 +47,41 @@ def _normalize_phone(p): return p.replace(" ","").replace("-","").replace("(",""
 def init_db():
     s = "SERIAL" if USE_POSTGRES else "INTEGER"
     pk = "PRIMARY KEY" if USE_POSTGRES else "PRIMARY KEY AUTOINCREMENT"
-    with get_db() as c:
-        _execute(c, f"""CREATE TABLE IF NOT EXISTS businesses (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', owner_phone TEXT NOT NULL,
-            alert_phones TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
-            digest_freq TEXT NOT NULL DEFAULT 'weekly', alert_tier3 INTEGER DEFAULT 0,
-            website_url TEXT NOT NULL DEFAULT '', website_info TEXT NOT NULL DEFAULT '',
+    # Each statement in its own transaction — prevents a pre-existing table
+    # from aborting the batch and silently skipping new tables.
+    statements = [
+        f"""CREATE TABLE IF NOT EXISTS businesses (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT \'\', owner_phone TEXT NOT NULL,
+            alert_phones TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
+            digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
+            website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
             twilio_number TEXT NOT NULL UNIQUE, muted_until TEXT, paused INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL)""")
-        _execute(c, f"""CREATE TABLE IF NOT EXISTS messages (
+            created_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS messages (
             id {s} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
             message_text TEXT NOT NULL, tier INTEGER, category TEXT, sentiment TEXT,
             confidence REAL, summary TEXT, acknowledged INTEGER DEFAULT 0,
-            alerted INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
-        _execute(c, f"""CREATE TABLE IF NOT EXISTS alert_log (
+            alerted INTEGER DEFAULT 0, created_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS alert_log (
             id {s} {pk}, message_id INTEGER NOT NULL, business_id TEXT NOT NULL,
-            alert_type TEXT NOT NULL, sent_at TEXT NOT NULL)""")
-        _execute(c, f"""CREATE TABLE IF NOT EXISTS pending_signups (
+            alert_type TEXT NOT NULL, sent_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS pending_signups (
             id {s} {pk}, name TEXT NOT NULL, owner_phone TEXT NOT NULL,
-            phone2 TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
-            website_url TEXT NOT NULL DEFAULT '', area_code TEXT NOT NULL DEFAULT '',
-            provisioned INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
-        _execute(c, "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)")
-        _execute(c, "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)")
-        for col, default in [("alert_phones","''"),("email","''"),("digest_freq","'weekly'"),
-                             ("alert_tier3","0"),("website_url","''"),("website_info","''")]:
-            try: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
-            except: pass
+            phone2 TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
+            website_url TEXT NOT NULL DEFAULT \'\', area_code TEXT NOT NULL DEFAULT \'\',
+            provisioned INTEGER DEFAULT 0, created_at TEXT NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
+        "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
+    ]
+    for stmt in statements:
+        try:
+            with get_db() as c: _execute(c, stmt)
+        except Exception as e: logger.warning(f"init_db stmt skipped: {e}")
+    for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'weekly\'"),
+                         ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'")]:
+        try:
+            with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+        except: pass
 
 def create_business(biz_id, name, owner_phone, twilio_number, extra_phones="", email="", website_url=""):
     now = datetime.now(timezone.utc).isoformat()
