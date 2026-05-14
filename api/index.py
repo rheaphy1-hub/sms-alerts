@@ -63,6 +63,11 @@ def init_db():
         _execute(c, f"""CREATE TABLE IF NOT EXISTS alert_log (
             id {s} {pk}, message_id INTEGER NOT NULL, business_id TEXT NOT NULL,
             alert_type TEXT NOT NULL, sent_at TEXT NOT NULL)""")
+        _execute(c, f"""CREATE TABLE IF NOT EXISTS pending_signups (
+            id {s} {pk}, name TEXT NOT NULL, owner_phone TEXT NOT NULL,
+            phone2 TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+            website_url TEXT NOT NULL DEFAULT '', area_code TEXT NOT NULL DEFAULT '',
+            provisioned INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
         _execute(c, "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)")
         _execute(c, "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)")
         for col, default in [("alert_phones","''"),("email","''"),("digest_freq","'weekly'"),
@@ -165,6 +170,21 @@ def set_alert_tier3(bid, on):
 
 def get_all_businesses():
     with get_db() as c: return _fetchall(c, "SELECT * FROM businesses")
+
+def save_pending_signup(name, phone, phone2, email, website_url, area_code):
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_db() as c:
+            _execute(c, _q("INSERT INTO pending_signups (name,owner_phone,phone2,email,website_url,area_code,created_at) VALUES (?,?,?,?,?,?,?)"),
+                     (name, phone, phone2 or "", email or "", website_url or "", area_code or "", now))
+        return True
+    except Exception as e: logger.error(f"Save pending signup failed: {e}"); return False
+
+def get_pending_signups():
+    with get_db() as c: return _fetchall(c, "SELECT * FROM pending_signups WHERE provisioned=0 ORDER BY created_at DESC")
+
+def mark_pending_provisioned(pending_id):
+    with get_db() as c: _execute(c, _q("UPDATE pending_signups SET provisioned=1 WHERE id=?"), (pending_id,))
 
 def get_stats(bid, days=7):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -586,13 +606,62 @@ def admin_ui(key:str=Query("")):
     _ensure_init()
     if key!=_ADMIN_KEY:
         return Response(content='<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f8f8f6"><div style="text-align:center"><h2>Hotline Admin</h2><form style="display:flex;gap:8px" onsubmit="location.href=\'/admin?key=\'+document.getElementById(\'k\').value;return false"><input id="k" type="password" placeholder="Admin key" style="padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;width:220px"><button style="padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Enter</button></form></div></body></html>', media_type="text/html")
+
+    # --- Pending signups table ---
+    pending = get_pending_signups()
+    pending_rows = ""
+    for p in pending:
+        ts = p["created_at"][:16].replace("T"," ") + " UTC"
+        pending_rows += f'<tr><td style="padding:12px 16px;font-weight:600">{p["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{p["owner_phone"]}</td><td style="padding:12px 16px;font-size:13px;color:#555">{p["email"] or "—"}</td><td style="padding:12px 16px;font-size:13px;color:#555">{p["area_code"] or "—"}</td><td style="padding:12px 16px;font-size:12px;color:#999">{ts}</td></tr>'
+    pending_count = len(pending)
+    pending_badge = f' <span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;vertical-align:middle">{pending_count}</span>' if pending_count else ""
+    if not pending_rows:
+        pending_rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No pending signups.</td></tr>'
+
+    # --- Active businesses table ---
     businesses = get_all_businesses()
     rows = ""
     for b in businesses:
         s = get_stats(b["id"])
         rows += f'<tr><td style="padding:12px 16px;font-weight:600">{b["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["twilio_number"]}</td><td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td><td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td><td style="padding:12px 16px"><a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a><a href="#" onclick="if(confirm(\'Remove?\'))location.href=\'/admin/remove?key={key}&biz_id={b["id"]}\';return false" style="color:#dc2626;font-size:13px">Remove</a></td></tr>'
     if not rows: rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
-    return Response(content=f'<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head><body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6"><div style="max-width:900px;margin:0 auto"><h1 style="font-size:24px;margin:0 0 24px">Hotline Admin</h1><div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc"><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th><th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Number</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Msgs</th><th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th><th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th></tr></thead><tbody>{rows}</tbody></table></div></div></body></html>', media_type="text/html")
+
+    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
+<body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6">
+<div style="max-width:960px;margin:0 auto">
+  <h1 style="font-size:24px;margin:0 0 28px">Hotline Admin</h1>
+
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Pending Signups{pending_badge}</h2>
+  <p style="font-size:13px;color:#888;margin:0 0 12px">These leads signed up while Twilio provisioning was unavailable. Provision them manually once the service is live.</p>
+  <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto;margin-bottom:36px">
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc">
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Phone</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Email</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Area Code</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Signed Up</th>
+      </tr></thead>
+      <tbody>{pending_rows}</tbody>
+    </table>
+  </div>
+
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Active Businesses</h2>
+  <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc">
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Number</th>
+        <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Msgs</th>
+        <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th>
+        <th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div>
+</div>
+</body></html>'''
+    return Response(content=html, media_type="text/html")
 
 
 # --- SMS Incoming ---
@@ -1092,7 +1161,10 @@ async function signup(){
   if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,area_code:area})});const d=await r.json();
-  if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';res.style.display='block';btn.textContent='Done!'}
+  if(d.success){
+    if(d.waitlisted){res.className='result ok';res.innerHTML="<strong>You're on the list!</strong><br><br>We'll text you as soon as the service is live.";}
+    else{res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';}
+    res.style.display='block';btn.textContent='Done!'}
   else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
   catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}
 }
@@ -1283,17 +1355,47 @@ async def signup_create(request_data:dict=None):
     area_code = (request_data.get("area_code") or "").strip()
     if not name: return {"error":"Business name required"}
     if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
+
+    # --- Attempt full Twilio provisioning ---
     biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
     with get_db() as c:
         if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
             biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
     twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotlinetxt.com/sms/incoming")
-    if not twilio_number: return {"error":"Could not provision number. Try again."}
-    extra = phone2 if phone2 and phone2.startswith("+") else ""
-    ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
-    if not ok: return {"error":"Could not create business."}
-    msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
-    send_sms(phone, msg, from_number=twilio_number)
-    if extra: send_sms(extra, msg, from_number=twilio_number)
-    logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
-    return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
+
+    if twilio_number:
+        # Provisioning succeeded — full signup flow
+        extra = phone2 if phone2 and phone2.startswith("+") else ""
+        ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
+        if not ok: return {"error":"Could not create business."}
+        msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
+        send_sms(phone, msg, from_number=twilio_number)
+        if extra: send_sms(extra, msg, from_number=twilio_number)
+        logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
+        return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
+
+    # --- Provisioning failed — save to waitlist ---
+    logger.warning(f"Twilio provisioning failed for {name} ({phone}) — saving to waitlist")
+    save_pending_signup(name, phone, phone2, email, website_url, area_code)
+
+    # Notify admin by email
+    ts = datetime.now(timezone.utc).strftime("%b %d, %Y at %I:%M %p UTC")
+    email_html = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px">
+      <h2 style="color:#ea580c;margin:0 0 16px">New Waitlist Signup</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr><td style="padding:8px 0;color:#888;width:120px">Name</td><td style="padding:8px 0;font-weight:600">{name}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Phone</td><td style="padding:8px 0;font-family:monospace">{phone}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Phone 2</td><td style="padding:8px 0;font-family:monospace">{phone2 or '—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Email</td><td style="padding:8px 0">{email or '—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Website</td><td style="padding:8px 0">{website_url or '—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Area Code</td><td style="padding:8px 0">{area_code or '—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Time</td><td style="padding:8px 0">{ts}</td></tr>
+      </table>
+      <p style="margin:24px 0 0;font-size:13px;color:#aaa">
+        View all pending signups at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a>
+      </p>
+    </div>"""
+    send_email("Connect@HotlineTXT.com", f"New waitlist signup: {name}", email_html)
+
+    return {"success":True,"waitlisted":True,"name":name,"owner_phone":phone}
