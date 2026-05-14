@@ -561,6 +561,25 @@ def root():
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
 
+@app.get("/debug/db")
+def debug_db():
+    import traceback
+    result = {"database_url_set": bool(DATABASE_URL), "use_postgres": USE_POSTGRES, "tables": [], "error": None}
+    try:
+        _ensure_init()
+        with get_db() as c:
+            if USE_POSTGRES:
+                rows = _fetchall(c, "SELECT tablename FROM pg_tables WHERE schemaname='public'")
+                result["tables"] = [r["tablename"] for r in rows]
+            else:
+                rows = _fetchall(c, "SELECT name FROM sqlite_master WHERE type='table'")
+                result["tables"] = [r["name"] for r in rows]
+            pending = _fetchall(c, "SELECT COUNT(*) as cnt FROM pending_signups")
+            result["pending_signups_count"] = pending[0]["cnt"] if pending else 0
+    except Exception as e:
+        result["error"] = traceback.format_exc()
+    return result
+
 @app.post("/digest")
 def digest_endpoint(freq: str = Query("weekly")): _ensure_init(); return {"digests_sent": send_all_digests(force_freq=freq)}
 
