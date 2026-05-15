@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query
 
 # PDF + QR generation (required at top level for Vercel to bundle correctly)
+import urllib.request as _urllib_req
 try:
     import qrcode
     from qrcode.constants import ERROR_CORRECT_H
@@ -315,7 +316,7 @@ def send_email(to_email, subject, html_body):
 
 
 # --- AI Classifier ---
-_ai_client = None
+_ai_client = None  # Stores API key string; HTTP calls used directly
 
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
@@ -370,17 +371,39 @@ def init_classifier():
     global _ai_client
     key = os.getenv("ANTHROPIC_API_KEY")
     if key:
-        from anthropic import Anthropic; _ai_client = Anthropic(api_key=key)
+        _ai_client = key   # Store key directly; calls use raw HTTP (no SDK)
+        logger.info("Anthropic API key loaded")
     else: logger.warning("No ANTHROPIC_API_KEY")
+
+def _anthropic_http(system_prompt, user_msg, model="claude-haiku-4-5-20251001", max_tokens=300):
+    """Call Anthropic Messages API directly via HTTP — no SDK, no vendor conflicts."""
+    payload = json.dumps({
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_msg}]
+    }).encode()
+    req = _urllib_req.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "x-api-key": _ai_client,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST"
+    )
+    with _urllib_req.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode())
+    return data["content"][0]["text"].strip()
+
 
 def classify_message(text, website_info=""):
     ctx = f"Business website info (use ONLY for answering basic questions like hours/address): {website_info}" if website_info else "No business website info available. Do NOT guess answers to customer questions."
     prompt = CLASSIFICATION_PROMPT.replace("{website_context}", ctx)
     if _ai_client:
         try:
-            resp = _ai_client.messages.create(model="claude-sonnet-4-20250514", max_tokens=300, system=prompt,
-                messages=[{"role":"user","content":f'Classify this customer SMS:\n\n"{text}"'}])
-            raw = resp.content[0].text.strip()
+            raw = _anthropic_http(prompt, f'Classify this customer SMS:\n\n"{text}"')
             if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             r = json.loads(raw)
             r["tier"] = max(1,min(4,int(r.get("tier",4))))
@@ -1161,8 +1184,7 @@ async def demo_classify(request_data:dict=None):
                 for h in history[-6:]: user_msg += f'Customer: "{h.get("customer","")}"\nSystem: "{h.get("reply","")}"\n\n'
                 user_msg += f'New message from same customer: "{text}"\n\nClassify with full context.'
             else: user_msg = f'Classify this customer SMS:\n\n"{text}"'
-            resp = _ai_client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=300, system=DEMO_PROMPT, messages=[{"role":"user","content":user_msg}])
-            raw = resp.content[0].text.strip()
+            raw = _anthropic_http(DEMO_PROMPT, user_msg, model="claude-haiku-4-5-20251001")
             if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             c = json.loads(raw)
             c["tier"]=max(1,min(4,int(c.get("tier",4)))); c["confidence"]=max(0.0,min(1.0,float(c.get("confidence",0.5))))
