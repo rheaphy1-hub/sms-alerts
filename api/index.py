@@ -356,14 +356,18 @@ def classify_message(text, website_info=""):
     return _classify_fallback(text)
 
 def _classify_fallback(text):
+    import re as _re
     t = text.lower()
+    # Strip punctuation for reliable word matching (e.g. "fire!" still matches "fire")
+    t_clean = _re.sub(r"[^a-z0-9 ]", " ", t)
     # Check for figurative "fire" (fire her, fire him, dumpster fire, etc)
-    fire_is_literal = "fire" in t and not any(p in t for p in ["fire her","fire him","fire them","fire that","fire the ","fire this","dumpster fire","on fire with","fired"])
+    fire_is_literal = "fire" in t_clean and not any(p in t_clean for p in ["fire her","fire him","fire them","fire that","fire the ","fire this","dumpster fire","on fire with","on fire today","fired","crossfire","campfire","open fire on","gunfire"])
     emergency = ["emergency","injury","hurt","bleeding","attack","weapon","gun","violence","ambulance","911",
                  "collapsed","unconscious","not breathing","heart attack","seizure","overdose","stabbed","shot",
                  "flood","flooding","gas leak","smoke","sparks","electrical","water leak","burst pipe"]
     if fire_is_literal: emergency.append("fire")
-    if any(f" {w} " in f" {t} " or t.startswith(w+" ") or t.endswith(" "+w) or t==w for w in emergency):
+    # Use word-boundary matching on cleaned text so punctuation never blocks a match
+    if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,"summary":"Possible emergency reported",
                 "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business owner."}
     question_words = ["what time","when do","where is","where are","do you have","is there","how do i","how much","can i","are you open"]
