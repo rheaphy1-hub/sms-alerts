@@ -53,9 +53,10 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS businesses (
             id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT \'\', owner_phone TEXT NOT NULL,
             alert_phones TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
+            business_code TEXT NOT NULL DEFAULT \'\',
             digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
             website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
-            twilio_number TEXT NOT NULL UNIQUE, muted_until TEXT, paused INTEGER DEFAULT 0,
+            twilio_number TEXT NOT NULL DEFAULT \'\', muted_until TEXT, paused INTEGER DEFAULT 0,
             created_at TEXT NOT NULL)""",
         f"""CREATE TABLE IF NOT EXISTS messages (
             id {s} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
@@ -68,7 +69,7 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS pending_signups (
             id {s} {pk}, name TEXT NOT NULL, owner_phone TEXT NOT NULL,
             phone2 TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
-            website_url TEXT NOT NULL DEFAULT \'\', area_code TEXT NOT NULL DEFAULT \'\',
+            website_url TEXT NOT NULL DEFAULT \'\',
             provisioned INTEGER DEFAULT 0, created_at TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
@@ -79,21 +80,51 @@ def init_db():
         except Exception as e: logger.warning(f"init_db stmt skipped: {e}")
     for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'weekly\'"),
                          ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'"),
-                         ("owner_context","\'0\'"),("owner_reply_mode","\'0\'")]:
+                         ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
+                         ("business_code","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
 
-def create_business(biz_id, name, owner_phone, twilio_number, extra_phones="", email="", website_url=""):
+
+def _gen_business_code():
+    """Generate a unique 6-char business code like BC4729."""
+    import random, string
+    while True:
+        code = "BC" + "".join(random.choices(string.digits, k=4))
+        with get_db() as c:
+            existing = _fetchone(c, _q("SELECT id FROM businesses WHERE business_code=?"), (code,))
+        if not existing:
+            return code
+
+def backfill_business_codes():
+    """Assign business_code to any existing businesses that don't have one."""
+    with get_db() as c:
+        rows = _fetchall(c, "SELECT id FROM businesses WHERE business_code='' OR business_code IS NULL")
+    for row in rows:
+        code = _gen_business_code()
+        with get_db() as c:
+            _execute(c, _q("UPDATE businesses SET business_code=? WHERE id=?"), (code, row["id"]))
+        logger.info(f"Backfilled business_code {code} for {row['id']}")
+
+def get_business_by_code(code):
+    """Look up a business by its BC#### code (case-insensitive)."""
+    clean = code.upper().strip()
+    with get_db() as c:
+        return _fetchone(c, _q("SELECT * FROM businesses WHERE business_code=?"), (clean,))
+
+def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code=""):
     now = datetime.now(timezone.utc).isoformat()
     all_phones = ",".join([owner_phone] + [p.strip() for p in extra_phones.split(",") if p.strip()]) if extra_phones else owner_phone
     website_info = scrape_website_info(website_url) if website_url else ""
+    if not business_code:
+        business_code = _gen_business_code()
     try:
         with get_db() as c:
-            _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,created_at) VALUES (?,?,?,?,?,?,?,?,?)"),
-                     (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number, now))
-        return True
-    except: return False
+            _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"),
+                     (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, now))
+        return business_code
+    except: return None
 
 def get_alert_phones(biz):
     phones = [p.strip() for p in (biz.get("alert_phones") or biz.get("owner_phone") or "").split(",") if p.strip()]
@@ -180,12 +211,12 @@ def set_alert_tier3(bid, on):
 def get_all_businesses():
     with get_db() as c: return _fetchall(c, "SELECT * FROM businesses")
 
-def save_pending_signup(name, phone, phone2, email, website_url, area_code):
+def save_pending_signup(name, phone, phone2, email, website_url):
     now = datetime.now(timezone.utc).isoformat()
     try:
         with get_db() as c:
-            _execute(c, _q("INSERT INTO pending_signups (name,owner_phone,phone2,email,website_url,area_code,created_at) VALUES (?,?,?,?,?,?,?)"),
-                     (name, phone, phone2 or "", email or "", website_url or "", area_code or "", now))
+            _execute(c, _q("INSERT INTO pending_signups (name,owner_phone,phone2,email,website_url,created_at) VALUES (?,?,?,?,?,?)"),
+                     (name, phone, phone2 or "", email or "", website_url or "", now))
         return True
     except Exception as e: logger.error(f"Save pending signup failed: {e}"); return False
 
@@ -237,10 +268,12 @@ def scrape_website_info(url):
 _twilio_client = None
 _twilio_from = ""
 
+SHARED_NUMBER = "+18888235592"   # Single shared Twilio number
+
 def init_sms():
     global _twilio_client, _twilio_from
     sid, token = os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
-    _twilio_from = os.getenv("TWILIO_PHONE_NUMBER", "")
+    _twilio_from = SHARED_NUMBER   # Always use shared number
     if sid and token:
         from twilio.rest import Client; _twilio_client = Client(sid, token); logger.info("Twilio ready")
     else: logger.warning("Twilio not configured")
@@ -251,17 +284,7 @@ def send_sms(to, body, from_number=""):
     try: _twilio_client.messages.create(body=body, from_=sender, to=to); return True
     except Exception as e: logger.error(f"SMS failed to {to}: {e}"); return False
 
-def buy_twilio_number(area_code="", webhook_url=""):
-    if not _twilio_client: return "+15550000000"
-    try:
-        kw = {"limit":1,"sms_enabled":True,"voice_enabled":False}
-        if area_code: kw["area_code"] = area_code
-        avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
-        if not avail and "area_code" in kw: del kw["area_code"]; avail = _twilio_client.available_phone_numbers("US").local.list(**kw)
-        if not avail: return None
-        num = _twilio_client.incoming_phone_numbers.create(phone_number=avail[0].phone_number, sms_url=webhook_url or "https://hotlinetxt.com/sms/incoming", sms_method="POST")
-        return num.phone_number
-    except Exception as e: logger.error(f"Buy number failed: {e}"); return None
+# buy_twilio_number removed — single shared number model
 
 
 # --- Email (SendGrid) ---
@@ -446,7 +469,7 @@ def handle_owner_command(text, business, sender_phone=""):
         clear_reply_mode(bid)
         msg = get_message_by_id(reply_mid)
         if msg:
-            send_sms(msg["from_number"], raw, from_number=business.get("twilio_number",""))
+            send_sms(msg["from_number"], raw)
             return f"Reply sent to {_fmt_phone_short(msg['from_number'])}."
         return "Could not find the original message."
 
@@ -461,7 +484,7 @@ def handle_owner_command(text, business, sender_phone=""):
         set_context(bid, target_id)
         others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
         short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
-        for p in others: send_sms(p, f"\u2705 Alert #{target_id} acknowledged by {short}.", from_number=business.get("twilio_number",""))
+        for p in others: send_sms(p, f"\u2705 Alert #{target_id} acknowledged by {short}.")
         return f"\u2705 Alert #{target_id} acknowledged.\n\"{msg['message_text'][:80]}\""
 
     # ── OK / ACK — with multi-alert disambiguation ────────────────────────────
@@ -487,7 +510,7 @@ def handle_owner_command(text, business, sender_phone=""):
         set_context(bid, msg["id"])
         others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
         short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
-        for p in others: send_sms(p, f"\u2705 Alert #{msg['id']} acknowledged by {short}.", from_number=business.get("twilio_number",""))
+        for p in others: send_sms(p, f"\u2705 Alert #{msg['id']} acknowledged by {short}.")
         return f"\u2705 Alert #{msg['id']} acknowledged.\n\"{msg['message_text'][:80]}\""
 
     if cmd == "HELP":
@@ -616,29 +639,34 @@ def _ensure_init():
     global _initialized
     if _initialized: return
     init_db(); init_classifier(); init_sms()
-    if _ENV_OWNER and _ENV_TWILIO:
-        # Always upsert — env vars are the source of truth, never let DB get stale
+    if _ENV_OWNER:
+        # Always upsert — env vars are the source of truth
         try:
-            with get_db() as c:
-                _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, twilio_number=? WHERE id='default'"),
-                         (_ENV_NAME, _ENV_OWNER, _ENV_TWILIO))
             with get_db() as c:
                 existing = _fetchone(c, "SELECT id FROM businesses WHERE id='default'")
             if not existing:
-                create_business("default", _ENV_NAME, _ENV_OWNER, _ENV_TWILIO)
-                logger.info(f"Registered '{_ENV_NAME}' ({_ENV_TWILIO})")
+                code = create_business("default", _ENV_NAME, _ENV_OWNER, "")
+                backfill_business_codes()
+                logger.info(f"Registered '{_ENV_NAME}' owner={_ENV_OWNER} code={code}")
             else:
-                logger.info(f"Synced '{_ENV_NAME}' -> twilio={_ENV_TWILIO} owner={_ENV_OWNER}")
+                with get_db() as c:
+                    _execute(c, _q("UPDATE businesses SET name=?, owner_phone=? WHERE id='default'"),
+                             (_ENV_NAME, _ENV_OWNER))
+                logger.info(f"Synced '{_ENV_NAME}' owner={_ENV_OWNER}")
         except Exception as e:
             logger.error(f"_ensure_init upsert failed: {e}")
+    # Backfill any businesses missing a code
+    try: backfill_business_codes()
+    except Exception as e: logger.warning(f"backfill_business_codes: {e}")
     _initialized = True
 
 WELCOME_MSG = """Welcome to {name} on Hotline!
 
-Your customers can now text {twilio} with feedback.
+Your sign + QR code links are on the way in a separate text.
+Customers scan the QR to send you private feedback.
 
 Commands:
-DETAILS \u2014 View alert
+DETAILS \u2014 View latest alert
 OK \u2014 Acknowledge
 REPLY \u2014 Reply to customer
 LIST \u2014 Flagged issues
@@ -727,7 +755,7 @@ def admin_add(key:str=Query(...),name:str=Query(...),owner:str=Query(...),twilio
     ok = create_business(biz_id,name,owner,twilio,extra_phones=extra_phones,email=email,website_url=website)
     if not ok: return {"error":"Already exists or number in use"}
     msg = WELCOME_MSG.format(name=name,twilio=twilio)
-    for p in get_alert_phones({"owner_phone":owner,"alert_phones":f"{owner},{extra_phones}" if extra_phones else owner}): send_sms(p,msg,from_number=twilio)
+    for p in get_alert_phones({"owner_phone":owner,"alert_phones":f"{owner},{extra_phones}" if extra_phones else owner}): send_sms(p,msg,)
     return {"success":True,"business_id":biz_id,"name":name}
 
 @app.get("/admin/welcome")
@@ -737,7 +765,7 @@ def admin_welcome(key:str=Query(...),biz_id:str=Query(...)):
     with get_db() as c: biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
     if not biz: return {"error":"Not found"}
     msg = WELCOME_MSG.format(name=biz["name"],twilio=biz["twilio_number"])
-    for p in get_alert_phones(biz): send_sms(p,msg,from_number=biz["twilio_number"])
+    for p in get_alert_phones(biz): send_sms(p,msg)
     return {"success":True}
 
 @app.get("/admin/list")
@@ -764,7 +792,7 @@ def admin_ui(key:str=Query("")):
     pending_rows = ""
     for p in pending:
         ts = p["created_at"][:16].replace("T"," ") + " UTC"
-        pending_rows += f'<tr><td style="padding:12px 16px;font-weight:600">{p["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{p["owner_phone"]}</td><td style="padding:12px 16px;font-size:13px;color:#555">{p["email"] or "—"}</td><td style="padding:12px 16px;font-size:13px;color:#555">{p["area_code"] or "—"}</td><td style="padding:12px 16px;font-size:12px;color:#999">{ts}</td></tr>'
+        pending_rows += f'<tr><td style="padding:12px 16px;font-weight:600">{p["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{p["owner_phone"]}</td><td style="padding:12px 16px;font-size:13px;color:#555">{p["email"] or "—"}</td><td style="padding:12px 16px;font-size:13px;font-family:monospace;color:#ea580c;font-weight:600">—</td><td style="padding:12px 16px;font-size:12px;color:#999">{ts}</td></tr>'
     pending_count = len(pending)
     pending_badge = f' <span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;vertical-align:middle">{pending_count}</span>' if pending_count else ""
     if not pending_rows:
@@ -775,7 +803,7 @@ def admin_ui(key:str=Query("")):
     rows = ""
     for b in businesses:
         s = get_stats(b["id"])
-        rows += f'<tr><td style="padding:12px 16px;font-weight:600">{b["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{b["twilio_number"]}</td><td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td><td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td><td style="padding:12px 16px"><a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a><a href="#" onclick="if(confirm(\'Remove?\'))location.href=\'/admin/remove?key={key}&biz_id={b["id"]}\';return false" style="color:#dc2626;font-size:13px">Remove</a></td></tr>'
+        rows += f'<tr><td style="padding:12px 16px;font-weight:600">{b["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td><td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td><td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td><td style="padding:12px 16px"><a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a><a href="#" onclick="if(confirm(\'Remove?\'))location.href=\'/admin/remove?key={key}&biz_id={b["id"]}\';return false" style="color:#dc2626;font-size:13px">Remove</a></td></tr>'
     if not rows: rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
@@ -791,7 +819,7 @@ def admin_ui(key:str=Query("")):
         <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th>
         <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Phone</th>
         <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Email</th>
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Area Code</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Biz Code</th>
         <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Signed Up</th>
       </tr></thead>
       <tbody>{pending_rows}</tbody>
@@ -803,7 +831,7 @@ def admin_ui(key:str=Query("")):
     <table style="width:100%;border-collapse:collapse;font-size:14px">
       <thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc">
         <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th>
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Number</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Code</th>
         <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Msgs</th>
         <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th>
         <th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th>
@@ -817,31 +845,171 @@ def admin_ui(key:str=Query("")):
 
 
 # --- SMS Incoming ---
-@app.post("/sms/incoming")
-async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
+
+
+# ─── Asset generation: QR PNG + Sign PDF ─────────────────────────────────────
+
+def _make_qr_pil(url: str, size_px: int = 1000):
+    """Return a PIL Image of a plain white-background QR code."""
+    import qrcode as _qrcode
+    from PIL import Image as _Image
+    qr = _qrcode.QRCode(
+        error_correction=_qrcode.constants.ERROR_CORRECT_H,
+        box_size=10, border=4,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    return img.resize((size_px, size_px), _Image.LANCZOS)
+
+
+def _make_qr_png_bytes(business_code: str) -> bytes:
+    """1000×1000 plain white QR PNG, no branding."""
+    import io as _io
+    base = os.getenv("BASE_URL", "https://hotlinetxt.com")
+    url = f"{base}/b/{business_code.lower()}"
+    buf = _io.BytesIO()
+    _make_qr_pil(url).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _make_sign_pdf_bytes(business_code: str) -> bytes:
+    """
+    5.5 × 8.5 inch dark-background branded sign PDF.
+    No phone number — QR only.
+    """
+    import io as _io
+    from reportlab.lib import colors as _colors
+    from reportlab.pdfgen import canvas as _canvas
+    from reportlab.lib.utils import ImageReader as _ImageReader
+
+    base = os.getenv("BASE_URL", "https://hotlinetxt.com")
+    url = f"{base}/b/{business_code.lower()}"
+
+    # Build QR image bytes for ReportLab
+    qr_pil = _make_qr_pil(url, size_px=800)
+    qr_buf = _io.BytesIO()
+    qr_pil.save(qr_buf, format="PNG")
+    qr_buf.seek(0)
+    qr_reader = _ImageReader(qr_buf)
+
+    BRAND_ORANGE = _colors.HexColor("#EA580C")
+    BRAND_DARK   = _colors.HexColor("#1A1A1A")
+    BRAND_WHITE  = _colors.white
+
+    PAGE_W, PAGE_H = 5.5 * 72, 8.5 * 72   # half-letter portrait
+    pdf_buf = _io.BytesIO()
+    c = _canvas.Canvas(pdf_buf, pagesize=(PAGE_W, PAGE_H))
+
+    # Background
+    c.setFillColor(BRAND_DARK)
+    c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
+
+    # Headline
+    c.setFillColor(BRAND_WHITE)
+    c.setFont("Helvetica-Bold", 34)
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 60, "Something")
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 100, "wrong?")
+
+    # Subhead
+    c.setFillColor(_colors.HexColor("#AAAAAA"))
+    c.setFont("Helvetica", 14)
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 130, "Scan to send us a private message.")
+
+    # QR white card + image
+    qr_size = 220
+    qr_x = (PAGE_W - qr_size) / 2
+    qr_y = PAGE_H - 130 - 24 - qr_size
+    pad = 14
+    c.setFillColor(BRAND_WHITE)
+    c.roundRect(qr_x - pad, qr_y - pad, qr_size + pad * 2, qr_size + pad * 2, 14, fill=1, stroke=0)
+    c.drawImage(qr_reader, qr_x, qr_y, width=qr_size, height=qr_size)
+
+    # "Scan" label
+    c.setFillColor(_colors.HexColor("#CCCCCC"))
+    c.setFont("Helvetica-Bold", 13)
+    c.drawCentredString(PAGE_W / 2, qr_y - pad - 22, "Scan this QR code")
+
+    # Orange divider
+    div_y = qr_y - pad - 50
+    c.setStrokeColor(BRAND_ORANGE)
+    c.setLineWidth(2)
+    c.line(PAGE_W * 0.2, div_y, PAGE_W * 0.8, div_y)
+
+    # Business code hint
+    c.setFillColor(_colors.HexColor("#666666"))
+    c.setFont("Helvetica", 10)
+    c.drawCentredString(PAGE_W / 2, div_y - 18, f"Code: {business_code.upper()}")
+
+    # Footer: H box + HOTLINE wordmark
+    footer_y = 30
+    box_w, box_h = 20, 20
+    box_x = PAGE_W / 2 - 50
+    c.setFillColor(BRAND_ORANGE)
+    c.roundRect(box_x, footer_y, box_w, box_h, 3, fill=1, stroke=0)
+    c.setFillColor(BRAND_WHITE)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawCentredString(box_x + box_w / 2, footer_y + 5, "H")
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(box_x + box_w + 7, footer_y + 4, "HOTLINE")
+
+    c.setFillColor(_colors.HexColor("#555555"))
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(PAGE_W / 2, footer_y - 14, "HotlineTXT.com")
+
+    c.save()
+    return pdf_buf.getvalue()
+
+
+@app.get("/signs/{business_code}.pdf")
+def sign_pdf(business_code: str):
     _ensure_init()
-    sender, body, twilio_num = From.strip(), Body.strip(), To.strip()
-    logger.info(f"[INCOMING] From={sender} To={twilio_num} Body={body[:80]!r}")
-
-    owner_biz = get_business_by_owner(sender)
-    if owner_biz:
-        logger.info(f"[OWNER CMD] biz={owner_biz['id']} cmd={body!r}")
-        resp = handle_owner_command(body, owner_biz, sender_phone=sender)
-        if not resp: return _twiml("")
-        return _twiml(resp)
-
-    biz = get_business_by_twilio(twilio_num)
+    code = business_code.upper().strip()
+    biz = get_business_by_code(code)
     if not biz:
-        # Log all registered businesses to help diagnose mismatch
-        all_biz = get_all_businesses()
-        logger.error(f"[NO BIZ] No business found for Twilio number {twilio_num!r}. Registered: {[(b['id'], b['twilio_number']) for b in all_biz]}")
-        return _twiml("Thanks for reaching out. We've received your message.")
+        return Response(content="Business not found", status_code=404)
+    try:
+        pdf_bytes = _make_sign_pdf_bytes(code)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename=hotline-sign-{code}.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"Sign PDF generation failed for {code}: {e}")
+        return Response(content="PDF generation error", status_code=500)
 
-    website_info = biz.get("website_info","")
+
+@app.get("/qr/{business_code}.png")
+def qr_png(business_code: str):
+    _ensure_init()
+    code = business_code.upper().strip()
+    biz = get_business_by_code(code)
+    if not biz:
+        return Response(content="Business not found", status_code=404)
+    try:
+        png_bytes = _make_qr_png_bytes(code)
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={"Content-Disposition": f"inline; filename=hotline-qr-{code}.png"}
+        )
+    except Exception as e:
+        logger.error(f"QR PNG generation failed for {code}: {e}")
+        return Response(content="QR generation error", status_code=500)
+
+def _parse_business_code_from_body(body: str):
+    """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
+    m = re.search(r"\bBC\d{4}\b", body.upper())
+    return m.group(0) if m else None
+
+def _process_customer_message(biz, sender, body):
+    """Classify + alert for a customer message. Returns TwiML auto-reply."""
+    website_info = biz.get("website_info", "")
     c = classify_message(body, website_info=website_info)
     msg_id = store_message(biz["id"], sender, body, c)
-    tier, conf, summary = c["tier"], c["confidence"], c.get("summary","Issue reported")
-    cat = c.get("category","other")
+    tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
+    cat = c.get("category", "other")
 
     alert_phones = get_alert_phones(biz)
     should_alert_t3 = biz.get("alert_tier3") and tier == 3 and conf > 0.5
@@ -849,27 +1017,57 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     silenced = is_alerts_silenced(biz)
     recent_count = get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW)
 
-    logger.info(f"[CLASSIFY] tier={tier} conf={conf:.2f} cat={cat} summary={summary!r}")
-    logger.info(f"[ALERT?] should_alert={should_alert} phones={alert_phones} silenced={silenced} rate_count={recent_count}/{RATE_LIMIT_MAX}")
+    logger.info(f"[CLASSIFY] biz={biz['id']} tier={tier} conf={conf:.2f} cat={cat} summary={summary!r}")
 
     if alert_phones and should_alert and not (silenced and tier != 1):
         if recent_count < RATE_LIMIT_MAX:
-            if tier == 1: alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply: DETAILS"
-            elif cat == "inquiry": alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond"
-            else: alert = f"\u26a0\ufe0f Issue reported: {summary}\nReply OK to acknowledge"
+            if tier == 1:
+                alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply: DETAILS"
+            elif cat == "inquiry":
+                alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond"
+            else:
+                alert = f"\u26a0\ufe0f Issue reported: {summary}\nReply OK to acknowledge"
             for p in alert_phones:
-                ok = send_sms(p, alert, from_number=biz["twilio_number"])
+                ok = send_sms(p, alert)   # uses shared number via _twilio_from
                 logger.info(f"[ALERT SENT] to={p} ok={ok} msg={alert!r}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
             set_context(biz["id"], msg_id)
         else:
             logger.warning(f"[RATE LIMITED] {biz['id']} hit {recent_count} alerts in {RATE_LIMIT_WINDOW}min window")
-    else:
-        if not should_alert: logger.info(f"[NO ALERT] tier={tier} conf={conf:.2f} below threshold (need tier<=2 + conf>0.7)")
-        if not alert_phones: logger.error(f"[NO ALERT] No alert phones for biz {biz['id']!r} owner={biz.get('owner_phone')!r} alert_phones={biz.get('alert_phones')!r}")
 
-    auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
-    return _twiml(auto_reply)
+    return c.get("auto_reply") or "Thanks for reaching out. We've received your message."
+
+
+@app.post("/sms/incoming")
+async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
+    _ensure_init()
+    sender, body = From.strip(), Body.strip()
+    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r}")
+
+    # 1. Check if sender is a registered owner/alert-phone
+    owner_biz = get_business_by_owner(sender)
+    if owner_biz:
+        logger.info(f"[OWNER CMD] biz={owner_biz['id']} cmd={body!r}")
+        resp = handle_owner_command(body, owner_biz, sender_phone=sender)
+        if not resp: return _twiml("")
+        return _twiml(resp)
+
+    # 2. Try to parse a BC#### code from the message body
+    code = _parse_business_code_from_body(body)
+    if code:
+        biz = get_business_by_code(code)
+        if biz:
+            # Strip the code prefix so classification sees clean message
+            clean_body = re.sub(r"(?i)^hotline\s+BC\d{4}\s*", "", body).strip() or body
+            auto_reply = _process_customer_message(biz, sender, clean_body)
+            return _twiml(auto_reply)
+        else:
+            logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
+            return _twiml("Thanks for reaching out. We couldn't find that business code.")
+
+    # 3. No code — generic fallback (shouldn't happen in QR flow, but handle gracefully)
+    logger.info(f"[NO CODE] No BC code found in message from {sender}")
+    return _twiml("Thanks for reaching out. To contact a business, please scan their QR code.")
 
 def _twiml(msg):
     return Response(content='<?xml version="1.0" encoding="UTF-8"?><Response><Message>'+msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")+'</Message></Response>', media_type="application/xml")
@@ -1030,7 +1228,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 """ + NAV_HTML + """
 <div class="top">
 <h1>You can't be everywhere.<br><em>Now you don't have to be.</em></h1>
-<p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
+<p class="sub">Customers scan. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px">No app. No software. No setup. No training.</p>
 <div class="examples"><p style="font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:10px">See it in action \u2014 try a real scenario or enter your own:</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">There's water all over the bathroom floor</div>
@@ -1142,7 +1340,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">Hotline works through SMS \u2014 no app to install, no dashboard to learn, no training for your team.</p>
 </div>
 <div class="steps">
-<div class="step"><div class="step-num">1</div><div><strong>Display your number</strong><p>Post it in your business \u2014 bathroom, counter, front door, receipt. Customers text directly when something's wrong, or scan a QR code.</p></div></div>
+<div class="step"><div class="step-num">1</div><div><strong>Display your QR code</strong><p>Print your sign and post it in your business \u2014 bathroom, counter, front door, table. Customers scan when something's wrong.</p></div></div>
 <div class="step"><div class="step-num">2</div><div><strong>AI reads every message</strong><p>Emergencies, operational issues, complaints, compliments, questions \u2014 each one is triaged instantly and the customer gets an appropriate response.</p></div></div>
 <div class="step"><div class="step-num">3</div><div><strong>You get alerted by text</strong><p>Only for things that actually need your attention. Reply OK to acknowledge, or REPLY to respond directly to the customer. Everything else stays quiet.</p></div></div>
 </div>
@@ -1272,8 +1470,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
-<h1>Get your business number</h1>
-<p class="sub">No app. No software. No training required. Get your number in 30 seconds and start receiving alerts immediately.</p>
+<h1>Get your QR code</h1>
+<p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready sign instantly.</p>
 <div class="card">
 <div class="trial">14-day free trial &middot; No credit card required</div>
 <div class="result" id="result"></div>
@@ -1282,7 +1480,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Partner or manager phone (optional)</label><input type="tel" id="f-phone2" placeholder="(727) 555-5678">
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
-<label>Preferred area code (optional)</label><input type="text" id="f-area" placeholder="727" maxlength="3" style="width:100px">
+
 
 <!-- ============================================================
      TWILIO COMPLIANCE — SMS OPT-IN DISCLOSURE — DO NOT REMOVE
@@ -1300,12 +1498,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
      END TWILIO COMPLIANCE BLOCK
      ============================================================ -->
 
-<button class="btn" id="f-btn" onclick="signup()">Get my number &rarr;</button>
+<button class="btn" id="f-btn" onclick="signup()">Get my QR code &rarr;</button>
 </div>
 <div class="steps">
-<div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get your unique number in seconds</p></div>
-<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Post a sign, sticker, or add to receipts</p></div>
-<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>AI reads every text and alerts you instantly</p></div>
+<div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get your QR code and sign in seconds</p></div>
+<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Print your sign and post it in your business</p></div>
+<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>Customers scan, AI filters, you get alerted</p></div>
 </div>
 </div>
 <footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
@@ -1316,7 +1514,6 @@ async function signup(){
   let phone2=document.getElementById('f-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
   const email=document.getElementById('f-email').value.trim();
   const url=document.getElementById('f-url').value.trim();
-  const area=document.getElementById('f-area').value.trim();
   const res=document.getElementById('result');
   const btn=document.getElementById('f-btn');
 
@@ -1331,10 +1528,10 @@ async function signup(){
   if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
   if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
-  try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,area_code:area})});const d=await r.json();
+  try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url})});const d=await r.json();
   if(d.success){
-    if(d.waitlisted){res.className='result ok';res.innerHTML="<strong>You're on the list!</strong><br><br>We'll text you as soon as the service is live.";}
-    else{res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Your number: <strong>'+d.twilio_number+'</strong><br><br>Welcome text sent. Display this number in your business and customers can start texting.';}
+    if(d.waitlisted){res.className='result ok';res.innerHTML="<strong>You're on the list!</strong><br><br>We'll text you as soon as your account is ready.";}
+    else{res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your texts for your sign PDF and QR code image.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign →</a>';}
     res.style.display='block';btn.textContent='Done!'}
   else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
   catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}
@@ -1523,50 +1720,68 @@ async def signup_create(request_data:dict=None):
     phone2 = (request_data.get("phone2") or "").strip()
     email = (request_data.get("email") or "").strip()
     website_url = (request_data.get("website_url") or "").strip()
-    area_code = (request_data.get("area_code") or "").strip()
     if not name: return {"error":"Business name required"}
     if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
 
-    # --- Attempt full Twilio provisioning ---
+    base = os.getenv("BASE_URL", "https://hotlinetxt.com")
+
+    # Build business ID
     biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
     with get_db() as c:
         if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
             biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
-    twilio_number = buy_twilio_number(area_code=area_code, webhook_url="https://hotlinetxt.com/sms/incoming")
 
-    if twilio_number:
-        # Provisioning succeeded — full signup flow
-        extra = phone2 if phone2 and phone2.startswith("+") else ""
-        ok = create_business(biz_id, name, phone, twilio_number, extra_phones=extra, email=email, website_url=website_url)
-        if not ok: return {"error":"Could not create business."}
-        msg = WELCOME_MSG.format(name=name, twilio=twilio_number)
-        send_sms(phone, msg, from_number=twilio_number)
-        if extra: send_sms(extra, msg, from_number=twilio_number)
-        logger.info(f"Signup: {name} ({biz_id}) -> {twilio_number}")
-        return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"twilio_number":twilio_number}
+    extra = phone2 if phone2 and phone2.startswith("+") else ""
+    business_code = create_business(biz_id, name, phone, "", extra_phones=extra, email=email, website_url=website_url)
+    if not business_code:
+        # Possibly duplicate — save to waitlist
+        logger.warning(f"create_business failed for {name} ({phone}) — saving to waitlist")
+        save_pending_signup(name, phone, phone2, email, website_url)
+        ts = datetime.now(timezone.utc).strftime("%b %d, %Y at %I:%M %p UTC")
+        email_html = f"""<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px">
+          <h2 style="color:#ea580c;margin:0 0 16px">New Waitlist Signup</h2>
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <tr><td style="padding:8px 0;color:#888;width:120px">Name</td><td style="padding:8px 0;font-weight:600">{name}</td></tr>
+            <tr><td style="padding:8px 0;color:#888">Phone</td><td style="padding:8px 0;font-family:monospace">{phone}</td></tr>
+            <tr><td style="padding:8px 0;color:#888">Email</td><td style="padding:8px 0">{email or "—"}</td></tr>
+            <tr><td style="padding:8px 0;color:#888">Website</td><td style="padding:8px 0">{website_url or "—"}</td></tr>
+            <tr><td style="padding:8px 0;color:#888">Time</td><td style="padding:8px 0">{ts}</td></tr>
+          </table>
+          <p style="margin:24px 0 0;font-size:13px;color:#aaa">View at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a></p>
+        </div>"""
+        send_email("Connect@HotlineTXT.com", f"New waitlist signup: {name}", email_html)
+        return {"success":True,"waitlisted":True,"name":name,"owner_phone":phone}
 
-    # --- Provisioning failed — save to waitlist ---
-    logger.warning(f"Twilio provisioning failed for {name} ({phone}) — saving to waitlist")
-    save_pending_signup(name, phone, phone2, email, website_url, area_code)
+    # Send welcome + asset links
+    welcome = WELCOME_MSG.format(name=name)
+    send_sms(phone, welcome)
+    if extra: send_sms(extra, welcome)
 
-    # Notify admin by email
+    asset_msg = (
+        f"Your Hotline assets for {name}:\n"
+        f"Print-ready sign: {base}/signs/{business_code}.pdf\n"
+        f"Plain QR image (custom signage): {base}/qr/{business_code}.png"
+    )
+    send_sms(phone, asset_msg)
+    if extra: send_sms(extra, asset_msg)
+
+    logger.info(f"Signup: {name} ({biz_id}) code={business_code}")
+
+    # Notify admin
     ts = datetime.now(timezone.utc).strftime("%b %d, %Y at %I:%M %p UTC")
-    email_html = f"""
-    <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px">
-      <h2 style="color:#ea580c;margin:0 0 16px">New Waitlist Signup</h2>
+    email_html = f"""<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px">
+      <h2 style="color:#ea580c;margin:0 0 16px">New Hotline Signup</h2>
       <table style="width:100%;border-collapse:collapse;font-size:14px">
-        <tr><td style="padding:8px 0;color:#888;width:120px">Name</td><td style="padding:8px 0;font-weight:600">{name}</td></tr>
+        <tr><td style="padding:8px 0;color:#888;width:140px">Business</td><td style="padding:8px 0;font-weight:600">{name}</td></tr>
         <tr><td style="padding:8px 0;color:#888">Phone</td><td style="padding:8px 0;font-family:monospace">{phone}</td></tr>
-        <tr><td style="padding:8px 0;color:#888">Phone 2</td><td style="padding:8px 0;font-family:monospace">{phone2 or '—'}</td></tr>
-        <tr><td style="padding:8px 0;color:#888">Email</td><td style="padding:8px 0">{email or '—'}</td></tr>
-        <tr><td style="padding:8px 0;color:#888">Website</td><td style="padding:8px 0">{website_url or '—'}</td></tr>
-        <tr><td style="padding:8px 0;color:#888">Area Code</td><td style="padding:8px 0">{area_code or '—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Business Code</td><td style="padding:8px 0;font-family:monospace;font-weight:700;color:#ea580c">{business_code}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Email</td><td style="padding:8px 0">{email or "—"}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Website</td><td style="padding:8px 0">{website_url or "—"}</td></tr>
         <tr><td style="padding:8px 0;color:#888">Time</td><td style="padding:8px 0">{ts}</td></tr>
       </table>
-      <p style="margin:24px 0 0;font-size:13px;color:#aaa">
-        View all pending signups at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a>
-      </p>
+      <p style="margin:16px 0 0;font-size:13px"><a href="{base}/signs/{business_code}.pdf" style="color:#ea580c">Sign PDF</a> &nbsp;|&nbsp; <a href="{base}/qr/{business_code}.png" style="color:#ea580c">QR PNG</a></p>
     </div>"""
-    send_email("Connect@HotlineTXT.com", f"New waitlist signup: {name}", email_html)
+    send_email("Connect@HotlineTXT.com", f"New signup: {name} ({business_code})", email_html)
 
-    return {"success":True,"waitlisted":True,"name":name,"owner_phone":phone}
+    return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"business_code":business_code,
+            "sign_url":f"{base}/signs/{business_code}.pdf","qr_url":f"{base}/qr/{business_code}.png"}
