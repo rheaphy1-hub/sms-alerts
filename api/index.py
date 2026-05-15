@@ -508,7 +508,7 @@ def handle_owner_command(text, business, sender_phone=""):
         msg = get_message_by_id(reply_mid)
         if msg:
             send_sms(msg["from_number"], raw)
-            return f"Reply sent to {_fmt_phone_short(msg['from_number'])}."
+            return f"Reply sent to customer."
         return "Could not find the original message."
 
     # ── OK #N — acknowledge a specific alert by ID ────────────────────────────
@@ -552,11 +552,14 @@ def handle_owner_command(text, business, sender_phone=""):
         return f"\u2705 Alert #{msg['id']} acknowledged.\n\"{msg['message_text'][:80]}\""
 
     if cmd == "HELP":
-        return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Acknowledge alert\n"
-                "OK 2 \u2014 Acknowledge specific alert\nREPLY \u2014 Reply to customer\n"
+        return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Close/acknowledge alert\n"
+                "OK 2 \u2014 Acknowledge specific alert\nREPLY \u2014 Reply to customer (privately)\n"
+                "SNOOZE \u2014 Revisit latest alert in 1hr\nSNOOZE 2H \u2014 Revisit in X hours\n"
                 "LIST \u2014 Flagged issues\nLIST ALL \u2014 All messages\n"
-                "STATUS \u2014 Alert status\nALERTS ALL \u2014 Get Tier 2+3 alerts\nALERTS CRITICAL \u2014 Tier 2 only\n"
-                "MUTE 2H \u2014 Silence alerts\nPAUSE / RESUME\n"
+                "STATUS \u2014 Alert status + preference\n"
+                "ALERTS \u2014 View/change alert level\n"
+                "TIER2 \u2014 Critical issues only\nTIER3 \u2014 Add reputation alerts\n"
+                "QUIET 2H \u2014 Silence alerts for X hours\nPAUSE / RESUME\n"
                 "DIGEST DAILY / WEEKLY\nHELP \u2014 This message")
 
     if cmd == "REPLY":
@@ -568,7 +571,7 @@ def handle_owner_command(text, business, sender_phone=""):
             msg = recent[0] if recent else None
         if not msg: return "No messages to reply to."
         set_reply_mode(bid, msg["id"])
-        return f"Replying to {_fmt_phone_short(msg['from_number'])} re: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
+        return f"Replying to customer re: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
 
     if cmd == "DETAILS":
         ctx_id = get_context(bid)
@@ -581,8 +584,8 @@ def handle_owner_command(text, business, sender_phone=""):
         set_context(bid, msg["id"])
         ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
         return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'])}\n"
-                f"Category: {msg['category']}\nFrom: {_fmt_phone_short(msg['from_number'])}\n"
-                f"Message: \"{msg['message_text']}\"\nReply OK to acknowledge or REPLY to respond.")
+                f"Category: {msg['category']}\n"
+                f"Message: \"{msg['message_text']}\"\nReply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.")
 
     if cmd == "LIST ALL":
         msgs = get_recent_all(bid, 5)
@@ -618,21 +621,51 @@ def handle_owner_command(text, business, sender_phone=""):
         unacked = sum(1 for m in get_recent_flagged(bid, 20) if not m["acknowledged"])
         t3 = "on" if business.get("alert_tier3") else "off"
         unacked_str = f"\n{unacked} unacknowledged alert(s) \u2014 reply LIST" if unacked else ""
-        return f"\U0001f514 Alerts ON for {name}.\nTier 3 alerts: {t3}{unacked_str}"
+        t3_label = "Tier 2 + Tier 3 (all)" if business.get("alert_tier3") else "Tier 2 critical only"
+        return f"\U0001f514 Alerts ON for {name}.\nAlert level: {t3_label}{unacked_str}\nReply ALERTS to change."
 
-    if cmd == "ALERTS ALL": set_alert_tier3(bid, True); return "You'll now receive Tier 3 (reputation risk) alerts too."
-    if cmd == "ALERTS CRITICAL": set_alert_tier3(bid, False); return "Tier 3 alerts off. You'll only get critical (Tier 2) and emergency alerts."
+    if cmd == "ALERTS":
+        t3 = "on (Tier 2 + Tier 3)" if business.get("alert_tier3") else "off (Tier 2 critical only)"
+        return (f"\U0001f514 Alert level: {t3}\n\n"
+                "Reply TIER2 \u2014 Critical issues only\n"
+                "Reply TIER3 \u2014 Also get reputation/feedback alerts")
+    if cmd in ("TIER2", "ALERTS CRITICAL"): set_alert_tier3(bid, False); return "\U0001f534 Critical only. You'll get Tier 2 (operations, equipment, staffing) and emergencies.\nReply TIER3 to also get reputation alerts."
+    if cmd in ("TIER3", "ALERTS ALL"): set_alert_tier3(bid, True); return "\U0001f7e1 All alerts on. You'll now also get Tier 3 reputation/feedback messages.\nReply TIER2 to go back to critical only."
+
     if cmd == "PAUSE": set_paused(bid, True); return "\U0001f4f4 Alerts PAUSED. Reply RESUME to turn back on."
     if cmd == "RESUME": set_paused(bid, False); set_muted_until(bid, None); return "\U0001f514 Alerts resumed."
     if cmd == "DIGEST DAILY": set_digest_freq(bid, "daily"); return "\U0001f4e7 Digest set to daily."
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
 
+    if cmd.startswith("SNOOZE"):
+        ctx_id = get_context(bid)
+        msg = get_message_by_id(ctx_id) if ctx_id else None
+        if not msg: msg = get_latest_unacked(bid)
+        if not msg: return "No active alert to snooze."
+        m = re.match(r"SNOOZE\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
+        if m:
+            amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
+            if unit == "M": delta = timedelta(minutes=max(1,min(1440,amt))); label = f"{amt}m"
+            else: delta = timedelta(hours=max(1,min(72,amt))); label = f"{amt}h"
+        else:
+            delta = timedelta(hours=1); label = "1hr"
+        snooze_until = datetime.now(timezone.utc) + delta
+        set_context(bid, msg["id"])
+        return f"\u23f0 Snoozed. Alert #{msg['id']} will remind you in {label}.\n\"{msg['message_text'][:60]}\""
+
+    if cmd.startswith("QUIET"):
+        m = re.match(r"QUIET\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
+        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 Quiet for 1hr. Reply RESUME to unmute."
+        amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
+        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Quiet for {amt}m. Reply RESUME to unmute."
+        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Quiet for {amt}h. Reply RESUME to unmute."
+
     if cmd.startswith("MUTE"):
         m = re.match(r"MUTE\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
-        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 No duration given \u2014 muted 1 hour. Reply RESUME to unmute."
+        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 Quiet for 1hr. Reply RESUME to unmute. (Tip: use QUIET 2H to set duration)"
         amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
-        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Muted {amt}m. Reply RESUME to unmute."
-        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Muted {amt}h. Reply RESUME to unmute."
+        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Quiet for {amt}m. Reply RESUME to unmute."
+        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Quiet for {amt}h. Reply RESUME to unmute."
 
     if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED"]): return ""
     return f"Unknown: \"{raw[:20]}\"\nReply HELP for commands."
@@ -743,21 +776,18 @@ def _ensure_init():
     except Exception as e: logger.warning(f"backfill_business_codes: {e}")
     _initialized = True
 
-WELCOME_MSG = """Welcome to {name} on Hotline!
+WELCOME_MSG = """Welcome to {name} on Hotline! \U0001f4f2
 
 Your sign + QR code links are on the way in a separate text.
 Customers scan the QR to send you private feedback.
 
-Commands:
-DETAILS \u2014 View latest alert
-OK \u2014 Acknowledge
-REPLY \u2014 Reply to customer
-LIST \u2014 Flagged issues
-LIST ALL \u2014 All messages
-STATUS \u2014 Alert status
-ALERTS ALL \u2014 Include reputation alerts
-MUTE 2H \u2014 Silence alerts
-PAUSE / RESUME
+Quick commands:
+OK \u2014 Close an alert
+REPLY \u2014 Respond to a customer
+SNOOZE \u2014 Revisit in 1 hour
+QUIET 2H \u2014 Silence alerts
+DETAILS \u2014 Full alert info
+STATUS \u2014 Your current settings
 HELP \u2014 Full command list
 
 Emergencies always get through."""
@@ -1352,11 +1382,12 @@ def _process_customer_message(biz, sender, body):
     if alert_phones and should_alert and not (silenced and tier != 1):
         if recent_count < RATE_LIMIT_MAX:
             if tier == 1:
-                alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply: DETAILS"
+                alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply DETAILS for full message."
             elif cat == "inquiry":
-                alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond"
+                alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond or OK to close."
             else:
-                alert = f"\u26a0\ufe0f Issue reported: {summary}\nReply OK to acknowledge"
+                tier_label = "⚠️ Issue" if tier == 2 else "💬 Feedback"
+                alert = f"{tier_label}: {summary}\nReply OK to close · REPLY to respond · SNOOZE to revisit in 1hr"
             for p in alert_phones:
                 ok = send_sms(p, alert)   # uses shared number via _twilio_from
                 logger.info(f"[ALERT SENT] to={p} ok={ok} msg={alert!r}")
@@ -1572,10 +1603,10 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1>You can't be everywhere.<br><em>Now you don't have to be.</em></h1>
+<h1>Know when your business needs you.<br><em>AI handles the rest.</em></h1>
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
-<p style="font-size:13px;color:#aaa;margin-bottom:8px">No app. No software. No setup. No training.</p>
-<div class="examples"><p style="font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:10px">See it in action \u2014 try a real scenario or enter your own:</p><div class="ex-row">
+<p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#888;font-weight:700">No app. No software. No setup. No training.</strong></p>
+<div class="examples"><p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">There's water all over the bathroom floor</div>
 <div class="ex" onclick="tryEx(this)">I've been waiting 25 minutes, nobody's helped me</div>
 <div class="ex" onclick="tryEx(this)">The front door is locked and there's a line outside</div>
@@ -1599,6 +1630,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
 <div class="phone-label-bar owner">Owner</div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;color:#aaa;gap:6px"><span style="font-weight:600;color:#888;white-space:nowrap">Alert level:</span><div style="display:flex;gap:4px"><button class="filter-btn active" id="filt-crit" onclick="setFilter('critical')" style="font-size:10px;padding:3px 10px;border-radius:4px">🔴 Critical only</button><button class="filter-btn" id="filt-all" onclick="setFilter('all')" style="font-size:10px;padding:3px 10px;border-radius:4px">📋 All messages</button></div></div>
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
 <div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
@@ -1612,10 +1644,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div><div class="home-bar"></div>
 </div></div>
 </div>
-<div class="pref-bar"><span class="pref-label">Owner notification preference:</span>
-<button class="filter-btn" id="filt-crit" onclick="setFilter('critical')">Critical only</button>
-<button class="filter-btn" id="filt-all" onclick="setFilter('all')">All messages</button>
-</div>
+
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 
@@ -1631,11 +1660,11 @@ function setFilter(mode){filterMode=mode;document.getElementById('filt-all').cla
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 
 (function(){document.getElementById('filt-crit').classList.add('active')})();function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
-if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to (555) 867-5309.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
+if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to the customer.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
 addB(mo,'cmd','',raw.trim());
 if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nFrom: (555) 867-5309\\nMessage: "'+d.original_message+'"\\nReply OK or REPLY to respond.');return}
-if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to reply to (555) 867-5309? Type your message now.');inp.placeholder='Type your reply...';inp.focus();return}
+if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nMessage: "'+d.original_message+'"\\nReply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.');return}
+if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to say to the customer? Type your reply now.');inp.placeholder='Type your reply...';inp.focus();return}
 if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
 addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
 async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
@@ -2101,6 +2130,15 @@ async def signup_create(request_data:dict=None):
     welcome = WELCOME_MSG.format(name=name)
     send_sms(phone, welcome)
     if extra: send_sms(extra, welcome)
+
+    pref_prompt = (
+        "One quick setup \u2014 what alerts do you want?\n\n"
+        "Reply TIER2 \u2014 Critical only (equipment failures, no staff, safety issues)\n"
+        "Reply TIER3 \u2014 Everything including complaints & feedback\n\n"
+        "You can change this anytime by texting ALERTS."
+    )
+    send_sms(phone, pref_prompt)
+    if extra: send_sms(extra, pref_prompt)
 
     asset_msg = (
         f"Your Hotline assets for {name}:\n"
