@@ -1112,6 +1112,28 @@ def qr_png(business_code: str):
         logger.error(f"QR PNG generation failed for {code}: {e}")
         return Response(content="QR generation error", status_code=500)
 
+
+# ── Customer session cache ────────────────────────────────────────────────────
+# Maps customer phone → (business_id, expiry_timestamp)
+# Allows follow-up messages without a BC#### code to route correctly
+_customer_sessions: dict = {}
+SESSION_TTL_MINUTES = 30
+
+def _set_customer_session(phone: str, business_id: str):
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=SESSION_TTL_MINUTES)
+    _customer_sessions[phone] = (business_id, expiry)
+
+def _get_customer_session(phone: str):
+    """Return business_id if session exists and hasn't expired, else None."""
+    entry = _customer_sessions.get(phone)
+    if not entry:
+        return None
+    business_id, expiry = entry
+    if datetime.now(timezone.utc) > expiry:
+        del _customer_sessions[phone]
+        return None
+    return business_id
+
 def _parse_business_code_from_body(body: str):
     """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
     m = re.search(r"\bBC\d{4}\b", body.upper())
@@ -1120,37 +1142,49 @@ def _parse_business_code_from_body(body: str):
 
 def _scrub_hotline_header(body: str) -> str:
     """
-    Remove the prefilled routing header from a customer message.
+    Remove the prefilled routing header from a customer message, keeping
+    anything the customer actually typed — even if it's on the same line
+    as the placeholder (Android behaviour).
+
     Strips:
-      - Any line containing HOTLINE BC#### (including the | business name part)
-      - The [Describe the issue and hit send] placeholder line
-    Returns only what the customer actually typed.
+      - HOTLINE BC#### | Business Name  (whole line)
+      - [Describe the issue and hit send]  as a line OR as a prefix on a line
 
     Examples:
-      "HOTLINE BC4729 | Joe's Coffee\nThe bathroom is disgusting" → "The bathroom is disgusting"
-      "HOTLINE BC4729 | Joe's Coffee\n[Describe the issue and hit send]" → ""
-      "HOTLINE BC4729 waited 20 minutes"  (inline, no newline) → "waited 20 minutes"
+      "HOTLINE BC4729 | Joe's Coffee\nThe bathroom is disgusting"
+          → "The bathroom is disgusting"
+      "HOTLINE BC4729 | Joe's Coffee\n[Describe the issue and hit send]"
+          → ""  (blank — customer hit send without typing)
+      "[Describe the issue and hit send] carwash is broken"
+          → "carwash is broken"  (Android inline — placeholder + message same line)
+      "HOTLINE BC4729 waited 20 minutes"
+          → "waited 20 minutes"  (no newline, inline after code)
     """
-    # First handle inline case: HOTLINE BC#### [optional | name] then space then real message
-    # e.g. "HOTLINE BC4729 waited 20 minutes" — no newline
-    if "\n" not in body:
-        cleaned = re.sub(r"(?i)HOTLINE\s+BC\d{4}(\s*\|[^\n]*)?\s*", "", body).strip()
-        # Strip placeholder if that's all that's left
-        if re.match(r"(?i)^\[describe", cleaned):
-            return ""
-        return cleaned
-
-    # Multi-line: strip header lines
-    lines = body.splitlines()
+    lines = body.splitlines() if "\n" in body else [body]
     cleaned = []
+
     for line in lines:
         upper = line.upper().strip()
-        # Drop any line containing the HOTLINE BC#### routing token (includes | name part)
+
+        # Drop/trim lines containing the HOTLINE routing header
         if re.search(r"\bHOTLINE\s+BC\d{4}\b", upper):
+            # Keep anything after "HOTLINE BC#### | optional name" on the same line
+            remainder = re.sub(r"(?i)HOTLINE\s+BC\d{4}(\s*\|[^\n]*)?\s*", "", line).strip()
+            # Strip any trailing placeholder on the same line
+            remainder = re.sub(r"(?i)^\[describe[^\]]*\]\s*", "", remainder).strip()
+            if remainder:
+                cleaned.append(remainder)
             continue
-        # Drop the instruction placeholder
-        if re.match(r"^\[DESCRIBE", upper):
+
+        # Handle [Describe...] placeholder — strip it as a prefix, keep remainder
+        placeholder_pat = r"(?i)^\[describe[^\]]*\]\s*"
+        if re.match(placeholder_pat, line.strip()):
+            remainder = re.sub(placeholder_pat, "", line.strip()).strip()
+            if remainder:
+                cleaned.append(remainder)   # customer typed after the placeholder
+            # else: pure placeholder line, drop it entirely
             continue
+
         cleaned.append(line)
 
     return "\n".join(cleaned).strip()
@@ -1212,16 +1246,29 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
             clean_body = _scrub_hotline_header(body)
             if not clean_body:
                 # Customer scanned and hit send without typing — prompt them
-                logger.info(f"[BLANK MSG] {sender} scanned but sent no message")
-                return _twiml("We got your scan! Just type what's wrong and send it to us.")
+                # Still set the session so their follow-up routes correctly
+                _set_customer_session(sender, biz["id"])
+                logger.info(f"[BLANK MSG] {sender} → {biz['id']} — session set, awaiting message")
+                return _twiml("Got it! Now just describe what's wrong and send it to us.")
+            _set_customer_session(sender, biz["id"])
             auto_reply = _process_customer_message(biz, sender, clean_body)
             return _twiml(auto_reply)
         else:
             logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
             return _twiml("Thanks for reaching out. We couldn't find that business code.")
 
-    # 3. No code — generic fallback (shouldn't happen in QR flow, but handle gracefully)
-    logger.info(f"[NO CODE] No BC code found in message from {sender}")
+    # 3. No BC#### code — check if sender has an active session from a recent scan
+    session_biz_id = _get_customer_session(sender)
+    if session_biz_id:
+        with get_db() as conn:
+            biz = _fetchone(conn, _q("SELECT * FROM businesses WHERE id=?"), (session_biz_id,))
+        if biz:
+            logger.info(f"[SESSION] {sender} follow-up → {session_biz_id}")
+            auto_reply = _process_customer_message(biz, sender, body)
+            return _twiml(auto_reply)
+
+    # 4. No code, no session — generic fallback
+    logger.info(f"[NO CODE] No BC code or session found for {sender}")
     return _twiml("Thanks for reaching out. To contact a business, please scan their QR code.")
 
 def _twiml(msg):
