@@ -341,7 +341,7 @@ def classify_message(text, website_info=""):
             r = json.loads(raw)
             r["tier"] = max(1,min(4,int(r.get("tier",4))))
             r["confidence"] = max(0.0,min(1.0,float(r.get("confidence",0.5))))
-            for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks so much for reaching out! We've noted your message.")]:
+            for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks for reaching out. We've received your message.")]:
                 r.setdefault(k,v)
             return r
         except Exception as e: logger.error(f"AI classify failed: {e}")
@@ -381,7 +381,7 @@ def _classify_fallback(text):
         return {"tier":3,"category":"other","sentiment":"negative","confidence":0.6,"summary":"Unhappy customer feedback",
                 "auto_reply":"We're sorry to hear that. If you're willing to share more details, it helps us make it right."}
     return {"tier":4,"category":"other","sentiment":"neutral","confidence":0.5,"summary":"General message received",
-            "auto_reply":"Thanks so much for reaching out! We've noted your message."}
+            "auto_reply":"Thanks for reaching out. We've received your message."}
 
 
 # --- Owner commands ---
@@ -569,6 +569,40 @@ def root():
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
 
+@app.get("/debug/env")
+def debug_env():
+    """Show which env vars are set (values masked). Critical for diagnosing missing config."""
+    _ensure_init()
+    def _mask(v): return (v[:4]+"…"+v[-2:]) if v and len(v)>6 else ("SET" if v else "MISSING")
+    all_biz = get_all_businesses()
+    return {
+        "TWILIO_ACCOUNT_SID": _mask(os.getenv("TWILIO_ACCOUNT_SID","")),
+        "TWILIO_AUTH_TOKEN": _mask(os.getenv("TWILIO_AUTH_TOKEN","")),
+        "TWILIO_PHONE_NUMBER": os.getenv("TWILIO_PHONE_NUMBER","MISSING"),
+        "OWNER_PHONE_NUMBER": os.getenv("OWNER_PHONE_NUMBER","MISSING"),
+        "ANTHROPIC_API_KEY": _mask(os.getenv("ANTHROPIC_API_KEY","")),
+        "BUSINESS_NAME": os.getenv("BUSINESS_NAME","MISSING"),
+        "twilio_client_ready": _twilio_client is not None,
+        "ai_client_ready": _ai_client is not None,
+        "registered_businesses": [{"id":b["id"],"name":b["name"],"twilio_number":b["twilio_number"],"owner_phone":b["owner_phone"]} for b in all_biz],
+    }
+
+@app.get("/debug/sms")
+def debug_sms(from_num:str=Query("+15550001111"), body:str=Query("Bathroom is disgusting"), to_num:str=Query("")):
+    """Simulate an incoming SMS without Twilio. Useful for live testing."""
+    _ensure_init()
+    if not to_num:
+        bizzes = get_all_businesses()
+        to_num = bizzes[0]["twilio_number"] if bizzes else ""
+    import asyncio
+    result = asyncio.run(incoming_sms(From=from_num, Body=body, To=to_num))
+    # Parse TwiML response to show plain text
+    content = result.body.decode() if hasattr(result, "body") else str(result)
+    import re as _re
+    msg_match = _re.search(r"<Message>(.*?)</Message>", content, _re.DOTALL)
+    auto_reply = msg_match.group(1) if msg_match else content
+    return {"from": from_num, "to": to_num, "body": body, "auto_reply_sent": auto_reply, "twiml": content}
+
 @app.get("/debug/db")
 def debug_db():
     import traceback
@@ -696,16 +730,21 @@ def admin_ui(key:str=Query("")):
 async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     _ensure_init()
     sender, body, twilio_num = From.strip(), Body.strip(), To.strip()
-    logger.info(f"SMS from {sender}: {body[:80]}")
+    logger.info(f"[INCOMING] From={sender} To={twilio_num} Body={body[:80]!r}")
 
     owner_biz = get_business_by_owner(sender)
     if owner_biz:
+        logger.info(f"[OWNER CMD] biz={owner_biz['id']} cmd={body!r}")
         resp = handle_owner_command(body, owner_biz, sender_phone=sender)
         if not resp: return _twiml("")
         return _twiml(resp)
 
     biz = get_business_by_twilio(twilio_num)
-    if not biz: return _twiml("Thanks so much for reaching out! We've noted your message.")
+    if not biz:
+        # Log all registered businesses to help diagnose mismatch
+        all_biz = get_all_businesses()
+        logger.error(f"[NO BIZ] No business found for Twilio number {twilio_num!r}. Registered: {[(b['id'], b['twilio_number']) for b in all_biz]}")
+        return _twiml("Thanks for reaching out. We've received your message.")
 
     website_info = biz.get("website_info","")
     c = classify_message(body, website_info=website_info)
@@ -716,17 +755,30 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     alert_phones = get_alert_phones(biz)
     should_alert_t3 = biz.get("alert_tier3") and tier == 3 and conf > 0.5
     should_alert = tier == 1 or (tier == 2 and conf > 0.7) or should_alert_t3
+    silenced = is_alerts_silenced(biz)
+    recent_count = get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW)
 
-    if alert_phones and should_alert and not (is_alerts_silenced(biz) and tier != 1):
-        if get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW) < RATE_LIMIT_MAX:
+    logger.info(f"[CLASSIFY] tier={tier} conf={conf:.2f} cat={cat} summary={summary!r}")
+    logger.info(f"[ALERT?] should_alert={should_alert} phones={alert_phones} silenced={silenced} rate_count={recent_count}/{RATE_LIMIT_MAX}")
+
+    if alert_phones and should_alert and not (silenced and tier != 1):
+        if recent_count < RATE_LIMIT_MAX:
             if tier == 1: alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply: DETAILS"
             elif cat == "inquiry": alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond"
             else: alert = f"\u26a0\ufe0f Issue reported: {summary}\nReply OK to acknowledge"
-            for p in alert_phones: send_sms(p, alert, from_number=biz["twilio_number"])
+            for p in alert_phones:
+                ok = send_sms(p, alert, from_number=biz["twilio_number"])
+                logger.info(f"[ALERT SENT] to={p} ok={ok} msg={alert!r}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
             set_context(biz["id"], msg_id)
+        else:
+            logger.warning(f"[RATE LIMITED] {biz['id']} hit {recent_count} alerts in {RATE_LIMIT_WINDOW}min window")
+    else:
+        if not should_alert: logger.info(f"[NO ALERT] tier={tier} conf={conf:.2f} below threshold (need tier<=2 + conf>0.7)")
+        if not alert_phones: logger.error(f"[NO ALERT] No alert phones for biz {biz['id']!r} owner={biz.get('owner_phone')!r} alert_phones={biz.get('alert_phones')!r}")
 
-    return _twiml(c.get("auto_reply","Thanks so much for reaching out! We've noted your message."))
+    auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
+    return _twiml(auto_reply)
 
 def _twiml(msg):
     return Response(content='<?xml version="1.0" encoding="UTF-8"?><Response><Message>'+msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")+'</Message></Response>', media_type="application/xml")
