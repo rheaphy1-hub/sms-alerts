@@ -4,7 +4,8 @@ Hotline — SMS Alert System. Single-file Vercel deployment.
 import os, re, json, logging, io
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
-from fastapi import FastAPI, Form, Response, Query
+from fastapi import FastAPI, Form, Response, Query, Request
+from fastapi.responses import JSONResponse
 
 # PDF + QR generation (required at top level for Vercel to bundle correctly)
 import urllib.request as _urllib_req
@@ -20,6 +21,7 @@ except ImportError as _pdf_import_err:
     _PDF_LIBS_OK = False
     logging.getLogger("sms").warning(f"PDF/QR libs not available: {_pdf_import_err}")
 
+import hmac, hashlib, secrets, time as _time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sms")
 
@@ -671,10 +673,55 @@ RATE_LIMIT_MAX = 5; RATE_LIMIT_WINDOW = 10; _initialized = False
 _ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER",""); _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER","")
 _ENV_NAME = os.getenv("BUSINESS_NAME","MyBusiness"); _ADMIN_KEY = os.getenv("ADMIN_KEY","changeme")
 
+# ── Admin security ────────────────────────────────────────────────────────────
+_COOKIE_NAME = "htadmin"
+_COOKIE_MAX_AGE = 60 * 60 * 8          # 8-hour session
+_LOGIN_FAIL_WINDOW = 15 * 60           # 15 minutes
+_LOGIN_FAIL_MAX = 5
+_login_attempts: dict = {}             # ip -> [timestamp, ...]
+
+def _warn_weak_key():
+    if _ADMIN_KEY in ("changeme", "", "admin", "password", "hotline"):
+        logger.warning("⚠️  ADMIN_KEY is set to a weak/default value — set a strong secret in your env vars before going live")
+
+def _sign_cookie(payload: str) -> str:
+    """HMAC-SHA256 sign a payload; return payload.signature"""
+    sig = hmac.new(_ADMIN_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+def _verify_cookie(token: str) -> bool:
+    """Return True if token signature is valid and not expired."""
+    try:
+        payload, sig = token.rsplit(".", 1)
+        expected = hmac.new(_ADMIN_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return False
+        issued_at = int(payload.split(":")[1])
+        return (_time.time() - issued_at) < _COOKIE_MAX_AGE
+    except Exception:
+        return False
+
+def _check_login_rate(ip: str) -> bool:
+    """Return True if this IP is allowed to attempt login."""
+    now = _time.time()
+    attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_FAIL_WINDOW]
+    _login_attempts[ip] = attempts
+    return len(attempts) < _LOGIN_FAIL_MAX
+
+def _record_login_fail(ip: str):
+    _login_attempts.setdefault(ip, []).append(_time.time())
+
+def _get_admin_session(request) -> bool:
+    """Return True if request carries a valid admin session cookie."""
+    token = request.cookies.get(_COOKIE_NAME, "")
+    return bool(token) and _verify_cookie(token)
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _ensure_init():
     global _initialized
     if _initialized: return
     init_db(); init_classifier(); init_sms()
+    _warn_weak_key()
     if _ENV_OWNER:
         # Always upsert — env vars are the source of truth
         try:
@@ -780,24 +827,82 @@ def debug_db():
 @app.post("/digest")
 def digest_endpoint(freq: str = Query("weekly")): _ensure_init(); return {"digests_sent": send_all_digests(force_freq=freq)}
 
-# Admin routes
-@app.get("/admin/add")
-def admin_add(key:str=Query(...),name:str=Query(...),owner:str=Query(...),twilio:str=Query(...),biz_id:str=Query(""),extra_phones:str=Query(""),email:str=Query(""),website:str=Query("")):
+# ── Admin login ───────────────────────────────────────────────────────────────
+_LOGIN_PAGE = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
+<body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f8f8f6">
+<div style="text-align:center;width:320px">
+  <h2 style="font-size:22px;margin:0 0 8px">Hotline Admin</h2>
+  <p style="font-size:13px;color:#888;margin:0 0 24px">hotlinetxt.com</p>
+  <div id="err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#dc2626;font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:16px"></div>
+  <form id="f" style="display:flex;flex-direction:column;gap:10px">
+    <input id="k" type="password" placeholder="Admin key" autocomplete="current-password"
+      style="padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;width:100%;box-sizing:border-box">
+    <button type="submit"
+      style="padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Sign in</button>
+  </form>
+</div>
+<script>
+document.getElementById("f").addEventListener("submit",async function(e){
+  e.preventDefault();
+  const k=document.getElementById("k").value;
+  const r=await fetch("/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k})});
+  if(r.ok){location.href="/admin";}
+  else{const d=await r.json();const el=document.getElementById("err");el.textContent=d.error||"Invalid key";el.style.display="block";}
+});
+</script>
+</body></html>'''
+
+@app.post("/admin/login")
+async def admin_login(request: Request):
     _ensure_init()
-    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
-    owner,twilio,name = owner.strip(),twilio.strip(),name.strip()
+    req = request
+    ip = req.client.host if req.client else "unknown"
+    if not _check_login_rate(ip):
+        return JSONResponse({"error": "Too many attempts — try again in 15 minutes"}, status_code=429)
+    body = await req.json()
+    key = body.get("key", "")
+    if not hmac.compare_digest(key, _ADMIN_KEY):
+        _record_login_fail(ip)
+        logger.warning(f"[ADMIN] Failed login attempt from {ip}")
+        return JSONResponse({"error": "Invalid key"}, status_code=401)
+    # Issue signed session cookie
+    payload = f"admin:{int(_time.time())}"
+    token = _sign_cookie(payload)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(_COOKIE_NAME, token, max_age=_COOKIE_MAX_AGE, httponly=True, samesite="strict", secure=False)
+    logger.info(f"[ADMIN] Login success from {ip}")
+    return resp
+
+@app.get("/admin/logout")
+def admin_logout():
+    from fastapi.responses import RedirectResponse
+    resp = RedirectResponse("/admin", status_code=303)
+    resp.delete_cookie(_COOKIE_NAME)
+    return resp
+
+# ── Admin API routes (POST, cookie-auth) ─────────────────────────────────────
+@app.post("/admin/add")
+async def admin_add(request: Request):
+    _ensure_init()
+    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    body = await request.json()
+    name = body.get("name","").strip(); owner = body.get("owner","").strip()
+    twilio = body.get("twilio","").strip(); biz_id = body.get("biz_id","").strip()
+    extra_phones = body.get("extra_phones",""); email = body.get("email",""); website = body.get("website","")
     if not owner.startswith("+") or not twilio.startswith("+"): return {"error":"Phone numbers must start with +"}
     if not biz_id: biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
     ok = create_business(biz_id,name,owner,twilio,extra_phones=extra_phones,email=email,website_url=website)
     if not ok: return {"error":"Already exists or number in use"}
     msg = WELCOME_MSG.format(name=name,twilio=twilio)
-    for p in get_alert_phones({"owner_phone":owner,"alert_phones":f"{owner},{extra_phones}" if extra_phones else owner}): send_sms(p,msg,)
+    for p in get_alert_phones({"owner_phone":owner,"alert_phones":f"{owner},{extra_phones}" if extra_phones else owner}): send_sms(p,msg)
     return {"success":True,"business_id":biz_id,"name":name}
 
-@app.get("/admin/welcome")
-def admin_welcome(key:str=Query(...),biz_id:str=Query(...)):
+@app.post("/admin/welcome")
+async def admin_welcome(request: Request):
     _ensure_init()
-    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    body = await request.json()
+    biz_id = body.get("biz_id","")
     with get_db() as c: biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
     if not biz: return {"error":"Not found"}
     msg = WELCOME_MSG.format(name=biz["name"],twilio=biz["twilio_number"])
@@ -805,23 +910,27 @@ def admin_welcome(key:str=Query(...),biz_id:str=Query(...)):
     return {"success":True}
 
 @app.get("/admin/list")
-def admin_list(key:str=Query(...)):
+def admin_list(request: Request):
     _ensure_init()
-    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
     return {"businesses":[{"id":b["id"],"name":b["name"],"owner":b["owner_phone"],"twilio":b["twilio_number"]} for b in get_all_businesses()]}
 
-@app.get("/admin/remove")
-def admin_remove(key:str=Query(...),biz_id:str=Query(...)):
+@app.post("/admin/remove")
+async def admin_remove(request: Request):
     _ensure_init()
-    if key!=_ADMIN_KEY: return {"error":"Invalid key"}
+    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    body = await request.json()
+    biz_id = body.get("biz_id","")
+    if not biz_id: return {"error":"biz_id required"}
     with get_db() as c: _execute(c,_q("DELETE FROM businesses WHERE id=?"), (biz_id,))
+    logger.info(f"[ADMIN] Removed business {biz_id}")
     return {"success":True}
 
 @app.get("/admin")
-def admin_ui(key:str=Query("")):
+def admin_ui(request: Request):
     _ensure_init()
-    if key!=_ADMIN_KEY:
-        return Response(content='<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f8f8f6"><div style="text-align:center"><h2>Hotline Admin</h2><form style="display:flex;gap:8px" onsubmit="location.href=\'/admin?key=\'+document.getElementById(\'k\').value;return false"><input id="k" type="password" placeholder="Admin key" style="padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;width:220px"><button style="padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Enter</button></form></div></body></html>', media_type="text/html")
+    if not _get_admin_session(request):
+        return Response(content=_LOGIN_PAGE, media_type="text/html")
 
     # --- Pending signups table ---
     pending = get_pending_signups()
@@ -839,13 +948,29 @@ def admin_ui(key:str=Query("")):
     rows = ""
     for b in businesses:
         s = get_stats(b["id"])
-        rows += f'<tr><td style="padding:12px 16px;font-weight:600">{b["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td><td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td><td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td><td style="padding:12px 16px"><a href="/admin/welcome?key={key}&biz_id={b["id"]}" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a><a href="#" onclick="if(confirm(\'Remove?\'))location.href=\'/admin/remove?key={key}&biz_id={b["id"]}\';return false" style="color:#dc2626;font-size:13px">Remove</a></td></tr>'
+        bid = b["id"]
+        rows += (
+            f'<tr id="row-{bid}">'
+            f'<td style="padding:12px 16px;font-weight:600">{b["name"]}</td>'
+            f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
+            f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
+            f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
+            f'<td style="padding:12px 16px">'
+            f'<a href="#" onclick="adminResend(\'{bid}\');return false" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a>'
+            f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:13px">Remove</a>'
+            f'</td></tr>'
+        )
     if not rows: rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
 <body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6">
 <div style="max-width:960px;margin:0 auto">
-  <h1 style="font-size:24px;margin:0 0 28px">Hotline Admin</h1>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:28px">
+    <h1 style="font-size:24px;margin:0">Hotline Admin</h1>
+    <a href="/admin/logout" style="font-size:13px;color:#888;text-decoration:none">Sign out</a>
+  </div>
+
+  <div id="toast" style="display:none;background:#166534;color:#fff;font-size:13px;padding:8px 14px;border-radius:6px;margin-bottom:16px"></div>
 
   <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Pending Signups{pending_badge}</h2>
   <p style="font-size:13px;color:#888;margin:0 0 12px">These leads signed up while Twilio provisioning was unavailable. Provision them manually once the service is live.</p>
@@ -872,10 +997,29 @@ def admin_ui(key:str=Query("")):
         <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th>
         <th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th>
       </tr></thead>
-      <tbody>{rows}</tbody>
+      <tbody id="biz-tbody">{rows}</tbody>
     </table>
   </div>
 </div>
+<script>
+function toast(msg,ok){{var el=document.getElementById("toast");el.textContent=msg;el.style.background=ok?"#166534":"#991b1b";el.style.display="block";setTimeout(()=>el.style.display="none",3000);}}
+async function adminPost(path,body){{
+  const r=await fetch(path,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
+  if(r.status===401){{location.href="/admin";return null;}}
+  return r.json();
+}}
+async function adminResend(bizId){{
+  const d=await adminPost("/admin/welcome",{{biz_id:bizId}});
+  if(d&&d.success)toast("Welcome SMS resent",true);
+  else toast((d&&d.error)||"Failed",false);
+}}
+async function adminRemove(bizId,name){{
+  if(!confirm("Remove "+name+"? This cannot be undone."))return;
+  const d=await adminPost("/admin/remove",{{biz_id:bizId}});
+  if(d&&d.success){{document.getElementById("row-"+bizId).remove();toast("Removed "+name,true);}}
+  else toast((d&&d.error)||"Failed",false);
+}}
+</script>
 </body></html>'''
     return Response(content=html, media_type="text/html")
 
