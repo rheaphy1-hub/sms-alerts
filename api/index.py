@@ -78,7 +78,8 @@ def init_db():
             with get_db() as c: _execute(c, stmt)
         except Exception as e: logger.warning(f"init_db stmt skipped: {e}")
     for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'weekly\'"),
-                         ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'")]:
+                         ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'"),
+                         ("owner_context","\'0\'"),("owner_reply_mode","\'0\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
@@ -289,7 +290,8 @@ TIER DEFINITIONS:
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
 - Tier 4: Routine (Gray) — No action needed. Positive feedback, compliments, general questions (hours, location, menu), neutral messages.
 
-Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
+Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access, inquiry, other
+- "access" = customer cannot enter the business (locked door, blocked entry, no one answering)
 - "inquiry" = any question about the business (hours, directions, menu, policies, parking, accessibility)
 - "supply" = out of something (toilet paper, soap, napkins, cups)
 - "safety" = anything involving physical danger (Tier 1)
@@ -310,13 +312,19 @@ HARD RULES:
 - Keep auto_reply under 160 characters.
 - Vary responses naturally. Don't repeat same template.
 
-EDGE CASES:
+EDGE CASES — ACCESS (all Tier 2, category "access"):
+- "The door is locked" = Tier 2. Customer cannot enter = business is losing them right now.
+- "Door is locked", "locked door", "can't get in", "can't get inside", "door won't open" = Tier 2.
+- "Nobody answered", "no one at the door" = Tier 2 (access blocked).
+- Any message where a customer cannot physically enter or access the business = Tier 2.
+
+OTHER EDGE CASES:
 - "Music is too loud" = Tier 3 (preference, not operational). Acknowledge, don't promise change.
-- "Can't get in the front door" = Tier 2 (access blocked = operational).
 - "What time do you close?" = Tier 4, inquiry. Don't answer. Forward.
 - "You should fire her" = Tier 3, staffing. Employment complaint, NOT emergency.
 - "Bathroom is flooding!" = Tier 1, safety. Always emergency.
 - "Out of toilet paper" = Tier 2, supply.
+- "I dropped my food/drink/item" = Tier 4. Customer accident, not a business issue.
 
 {website_context}
 
@@ -364,6 +372,8 @@ def _classify_fallback(text):
                 "auto_reply":"Great question! We've forwarded this to management and someone will get back to you shortly."}
     crit = {"cleanliness":(["dirty","disgusting","filthy","mess","bathroom","gross","unsanitary"],
             "We've flagged this as a cleanliness issue and notified management. Thank you for letting us know."),
+        "access":(["door is locked","locked door","can't get in","cant get in","door won't open","door wont open","locked","nobody answered","no one at the door","can't enter","cant enter"],
+            "We've notified management that the entrance is inaccessible. We apologize for the inconvenience."),
         "staffing":(["no one","nobody","empty","no staff","where is everyone","closed"],
             "We've flagged this as a staffing issue and notified management. We apologize for the inconvenience."),
         "equipment":(["broken","machine","not working","out of order","malfunction"],
@@ -385,10 +395,28 @@ def _classify_fallback(text):
 
 
 # --- Owner commands ---
-_owner_context = {}
-_owner_reply_mode = {}  # biz_id -> message_id (waiting for reply text)
+# Context and reply-mode are stored in DB so they survive server restarts (Vercel serverless)
 
-def set_context(bid, mid): _owner_context[bid] = mid
+def set_context(bid, mid):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_context=? WHERE id=?"), (str(mid), bid))
+
+def get_context(bid):
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT owner_context FROM businesses WHERE id=?"), (bid,))
+        try: return int(row["owner_context"]) if row else 0
+        except: return 0
+
+def set_reply_mode(bid, mid):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_reply_mode=? WHERE id=?"), (str(mid), bid))
+
+def clear_reply_mode(bid):
+    with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_reply_mode='0' WHERE id=?"), (bid,))
+
+def get_reply_mode(bid):
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT owner_reply_mode FROM businesses WHERE id=?"), (bid,))
+        try: v = int(row["owner_reply_mode"]) if row else 0; return v if v else 0
+        except: return 0
 
 def _fmt_ts(iso):
     try: return datetime.fromisoformat(iso).strftime("%b %d %I:%M%p").replace(" 0"," ")
@@ -405,48 +433,86 @@ def handle_owner_command(text, business, sender_phone=""):
     raw = text.strip()
     cmd = raw.upper()
 
-    # Check if we're in reply mode
-    if bid in _owner_reply_mode:
-        msg_id = _owner_reply_mode.pop(bid)
-        msg = get_message_by_id(msg_id)
+    # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
+    reply_mid = get_reply_mode(bid)
+    if reply_mid:
+        if cmd in {"CANCEL","NEVERMIND","STOP"}:
+            clear_reply_mode(bid)
+            return "Reply cancelled."
+        clear_reply_mode(bid)
+        msg = get_message_by_id(reply_mid)
         if msg:
             send_sms(msg["from_number"], raw, from_number=business.get("twilio_number",""))
             return f"Reply sent to {_fmt_phone_short(msg['from_number'])}."
         return "Could not find the original message."
 
-    # Ack
+    # ── OK #N — acknowledge a specific alert by ID ────────────────────────────
+    is_ok_n = re.match(r"^OK\s+#?(\d+)$", cmd)
+    if is_ok_n:
+        target_id = int(is_ok_n.group(1))
+        msg = get_message_by_id(target_id)
+        if not msg or msg["business_id"] != bid: return f"Alert #{target_id} not found."
+        if msg["acknowledged"]: return f"\u2705 Alert #{target_id} already acknowledged."
+        mark_acknowledged(target_id)
+        set_context(bid, target_id)
+        others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
+        short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
+        for p in others: send_sms(p, f"\u2705 Alert #{target_id} acknowledged by {short}.", from_number=business.get("twilio_number",""))
+        return f"\u2705 Alert #{target_id} acknowledged.\n\"{msg['message_text'][:80]}\""
+
+    # ── OK / ACK — with multi-alert disambiguation ────────────────────────────
     ack_words = {"OK","GOT IT","DONE","ON IT","ACK","YES"}
     is_thumbs = "\U0001f44d" in raw
     is_reaction_ack = any(cmd.startswith(w) for w in ["LIKED","LOVED","THUMBED UP"])
     if cmd in ack_words or is_thumbs or is_reaction_ack:
-        msg = get_message_by_id(_owner_context.get(bid,0)) if bid in _owner_context else None
-        if not msg: msg = get_latest_unacked(bid)
-        if not msg: return "No active alerts to acknowledge."
-        if msg["acknowledged"]: return f"Alert #{msg['id']} already acknowledged."
+        all_flagged = get_recent_flagged(bid, 20)
+        unacked = [m for m in all_flagged if not m["acknowledged"]]
+
+        if not unacked: return "No unacknowledged alerts."
+
+        if len(unacked) > 1:
+            lines = [f"{len(unacked)} open alerts. Reply OK #N to acknowledge one:\n"]
+            for m in unacked[:5]:
+                lines.append(f"  #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
+            lines.append("\nExample: OK 2")
+            return "\n".join(lines)
+
+        # Exactly one — ack it and echo back what it was
+        msg = unacked[0]
         mark_acknowledged(msg["id"])
+        set_context(bid, msg["id"])
         others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
         short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
         for p in others: send_sms(p, f"\u2705 Alert #{msg['id']} acknowledged by {short}.", from_number=business.get("twilio_number",""))
-        return f"\u2705 Alert #{msg['id']} acknowledged."
+        return f"\u2705 Alert #{msg['id']} acknowledged.\n\"{msg['message_text'][:80]}\""
 
     if cmd == "HELP":
         return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Acknowledge alert\n"
-                "REPLY \u2014 Reply to customer\nLIST \u2014 Flagged issues\nLIST ALL \u2014 All messages\n"
+                "OK 2 \u2014 Acknowledge specific alert\nREPLY \u2014 Reply to customer\n"
+                "LIST \u2014 Flagged issues\nLIST ALL \u2014 All messages\n"
                 "STATUS \u2014 Alert status\nALERTS ALL \u2014 Get Tier 2+3 alerts\nALERTS CRITICAL \u2014 Tier 2 only\n"
                 "MUTE 2H \u2014 Silence alerts\nPAUSE / RESUME\n"
                 "DIGEST DAILY / WEEKLY\nHELP \u2014 This message")
 
     if cmd == "REPLY":
-        msg = get_message_by_id(_owner_context.get(bid,0)) if bid in _owner_context else None
+        ctx_id = get_context(bid)
+        msg = get_message_by_id(ctx_id) if ctx_id else None
         if not msg: msg = get_latest_unacked(bid)
-        if not msg: return "No active message to reply to."
-        _owner_reply_mode[bid] = msg["id"]
-        return f"What would you like to reply to {_fmt_phone_short(msg['from_number'])}? Type your message now."
+        if not msg:
+            recent = get_recent_flagged(bid, 1)
+            msg = recent[0] if recent else None
+        if not msg: return "No messages to reply to."
+        set_reply_mode(bid, msg["id"])
+        return f"Replying to {_fmt_phone_short(msg['from_number'])} re: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
 
     if cmd == "DETAILS":
-        msg = get_message_by_id(_owner_context.get(bid,0)) if bid in _owner_context else None
+        ctx_id = get_context(bid)
+        msg = get_message_by_id(ctx_id) if ctx_id else None
         if not msg: msg = get_latest_unacked(bid)
-        if not msg: return "No active alerts."
+        if not msg:
+            recent = get_recent_flagged(bid, 1)
+            msg = recent[0] if recent else None
+        if not msg: return "No alerts on record."
         set_context(bid, msg["id"])
         ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
         return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'])}\n"
@@ -458,14 +524,19 @@ def handle_owner_command(text, business, sender_phone=""):
         if not msgs: return "No messages yet."
         icons = {1:"\U0001f6a8",2:"\u26a0\ufe0f",3:"\U0001f614",4:"\U0001f4ac"}
         lines = ["Last 5 messages:\n"]
-        for m in msgs: lines.append(f"{icons.get(m['tier'],'\U0001f4ac')} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])}){' \u2705' if m['acknowledged'] else ''}")
+        for m in msgs:
+            ack_mark = " \u2705" if m["acknowledged"] else ""
+            lines.append(f"{icons.get(m['tier'],chr(0x1f4ac))} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])}){ack_mark}")
         return "\n".join(lines)
 
     if cmd == "LIST":
         msgs = get_recent_flagged(bid, 5)
         if not msgs: return "No flagged issues."
         lines = ["Last 5 flagged:\n"]
-        for m in msgs: lines.append(f"{'\u2705' if m['acknowledged'] else '\u26a0\ufe0f'} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
+        for m in msgs:
+            icon = "\u2705" if m["acknowledged"] else "\u26a0\ufe0f"
+            lines.append(f"{icon} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
+        lines.append("\nReply OK #N to acknowledge. DETAILS for full message.")
         return "\n".join(lines)
 
     if cmd == "STATUS":
@@ -479,8 +550,10 @@ def handle_owner_command(text, business, sender_phone=""):
                     mins = int((until - datetime.now(timezone.utc)).total_seconds()/60)
                     return f"\U0001f507 Muted for {mins//60}h {mins%60}m.\nReply RESUME to unmute."
             except: pass
+        unacked = sum(1 for m in get_recent_flagged(bid, 20) if not m["acknowledged"])
         t3 = "on" if business.get("alert_tier3") else "off"
-        return f"\U0001f514 Alerts ON for {name}.\nTier 3 alerts: {t3} (text ALERTS ALL or ALERTS CRITICAL)"
+        unacked_str = f"\n{unacked} unacknowledged alert(s) \u2014 reply LIST" if unacked else ""
+        return f"\U0001f514 Alerts ON for {name}.\nTier 3 alerts: {t3}{unacked_str}"
 
     if cmd == "ALERTS ALL": set_alert_tier3(bid, True); return "You'll now receive Tier 3 (reputation risk) alerts too."
     if cmd == "ALERTS CRITICAL": set_alert_tier3(bid, False); return "Tier 3 alerts off. You'll only get critical (Tier 2) and emergency alerts."
@@ -491,13 +564,14 @@ def handle_owner_command(text, business, sender_phone=""):
 
     if cmd.startswith("MUTE"):
         m = re.match(r"MUTE\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
-        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 Muted 1 hour. Reply RESUME to unmute."
+        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 No duration given \u2014 muted 1 hour. Reply RESUME to unmute."
         amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
-        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Muted {amt}m."
-        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Muted {amt}h."
+        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Muted {amt}m. Reply RESUME to unmute."
+        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Muted {amt}h. Reply RESUME to unmute."
 
     if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED"]): return ""
     return f"Unknown: \"{raw[:20]}\"\nReply HELP for commands."
+
 
 
 # --- Digest ---
@@ -826,7 +900,8 @@ TIER DEFINITIONS:
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
 - Tier 4: Routine — Positive feedback, compliments, questions, neutral.
 
-Categories: cleanliness, staffing, equipment, wait_time, safety, supply, inquiry, other
+Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access, inquiry, other
+- "access" = customer cannot enter the business (locked door, blocked entry, no one answering)
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent. ALWAYS tell customer to call 911. NEVER say "we've contacted emergency services."
