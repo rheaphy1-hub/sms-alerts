@@ -539,7 +539,20 @@ def _ensure_init():
     if _initialized: return
     init_db(); init_classifier(); init_sms()
     if _ENV_OWNER and _ENV_TWILIO:
-        if create_business("default", _ENV_NAME, _ENV_OWNER, _ENV_TWILIO): logger.info(f"Registered '{_ENV_NAME}'")
+        # Always upsert — env vars are the source of truth, never let DB get stale
+        try:
+            with get_db() as c:
+                _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, twilio_number=? WHERE id='default'"),
+                         (_ENV_NAME, _ENV_OWNER, _ENV_TWILIO))
+            with get_db() as c:
+                existing = _fetchone(c, "SELECT id FROM businesses WHERE id='default'")
+            if not existing:
+                create_business("default", _ENV_NAME, _ENV_OWNER, _ENV_TWILIO)
+                logger.info(f"Registered '{_ENV_NAME}' ({_ENV_TWILIO})")
+            else:
+                logger.info(f"Synced '{_ENV_NAME}' -> twilio={_ENV_TWILIO} owner={_ENV_OWNER}")
+        except Exception as e:
+            logger.error(f"_ensure_init upsert failed: {e}")
     _initialized = True
 
 WELCOME_MSG = """Welcome to {name} on Hotline!
