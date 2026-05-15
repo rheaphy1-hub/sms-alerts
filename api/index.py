@@ -1,10 +1,23 @@
 """
 Hotline — SMS Alert System. Single-file Vercel deployment.
 """
-import os, re, json, logging
+import os, re, json, logging, io
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query
+
+# PDF + QR generation (required at top level for Vercel to bundle correctly)
+try:
+    import qrcode
+    from qrcode.constants import ERROR_CORRECT_H
+    from PIL import Image as PILImage
+    from reportlab.lib import colors as rl_colors
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib.utils import ImageReader as RLImageReader
+    _PDF_LIBS_OK = True
+except ImportError as _pdf_import_err:
+    _PDF_LIBS_OK = False
+    logging.getLogger("sms").warning(f"PDF/QR libs not available: {_pdf_import_err}")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sms")
@@ -851,24 +864,21 @@ def admin_ui(key:str=Query("")):
 
 def _make_qr_pil(url: str, size_px: int = 1000):
     """Return a PIL Image of a plain white-background QR code."""
-    import qrcode as _qrcode
-    from PIL import Image as _Image
-    qr = _qrcode.QRCode(
-        error_correction=_qrcode.constants.ERROR_CORRECT_H,
+    qr = qrcode.QRCode(
+        error_correction=ERROR_CORRECT_H,
         box_size=10, border=4,
     )
     qr.add_data(url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-    return img.resize((size_px, size_px), _Image.LANCZOS)
+    return img.resize((size_px, size_px), PILImage.LANCZOS)
 
 
 def _make_qr_png_bytes(business_code: str) -> bytes:
     """1000×1000 plain white QR PNG, no branding."""
-    import io as _io
     base = os.getenv("BASE_URL", "https://hotlinetxt.com")
     url = f"{base}/b/{business_code.lower()}"
-    buf = _io.BytesIO()
+    buf = io.BytesIO()
     _make_qr_pil(url).save(buf, format="PNG")
     return buf.getvalue()
 
@@ -878,28 +888,23 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
     5.5 × 8.5 inch dark-background branded sign PDF.
     No phone number — QR only.
     """
-    import io as _io
-    from reportlab.lib import colors as _colors
-    from reportlab.pdfgen import canvas as _canvas
-    from reportlab.lib.utils import ImageReader as _ImageReader
-
     base = os.getenv("BASE_URL", "https://hotlinetxt.com")
     url = f"{base}/b/{business_code.lower()}"
 
     # Build QR image bytes for ReportLab
     qr_pil = _make_qr_pil(url, size_px=800)
-    qr_buf = _io.BytesIO()
+    qr_buf = io.BytesIO()
     qr_pil.save(qr_buf, format="PNG")
     qr_buf.seek(0)
-    qr_reader = _ImageReader(qr_buf)
+    qr_reader = RLImageReader(qr_buf)
 
-    BRAND_ORANGE = _colors.HexColor("#EA580C")
-    BRAND_DARK   = _colors.HexColor("#1A1A1A")
-    BRAND_WHITE  = _colors.white
+    BRAND_ORANGE = rl_colors.HexColor("#EA580C")
+    BRAND_DARK   = rl_colors.HexColor("#1A1A1A")
+    BRAND_WHITE  = rl_colors.white
 
     PAGE_W, PAGE_H = 5.5 * 72, 8.5 * 72   # half-letter portrait
-    pdf_buf = _io.BytesIO()
-    c = _canvas.Canvas(pdf_buf, pagesize=(PAGE_W, PAGE_H))
+    pdf_buf = io.BytesIO()
+    c = rl_canvas.Canvas(pdf_buf, pagesize=(PAGE_W, PAGE_H))
 
     # Background
     c.setFillColor(BRAND_DARK)
@@ -912,7 +917,7 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
     c.drawCentredString(PAGE_W / 2, PAGE_H - 100, "wrong?")
 
     # Subhead
-    c.setFillColor(_colors.HexColor("#AAAAAA"))
+    c.setFillColor(rl_colors.HexColor("#AAAAAA"))
     c.setFont("Helvetica", 14)
     c.drawCentredString(PAGE_W / 2, PAGE_H - 130, "Scan to send us a private message.")
 
@@ -926,7 +931,7 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
     c.drawImage(qr_reader, qr_x, qr_y, width=qr_size, height=qr_size)
 
     # "Scan" label
-    c.setFillColor(_colors.HexColor("#CCCCCC"))
+    c.setFillColor(rl_colors.HexColor("#CCCCCC"))
     c.setFont("Helvetica-Bold", 13)
     c.drawCentredString(PAGE_W / 2, qr_y - pad - 22, "Scan this QR code")
 
@@ -937,7 +942,7 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
     c.line(PAGE_W * 0.2, div_y, PAGE_W * 0.8, div_y)
 
     # Business code hint
-    c.setFillColor(_colors.HexColor("#666666"))
+    c.setFillColor(rl_colors.HexColor("#666666"))
     c.setFont("Helvetica", 10)
     c.drawCentredString(PAGE_W / 2, div_y - 18, f"Code: {business_code.upper()}")
 
@@ -953,7 +958,7 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
     c.setFont("Helvetica-Bold", 14)
     c.drawString(box_x + box_w + 7, footer_y + 4, "HOTLINE")
 
-    c.setFillColor(_colors.HexColor("#555555"))
+    c.setFillColor(rl_colors.HexColor("#555555"))
     c.setFont("Helvetica", 9)
     c.drawCentredString(PAGE_W / 2, footer_y - 14, "HotlineTXT.com")
 
@@ -964,6 +969,8 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
 @app.get("/signs/{business_code}.pdf")
 def sign_pdf(business_code: str):
     _ensure_init()
+    if not _PDF_LIBS_OK:
+        return Response(content="PDF generation unavailable: missing reportlab/qrcode/Pillow", status_code=500)
     code = business_code.upper().strip()
     biz = get_business_by_code(code)
     if not biz:
@@ -983,6 +990,8 @@ def sign_pdf(business_code: str):
 @app.get("/qr/{business_code}.png")
 def qr_png(business_code: str):
     _ensure_init()
+    if not _PDF_LIBS_OK:
+        return Response(content="QR generation unavailable: missing qrcode/Pillow", status_code=500)
     code = business_code.upper().strip()
     biz = get_business_by_code(code)
     if not biz:
@@ -1228,7 +1237,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 """ + NAV_HTML + """
 <div class="top">
 <h1>You can't be everywhere.<br><em>Now you don't have to be.</em></h1>
-<p class="sub">Customers scan. AI filters. You get alerted when something actually needs your attention.</p>
+<p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px">No app. No software. No setup. No training.</p>
 <div class="examples"><p style="font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:10px">See it in action \u2014 try a real scenario or enter your own:</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">There's water all over the bathroom floor</div>
@@ -1340,7 +1349,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">Hotline works through SMS \u2014 no app to install, no dashboard to learn, no training for your team.</p>
 </div>
 <div class="steps">
-<div class="step"><div class="step-num">1</div><div><strong>Display your QR code</strong><p>Print your sign and post it in your business \u2014 bathroom, counter, front door, table. Customers scan when something's wrong.</p></div></div>
+<div class="step"><div class="step-num">1</div><div><strong>Display your sign</strong><p>Print your QR sign and post it anywhere \u2014 bathroom, counter, front door, table. Customers scan or text to reach you privately.</p></div></div>
 <div class="step"><div class="step-num">2</div><div><strong>AI reads every message</strong><p>Emergencies, operational issues, complaints, compliments, questions \u2014 each one is triaged instantly and the customer gets an appropriate response.</p></div></div>
 <div class="step"><div class="step-num">3</div><div><strong>You get alerted by text</strong><p>Only for things that actually need your attention. Reply OK to acknowledge, or REPLY to respond directly to the customer. Everything else stays quiet.</p></div></div>
 </div>
