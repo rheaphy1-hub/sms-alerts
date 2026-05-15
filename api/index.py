@@ -897,93 +897,166 @@ def _make_qr_pil(url: str, size_px: int = 1000):
     return img.resize((size_px, size_px), PILImage.LANCZOS)
 
 
+def _sms_deep_link(business_code: str) -> str:
+    """SMS deep link: opens native Messages app with number + code prefilled."""
+    import urllib.parse as _up
+    number = os.getenv("TWILIO_PHONE_NUMBER", SHARED_NUMBER)
+    body = f"HOTLINE {business_code.upper()}"
+    return f"sms:{number}?body={_up.quote(body)}"
+
+
 def _make_qr_png_bytes(business_code: str) -> bytes:
-    """1000×1000 plain white QR PNG, no branding."""
-    base = os.getenv("BASE_URL", "https://hotlinetxt.com")
-    url = f"{base}/b/{business_code.lower()}"
+    """1000×1000 plain white QR PNG — encodes SMS deep link."""
     buf = io.BytesIO()
-    _make_qr_pil(url).save(buf, format="PNG")
+    _make_qr_pil(_sms_deep_link(business_code)).save(buf, format="PNG")
     return buf.getvalue()
 
 
 def _make_sign_pdf_bytes(business_code: str) -> bytes:
     """
-    5.5 × 8.5 inch dark-background branded sign PDF.
-    No phone number — QR only.
+    Sign PDF matching the Hotline template:
+    - Cream/off-white background (#F5F0E8)
+    - Orange double border with crop marks
+    - Dark bold headline "Something wrong?"
+    - Orange bold "Text us:" subhead
+    - Orange divider line with center dot
+    - Large QR code (SMS deep link — opens native messages app)
+    - "Powered by H HOTLINE" + "Visit Hotlinetxt.com" footer
     """
-    base = os.getenv("BASE_URL", "https://hotlinetxt.com")
-    url = f"{base}/b/{business_code.lower()}"
+    url = _sms_deep_link(business_code)
 
     # Build QR image bytes for ReportLab
-    qr_pil = _make_qr_pil(url, size_px=800)
+    qr_pil = _make_qr_pil(url, size_px=900)
     qr_buf = io.BytesIO()
     qr_pil.save(qr_buf, format="PNG")
     qr_buf.seek(0)
     qr_reader = RLImageReader(qr_buf)
 
-    BRAND_ORANGE = rl_colors.HexColor("#EA580C")
-    BRAND_DARK   = rl_colors.HexColor("#1A1A1A")
-    BRAND_WHITE  = rl_colors.white
+    ORANGE      = rl_colors.HexColor("#D4520A")   # template orange
+    CREAM       = rl_colors.HexColor("#F5F0E8")   # template background
+    DARK        = rl_colors.HexColor("#1C1C1A")   # near-black headline
+    GRAY        = rl_colors.HexColor("#888880")   # footer text
 
-    PAGE_W, PAGE_H = 5.5 * 72, 8.5 * 72   # half-letter portrait
+    # Page: 8.5 × 11" (letter) — matches template proportions
+    PAGE_W, PAGE_H = 8.5 * 72, 11 * 72
     pdf_buf = io.BytesIO()
     c = rl_canvas.Canvas(pdf_buf, pagesize=(PAGE_W, PAGE_H))
 
-    # Background
-    c.setFillColor(BRAND_DARK)
+    # ── Cream background ────────────────────────────────────────────────────
+    c.setFillColor(CREAM)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    # Headline
-    c.setFillColor(BRAND_WHITE)
-    c.setFont("Helvetica-Bold", 34)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 60, "Something")
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 100, "wrong?")
+    # ── Crop marks (small corner ticks outside border) ──────────────────────
+    MARGIN = 36       # margin from page edge to outer border
+    TICK   = 14       # length of crop mark ticks
+    GAP    = 6        # gap between border and tick start
+    c.setStrokeColor(rl_colors.HexColor("#CCCCCC"))
+    c.setLineWidth(0.5)
+    # corners: TL, TR, BR, BL
+    corners = [
+        (MARGIN, PAGE_H - MARGIN),
+        (PAGE_W - MARGIN, PAGE_H - MARGIN),
+        (PAGE_W - MARGIN, MARGIN),
+        (MARGIN, MARGIN),
+    ]
+    for (cx, cy) in corners:
+        # horizontal tick
+        dx = -1 if cx < PAGE_W/2 else 1
+        c.line(cx + dx*(GAP), cy, cx + dx*(GAP+TICK), cy)
+        # vertical tick
+        dy = 1 if cy < PAGE_H/2 else -1
+        c.line(cx, cy + dy*(GAP), cx, cy + dy*(GAP+TICK))
 
-    # Subhead
-    c.setFillColor(rl_colors.HexColor("#AAAAAA"))
-    c.setFont("Helvetica", 14)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 130, "Scan to send us a private message.")
+    # ── Double orange border ─────────────────────────────────────────────────
+    OUTER_PAD = MARGIN           # outer rect inset from page edge
+    INNER_PAD = OUTER_PAD + 7   # inner rect (gap between borders)
+    RADIUS = 18
 
-    # QR white card + image
-    qr_size = 220
+    c.setStrokeColor(ORANGE)
+    c.setFillColor(CREAM)
+
+    # Outer border
+    c.setLineWidth(3)
+    c.roundRect(OUTER_PAD, OUTER_PAD,
+                PAGE_W - 2*OUTER_PAD, PAGE_H - 2*OUTER_PAD,
+                RADIUS, fill=0, stroke=1)
+    # Inner border
+    c.setLineWidth(1.5)
+    c.roundRect(INNER_PAD, INNER_PAD,
+                PAGE_W - 2*INNER_PAD, PAGE_H - 2*INNER_PAD,
+                RADIUS - 4, fill=0, stroke=1)
+
+    # ── "Something wrong?" headline ──────────────────────────────────────────
+    c.setFillColor(DARK)
+    c.setFont("Helvetica-Bold", 58)
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 148, "Something")
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 216, "wrong?")
+
+    # ── "Text us:" in orange ─────────────────────────────────────────────────
+    c.setFillColor(ORANGE)
+    c.setFont("Helvetica-Bold", 52)
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 290, "Text us:")
+
+    # ── Orange divider line with center dot ──────────────────────────────────
+    div_y = PAGE_H - 330
+    line_x1 = PAGE_W * 0.18
+    line_x2 = PAGE_W * 0.82
+    c.setStrokeColor(ORANGE)
+    c.setLineWidth(1.5)
+    mid = PAGE_W / 2
+    # left segment
+    c.line(line_x1, div_y, mid - 12, div_y)
+    # right segment
+    c.line(mid + 12, div_y, line_x2, div_y)
+    # center dot
+    c.setFillColor(ORANGE)
+    c.circle(mid, div_y, 5, fill=1, stroke=0)
+
+    # ── QR code (large, centered, with thin orange border box) ───────────────
+    qr_size = 240
     qr_x = (PAGE_W - qr_size) / 2
-    qr_y = PAGE_H - 130 - 24 - qr_size
-    pad = 14
-    c.setFillColor(BRAND_WHITE)
-    c.roundRect(qr_x - pad, qr_y - pad, qr_size + pad * 2, qr_size + pad * 2, 14, fill=1, stroke=0)
+    qr_y = div_y - 20 - qr_size
+
+    # Orange border around QR
+    pad = 10
+    c.setStrokeColor(ORANGE)
+    c.setFillColor(rl_colors.white)
+    c.setLineWidth(1.5)
+    c.roundRect(qr_x - pad, qr_y - pad,
+                qr_size + pad*2, qr_size + pad*2,
+                6, fill=1, stroke=1)
     c.drawImage(qr_reader, qr_x, qr_y, width=qr_size, height=qr_size)
 
-    # "Scan" label
-    c.setFillColor(rl_colors.HexColor("#CCCCCC"))
-    c.setFont("Helvetica-Bold", 13)
-    c.drawCentredString(PAGE_W / 2, qr_y - pad - 22, "Scan this QR code")
+    # ── Footer ───────────────────────────────────────────────────────────────
+    footer_center_y = INNER_PAD + 34
+    wordmark_y      = footer_center_y + 4
 
-    # Orange divider
-    div_y = qr_y - pad - 50
-    c.setStrokeColor(BRAND_ORANGE)
-    c.setLineWidth(2)
-    c.line(PAGE_W * 0.2, div_y, PAGE_W * 0.8, div_y)
+    # "Powered by" label
+    c.setFillColor(GRAY)
+    c.setFont("Helvetica", 11)
+    powered_w = c.stringWidth("Powered by ", "Helvetica", 11)
 
-    # Business code hint
-    c.setFillColor(rl_colors.HexColor("#666666"))
-    c.setFont("Helvetica", 10)
-    c.drawCentredString(PAGE_W / 2, div_y - 18, f"Code: {business_code.upper()}")
+    # H box
+    box_s = 18
+    total_w = powered_w + box_s + 6 + c.stringWidth("HOTLINE", "Helvetica-Bold", 14)
+    start_x = (PAGE_W - total_w) / 2
 
-    # Footer: H box + HOTLINE wordmark
-    footer_y = 30
-    box_w, box_h = 20, 20
-    box_x = PAGE_W / 2 - 50
-    c.setFillColor(BRAND_ORANGE)
-    c.roundRect(box_x, footer_y, box_w, box_h, 3, fill=1, stroke=0)
-    c.setFillColor(BRAND_WHITE)
-    c.setFont("Helvetica-Bold", 12)
-    c.drawCentredString(box_x + box_w / 2, footer_y + 5, "H")
+    c.drawString(start_x, wordmark_y, "Powered by ")
+    box_x = start_x + powered_w
+    c.setFillColor(ORANGE)
+    c.roundRect(box_x, wordmark_y - 2, box_s, box_s, 3, fill=1, stroke=0)
+    c.setFillColor(rl_colors.white)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawCentredString(box_x + box_s/2, wordmark_y + 2, "H")
+
+    c.setFillColor(DARK)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(box_x + box_w + 7, footer_y + 4, "HOTLINE")
+    c.drawString(box_x + box_s + 6, wordmark_y, "HOTLINE")
 
-    c.setFillColor(rl_colors.HexColor("#555555"))
-    c.setFont("Helvetica", 9)
-    c.drawCentredString(PAGE_W / 2, footer_y - 14, "HotlineTXT.com")
+    # "Visit Hotlinetxt.com for more info"
+    c.setFillColor(GRAY)
+    c.setFont("Helvetica", 10)
+    c.drawCentredString(PAGE_W / 2, footer_center_y - 14, "Visit Hotlinetxt.com for more info")
 
     c.save()
     return pdf_buf.getvalue()
