@@ -897,22 +897,31 @@ def _make_qr_pil(url: str, size_px: int = 1000):
     return img.resize((size_px, size_px), PILImage.LANCZOS)
 
 
-def _sms_deep_link(business_code: str) -> str:
-    """SMS deep link: opens native Messages app with number + code prefilled."""
+def _sms_deep_link(business_code: str, business_name: str = "") -> str:
+    """
+    SMS deep link: opens native Messages app with number + routing header prefilled.
+    Body format:
+        HOTLINE BC4729 | Joe's Coffee
+        [Describe the issue and hit send]
+    Customer types over the second line. First line is scrubbed before AI sees it.
+    """
     import urllib.parse as _up
     number = os.getenv("TWILIO_PHONE_NUMBER", SHARED_NUMBER)
-    body = f"HOTLINE {business_code.upper()}"
+    header = f"HOTLINE {business_code.upper()}"
+    if business_name:
+        header += f" | {business_name}"
+    body = f"{header}\n[Describe the issue and hit send]"
     return f"sms:{number}?body={_up.quote(body)}"
 
 
-def _make_qr_png_bytes(business_code: str) -> bytes:
+def _make_qr_png_bytes(business_code: str, business_name: str = "") -> bytes:
     """1000×1000 plain white QR PNG — encodes SMS deep link."""
     buf = io.BytesIO()
-    _make_qr_pil(_sms_deep_link(business_code)).save(buf, format="PNG")
+    _make_qr_pil(_sms_deep_link(business_code, business_name)).save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _make_sign_pdf_bytes(business_code: str) -> bytes:
+def _make_sign_pdf_bytes(business_code: str, business_name: str = "") -> bytes:
     """
     Sign PDF matching the Hotline template:
     - Cream/off-white background (#F5F0E8)
@@ -923,7 +932,7 @@ def _make_sign_pdf_bytes(business_code: str) -> bytes:
     - Large QR code (SMS deep link — opens native messages app)
     - "Powered by H HOTLINE" + "Visit Hotlinetxt.com" footer
     """
-    url = _sms_deep_link(business_code)
+    url = _sms_deep_link(business_code, business_name)
 
     # Build QR image bytes for ReportLab
     qr_pil = _make_qr_pil(url, size_px=900)
@@ -1072,7 +1081,7 @@ def sign_pdf(business_code: str):
     if not biz:
         return Response(content="Business not found", status_code=404)
     try:
-        pdf_bytes = _make_sign_pdf_bytes(code)
+        pdf_bytes = _make_sign_pdf_bytes(code, biz.get("name", ""))
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -1093,7 +1102,7 @@ def qr_png(business_code: str):
     if not biz:
         return Response(content="Business not found", status_code=404)
     try:
-        png_bytes = _make_qr_png_bytes(code)
+        png_bytes = _make_qr_png_bytes(code, biz.get("name", ""))
         return Response(
             content=png_bytes,
             media_type="image/png",
@@ -1107,6 +1116,44 @@ def _parse_business_code_from_body(body: str):
     """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
     m = re.search(r"\bBC\d{4}\b", body.upper())
     return m.group(0) if m else None
+
+
+def _scrub_hotline_header(body: str) -> str:
+    """
+    Remove the prefilled routing header from a customer message.
+    Strips:
+      - Any line containing HOTLINE BC#### (including the | business name part)
+      - The [Describe the issue and hit send] placeholder line
+    Returns only what the customer actually typed.
+
+    Examples:
+      "HOTLINE BC4729 | Joe's Coffee\nThe bathroom is disgusting" → "The bathroom is disgusting"
+      "HOTLINE BC4729 | Joe's Coffee\n[Describe the issue and hit send]" → ""
+      "HOTLINE BC4729 waited 20 minutes"  (inline, no newline) → "waited 20 minutes"
+    """
+    # First handle inline case: HOTLINE BC#### [optional | name] then space then real message
+    # e.g. "HOTLINE BC4729 waited 20 minutes" — no newline
+    if "\n" not in body:
+        cleaned = re.sub(r"(?i)HOTLINE\s+BC\d{4}(\s*\|[^\n]*)?\s*", "", body).strip()
+        # Strip placeholder if that's all that's left
+        if re.match(r"(?i)^\[describe", cleaned):
+            return ""
+        return cleaned
+
+    # Multi-line: strip header lines
+    lines = body.splitlines()
+    cleaned = []
+    for line in lines:
+        upper = line.upper().strip()
+        # Drop any line containing the HOTLINE BC#### routing token (includes | name part)
+        if re.search(r"\bHOTLINE\s+BC\d{4}\b", upper):
+            continue
+        # Drop the instruction placeholder
+        if re.match(r"^\[DESCRIBE", upper):
+            continue
+        cleaned.append(line)
+
+    return "\n".join(cleaned).strip()
 
 def _process_customer_message(biz, sender, body):
     """Classify + alert for a customer message. Returns TwiML auto-reply."""
@@ -1162,8 +1209,11 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     if code:
         biz = get_business_by_code(code)
         if biz:
-            # Strip the code prefix so classification sees clean message
-            clean_body = re.sub(r"(?i)^hotline\s+BC\d{4}\s*", "", body).strip() or body
+            clean_body = _scrub_hotline_header(body)
+            if not clean_body:
+                # Customer scanned and hit send without typing — prompt them
+                logger.info(f"[BLANK MSG] {sender} scanned but sent no message")
+                return _twiml("We got your scan! Just type what's wrong and send it to us.")
             auto_reply = _process_customer_message(biz, sender, clean_body)
             return _twiml(auto_reply)
         else:
