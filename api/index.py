@@ -394,14 +394,16 @@ CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert 
 TIER DEFINITIONS:
 - Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, flooding, gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, water damage in progress (burst pipe, overflowing toilet/sink). Flooding IS always Tier 1 (slip hazards, electrical risk, property damage).
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
-- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. No staff present, equipment broken/out of order, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary).
+- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary).
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
 - Tier 4: Routine (Gray) — No action needed. Positive feedback, compliments, general questions (hours, location, menu), neutral messages.
 
-Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access, inquiry, other
+Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access, payment, inquiry, other
 - "access" = customer cannot enter the business (locked door, blocked entry, no one answering)
+- "equipment" = machinery broken/jammed (washer, dryer, carwash bay, arcade machine, gas pump, parking gate, ATM, payment reader, kiosk)
+- "payment" = payment processing issues (card reader down, payment jam, coins stuck, online system down)
 - "inquiry" = any question about the business (hours, directions, menu, policies, parking, accessibility)
-- "supply" = out of something (toilet paper, soap, napkins, cups)
+- "supply" = out of something (toilet paper, soap, napkins, cups, fuel)
 - "safety" = anything involving physical danger (Tier 1)
 
 AUTO-REPLY TONE:
@@ -426,12 +428,24 @@ EDGE CASES — ACCESS (all Tier 2, category "access"):
 - "Nobody answered", "no one at the door" = Tier 2 (access blocked).
 - Any message where a customer cannot physically enter or access the business = Tier 2.
 
+EDGE CASES — EQUIPMENT & PAYMENT (all Tier 2):
+- "Washer #3 is broken" = Tier 2, equipment.
+- "Carwash bay won't take my card" = Tier 2, payment.
+- "Arcade machine is stuck" = Tier 2, equipment.
+- "Gas pump 2 is showing an error" = Tier 2, payment/equipment.
+- "Parking gate is jammed" = Tier 2, equipment.
+- "Payment system is down" = Tier 2, payment.
+- "Kiosk won't read my license" = Tier 2, equipment.
+- Any equipment failure, payment failure, or machinery jam = Tier 2 (customers cannot complete transactions).
+
 OTHER EDGE CASES:
 - "Music is too loud" = Tier 3 (preference, not operational). Acknowledge, don't promise change.
 - "What time do you close?" = Tier 4, inquiry. Don't answer. Forward.
 - "You should fire her" = Tier 3, staffing. Employment complaint, NOT emergency.
 - "Bathroom is flooding!" = Tier 1, safety. Always emergency.
 - "Out of toilet paper" = Tier 2, supply.
+- "The dryer isn't heating" = Tier 2, equipment (revenue loss per unit).
+- "Coins are jammed in the machine" = Tier 2, payment (customer loses money, business loses revenue).
 - "I dropped my food/drink/item" = Tier 4. Customer accident, not a business issue.
 
 {website_context}
@@ -1740,12 +1754,14 @@ DEMO_PROMPT = """You are simulating a business's customer feedback SMS system fo
 TIER DEFINITIONS:
 - Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, flooding, gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, water damage in progress. Flooding IS always Tier 1 (slip hazards, electrical risk, property damage).
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
-- Tier 2: Business-Critical — Operations broken. No staff, equipment broken, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues.
+- Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues.
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
 - Tier 4: Routine — Positive feedback, compliments, questions, neutral.
 
-Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access, inquiry, other
+Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access, payment, inquiry, other
 - "access" = customer cannot enter the business (locked door, blocked entry, no one answering)
+- "equipment" = machinery broken/jammed (washer, dryer, carwash bay, arcade machine, gas pump, parking gate, ATM, payment reader, kiosk)
+- "payment" = payment processing issues (card reader down, payment jam, coins stuck, online system down)
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent. ALWAYS tell customer to call 911. NEVER say "we've contacted emergency services."
@@ -1768,12 +1784,18 @@ CONTEXT AWARENESS:
 - Don't reclassify follow-ups from scratch. Read the thread.
 
 EDGE CASES:
+- "Your bathroom is flooding!" = Tier 1, safety. ALWAYS emergency.
+- "Carwash bay won't take my card" = Tier 2, payment.
+- "Washer is leaking water" = Tier 2, equipment.
+- "Gas pump is showing an error" = Tier 2, payment/equipment.
+- "Arcade machine is jammed" = Tier 2, equipment.
+- "Parking gate is stuck" = Tier 2, equipment.
 - "Music is too loud" = Tier 3. Acknowledge, don't promise change.
 - "Can't get in the front door" = Tier 2 (access blocked).
 - "What time do you close?" = Tier 4, inquiry. Don't answer.
 - "You should fire her" = Tier 3, staffing complaint. NOT emergency.
-- "Bathroom is flooding!" = Tier 1, safety. ALWAYS emergency.
 - "Out of toilet paper" = Tier 2, supply.
+- Any equipment failure, payment failure, or machinery jam = Tier 2 (customers cannot complete transactions).
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
@@ -1872,15 +1894,15 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#888;font-weight:700">No app. No software. No setup. No training.</strong></p>
 <div class="examples"><p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p><div class="ex-row">
-<div class="ex" onclick="tryEx(this)">There's water all over the bathroom floor</div>
+<div class="ex" onclick="tryEx(this)">Your bathroom is flooding!</div>
 <div class="ex" onclick="tryEx(this)">I've been waiting 25 minutes, nobody's helped me</div>
 <div class="ex" onclick="tryEx(this)">The front door is locked and there's a line outside</div>
-<div class="ex" onclick="tryEx(this)">The machine by the entrance isn't working</div>
+<div class="ex" onclick="tryEx(this)">Carwash bay 2 won't take my card</div>
 <div class="ex" onclick="tryEx(this)">Guy at the counter was really rude to me</div>
-<div class="ex" onclick="tryEx(this)">Music is way too loud in here</div>
-<div class="ex" onclick="tryEx(this)">Honestly one of the best experiences I've had</div>
-<div class="ex" onclick="tryEx(this)">What time do you guys close tonight?</div>
-<div class="ex" onclick="tryEx(this)">Do you have oat milk?</div>
+<div class="ex" onclick="tryEx(this)">Washer #3 is leaking water everywhere</div>
+<div class="ex" onclick="tryEx(this)">Gas pump is showing an error</div>
+<div class="ex" onclick="tryEx(this)">Arcade machine is jammed and eating coins</div>
+<div class="ex" onclick="tryEx(this)">Parking gate is stuck closed</div>
 </div></div>
 <div class="phones">
 <div class="device"><div class="frame">
@@ -2028,35 +2050,47 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">Hotline alerts owners and senior management to the things that matter most: safety risks, operational failures, and the moments that make or break your reputation.</p>
 </div>
 <div class="grid">
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9749;</span><h3 style="display:inline">Restaurants & Cafes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"There's no one at the register and the bathroom is flooded."</em> You're across town. Without Hotline, this becomes a 1-star review. With it, you know in seconds.<div class="tag-row"><span class="tag-sm">flooding</span><span class="tag-sm">unstaffed</span><span class="tag-sm">food safety</span><span class="tag-sm">walk-outs</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128722;</span><h3 style="display:inline">Retail Stores</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"I've been waiting 15 minutes and there's nobody on the floor."</em> That customer is about to walk out and never come back. Hotline puts that message on your phone immediately.<div class="tag-row"><span class="tag-sm">no staff</span><span class="tag-sm">theft risk</span><span class="tag-sm">customer walkouts</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127947;</span><h3 style="display:inline">Gyms & Fitness Studios</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The cable machine snapped and almost hit someone."</em> Equipment failure is a liability nightmare. Hotline makes sure you hear about it before your insurance company does.<div class="tag-row"><span class="tag-sm">equipment failure</span><span class="tag-sm">injury risk</span><span class="tag-sm">locker room issues</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9986;</span><h3 style="display:inline">Salons & Barbershops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"I waited 40 minutes past my appointment and just left."</em> You lost the appointment revenue, the rebooking, and the referrals. Hotline catches it while you can still save the relationship.<div class="tag-row"><span class="tag-sm">long waits</span><span class="tag-sm">no-show staff</span><span class="tag-sm">unhappy clients</span></div></div></div>
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128664;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"The pressure washer isn't working on bay 2."</em> A customer tries to pay, can't complete the transaction, and leaves. You're losing revenue every minute until you find out. Hotline makes sure you know about equipment failures, payment jams, and service issues before the next customer walks away.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">payment issues</span><span class="tag-sm">service disruptions</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#129499;</span><h3 style="display:inline">Laundromats</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Machine #4 is leaking water all over the floor."</em> You might not visit for hours. By then, it's water damage and a slip-and-fall. Hotline tells you when it starts, not after.<div class="tag-row"><span class="tag-sm">equipment leaks</span><span class="tag-sm">safety hazards</span><span class="tag-sm">out of supplies</span></div></div></div>
+<div class="card-body"><em>"Machine #4 is leaking water all over the floor."</em> A broken dryer or washer is silent revenue loss—every 30 minutes without it, you're losing a customer transaction. Hotline tells you when it starts, not after you find standing water and potential liability issues.<div class="tag-row"><span class="tag-sm">equipment leaks</span><span class="tag-sm">safety hazards</span><span class="tag-sm">capacity loss</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127918;</span><h3 style="display:inline">Arcades & Gaming</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"The pinball machine is stuck and won't take coins."</em> A broken cabinet is lost revenue, not just now but forever—that kid goes to the arcade down the street instead. Hotline alerts you to jams, payment failures, and malfunctions so you can fix them before your customers find a competitor.<div class="tag-row"><span class="tag-sm">payment jams</span><span class="tag-sm">machine failures</span><span class="tag-sm">revenue loss</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128472;</span><h3 style="display:inline">Parking Garages & Lots</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"The gate is stuck closed and won't open."</em> A broken gate = zero revenue that hour and frustrated customers. Payment systems down, ticket machines jammed, access cards failing—you need to know instantly, not when you check the cameras tomorrow.<div class="tag-row"><span class="tag-sm">gate failures</span><span class="tag-sm">payment system down</span><span class="tag-sm">access issues</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9981;</span><h3 style="display:inline">Gas Stations</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"Pump 3 is showing an error and won't accept my card."</em> A broken pump drives customers away mid-transaction. Payment readers fail, nozzles jam, systems go offline—each minute of downtime is lost gallons and frustrated drivers heading elsewhere.<div class="tag-row"><span class="tag-sm">pump failures</span><span class="tag-sm">payment reader issues</span><span class="tag-sm">system outages</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128273;</span><h3 style="display:inline">Car Rental Kiosks</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"The kiosk won't read my license."</em> A down kiosk means customers can't rent, access vehicles, or complete transactions. License readers fail, touch screens freeze, payment systems timeout—your revenue stream stops instantly. Hotline gets you the alert before you miss a single rental.<div class="tag-row"><span class="tag-sm">kiosk outages</span><span class="tag-sm">reader failures</span><span class="tag-sm">payment downtime</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9749;</span><h3 style="display:inline">Restaurants & Cafes</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"There's no one at the register and the bathroom is flooded."</em> You're across town. Without Hotline, this becomes a 1-star review. With it, you know in seconds—whether it's a no-show, an equipment failure, or an angry customer.<div class="tag-row"><span class="tag-sm">staffing issues</span><span class="tag-sm">food safety</span><span class="tag-sm">customer experience</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128722;</span><h3 style="display:inline">Retail Stores</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"The self-checkout is down"</em> or <em>"Fitting room door is broken."</em> You hear about it when sales are already lost. Hotline connects you to what customers see the moment it matters.<div class="tag-row"><span class="tag-sm">equipment downtime</span><span class="tag-sm">customer friction</span><span class="tag-sm">safety issues</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127947;</span><h3 style="display:inline">Gyms & Fitness Studios</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"The treadmill isn't working"</em> or <em>"Access card reader is down."</em> Members pay for working equipment. A broken machine or locked building means lost member trust and churn.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">access issues</span><span class="tag-sm">member satisfaction</span></div></div></div>
+
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9986;</span><h3 style="display:inline">Salons & Barbershops</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"A customer got a chemical burn"</em> or <em>"Appointment system crashed."</em> Safety issues and booking problems hit reputation and liability instantly. Hotline makes sure you know before damage spreads.<div class="tag-row"><span class="tag-sm">safety incidents</span><span class="tag-sm">system failures</span><span class="tag-sm">customer injury</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128295;</span><h3 style="display:inline">Auto Repair Shops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"I was told 2 hours. It's been 5. Nobody's told me anything."</em> That customer is writing a review right now. Hotline gives you the chance to respond before they hit publish.<div class="tag-row"><span class="tag-sm">broken promises</span><span class="tag-sm">communication gaps</span><span class="tag-sm">angry customers</span></div></div></div>
+<div class="card-body"><em>"Your shop damaged my car"</em> or <em>"I've been waiting 4 hours."</em> Customers tell you how they feel the moment it happens. Hotline ensures you can respond to issues before they become bad reviews.<div class="tag-row"><span class="tag-sm">quality complaints</span><span class="tag-sm">wait time issues</span><span class="tag-sm">damage claims</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127976;</span><h3 style="display:inline">Hotels & Airbnbs</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The room smells like smoke and the AC doesn't work."</em> That guest is about to request a refund and leave a review that kills your next 50 bookings. Hotline gets you there first.<div class="tag-row"><span class="tag-sm">room complaints</span><span class="tag-sm">refund risk</span><span class="tag-sm">review prevention</span></div></div></div>
+<div class="card-body"><em>"The AC in room 205 stopped working and it's midnight."</em> A guest complaint is a potential bad review. Hotline gets you the alert while the guest is still there, not after they post about it online.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">guest complaints</span><span class="tag-sm">reputation risk</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127973;</span><h3 style="display:inline">Medical & Dental Offices</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"I've been in the waiting room for over an hour and nobody's updated me."</em> Patients don't complain to your face. They leave quietly and post online. Hotline gives them a private channel to reach you.<div class="tag-row"><span class="tag-sm">wait times</span><span class="tag-sm">front desk gaps</span><span class="tag-sm">patient retention</span></div></div></div>
+<div class="card-body"><em>"Your equipment isn't sterilized"</em> or <em>"No one's answering the phone."</em> Patient safety and trust are non-negotiable. Hotline keeps you alert to operational and safety issues in real-time.<div class="tag-row"><span class="tag-sm">safety protocols</span><span class="tag-sm">equipment issues</span><span class="tag-sm">staff gaps</span></div></div></div>
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128187;</span><h3 style="display:inline">Coworking Spaces</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The internet has been down for 30 minutes and nobody seems to know."</em> Members pay for productivity. When the space fails, they leave. Hotline keeps you ahead of it.<div class="tag-row"><span class="tag-sm">internet outages</span><span class="tag-sm">facilities</span><span class="tag-sm">member retention</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128663;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The dryer scratched my paint."</em> That's a damage claim waiting to happen. Hotline makes sure you know about it while the customer is still on-site, not when the lawyer calls.<div class="tag-row"><span class="tag-sm">damage claims</span><span class="tag-sm">equipment issues</span><span class="tag-sm">quality complaints</span></div></div></div>
+<div class="card-body"><em>"WiFi is down"</em> or <em>"The bathroom is unusable."</em> Members are paying for a working environment. Know about disruptions before members lose their workspace and consider leaving.<div class="tag-row"><span class="tag-sm">connectivity issues</span><span class="tag-sm">facility problems</span><span class="tag-sm">member experience</span></div></div></div>
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
