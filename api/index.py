@@ -1070,6 +1070,24 @@ def admin_list(request: Request):
     if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
     return {"businesses":[{"id":b["id"],"name":b["name"],"owner":b["owner_phone"],"twilio":b["twilio_number"]} for b in get_all_businesses()]}
 
+@app.post("/admin/update-phones")
+async def admin_update_phones(request: Request):
+    _ensure_init()
+    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    body = await request.json()
+    biz_id = body.get("biz_id","").strip()
+    phones_str = body.get("phones","").strip()
+    if not biz_id: return {"error":"biz_id required"}
+    # Validate phones (comma-separated, each must start with +)
+    phones = [p.strip() for p in phones_str.split(",") if p.strip()]
+    for p in phones:
+        if not p.startswith("+"): return {"error":f"Invalid phone: {p}. All phones must start with +"}, 400
+    normalized = ",".join(phones)
+    with get_db() as c:
+        _execute(c, _q("UPDATE businesses SET alert_phones=? WHERE id=?"), (normalized, biz_id))
+    logger.info(f"[ADMIN] Updated alert phones for {biz_id}: {normalized}")
+    return {"success":True, "alert_phones": normalized}
+
 @app.post("/admin/remove")
 async def admin_remove(request: Request):
     _ensure_init()
@@ -1162,16 +1180,8 @@ def admin_ui(request: Request):
     if not _get_admin_session(request):
         return Response(content=_LOGIN_PAGE, media_type="text/html")
 
-    # --- Pending signups table ---
-    pending = get_pending_signups()
-    pending_rows = ""
-    for p in pending:
-        ts = p["created_at"][:16].replace("T"," ") + " UTC"
-        pending_rows += f'<tr><td style="padding:12px 16px;font-weight:600">{p["name"]}</td><td style="padding:12px 16px;font-family:monospace;font-size:13px">{p["owner_phone"]}</td><td style="padding:12px 16px;font-size:13px;color:#555">{p["email"] or "—"}</td><td style="padding:12px 16px;font-size:13px;font-family:monospace;color:#ea580c;font-weight:600">—</td><td style="padding:12px 16px;font-size:12px;color:#999">{ts}</td></tr>'
-    pending_count = len(pending)
-    pending_badge = f' <span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;vertical-align:middle">{pending_count}</span>' if pending_count else ""
-    if not pending_rows:
-        pending_rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No pending signups.</td></tr>'
+    # --- Pending signups table removed — product is live! ---
+    # Previously showed pending_signups; no longer needed.
 
     # --- Active businesses table ---
     STATUS_BADGE = {
@@ -1192,9 +1202,11 @@ def admin_ui(request: Request):
         days = trial_days_left(b)
         trial_info = f"<br><span style='font-size:11px;color:#888'>{days}d left</span>" if bstatus == "trialing" else ""
         trial_end_val = (b.get("trial_ends_at") or "")[:10]
+        alert_phones_str = b.get("alert_phones") or ""
+        alert_phones_display = alert_phones_str if alert_phones_str else b.get("owner_phone","")
         rows += (
             f'<tr id="row-{bid}">'
-            f'<td style="padding:12px 16px;font-weight:600">{b["name"]}<br><span style="font-size:11px;color:#aaa">{b.get("owner_phone","")}</span></td>'
+            f'<td style="padding:12px 16px;font-weight:600">{b["name"]}<br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
             f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
@@ -1216,21 +1228,6 @@ def admin_ui(request: Request):
   </div>
 
   <div id="toast" style="display:none;background:#166534;color:#fff;font-size:13px;padding:8px 14px;border-radius:6px;margin-bottom:16px"></div>
-
-  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Pending Signups{pending_badge}</h2>
-  <p style="font-size:13px;color:#888;margin:0 0 12px">These leads signed up while Twilio provisioning was unavailable. Provision them manually once the service is live.</p>
-  <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto;margin-bottom:36px">
-    <table style="width:100%;border-collapse:collapse;font-size:14px">
-      <thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc">
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Business</th>
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Phone</th>
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Email</th>
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Biz Code</th>
-        <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Signed Up</th>
-      </tr></thead>
-      <tbody>{pending_rows}</tbody>
-    </table>
-  </div>
 
   <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Active Businesses</h2>
   <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto">
@@ -1331,6 +1328,13 @@ async function doCreditMonths(){{
 async function doSendBillingSms(){{
   const d=await adminPost("/admin/billing",{{biz_id:_bmBizId,action:"send_billing_sms"}});
   if(d&&d.success)toast("Billing SMS sent ✓",true);
+  else toast((d&&d.error)||"Failed",false);
+}}
+async function editPhones(bizId,currentPhones){{
+  const newPhones=prompt("Enter alert phone numbers (comma-separated, with country codes):\\n\\nExample: +12075551234, +12075555678",currentPhones);
+  if(newPhones===null)return;
+  const d=await adminPost("/admin/update-phones",{{biz_id:bizId,phones:newPhones}});
+  if(d&&d.success){{toast("Alert phones updated ✓",true);setTimeout(()=>location.reload(),800);}}
   else toast((d&&d.error)||"Failed",false);
 }}
 document.getElementById("billing-modal").addEventListener("click",function(e){{if(e.target===this)closeBilling();}});
