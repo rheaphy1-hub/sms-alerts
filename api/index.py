@@ -630,8 +630,8 @@ def handle_owner_command(text, business, sender_phone=""):
             link_part = f"\nPay here when ready: {PAYMENT_LINK}" if PAYMENT_LINK else ""
             return f"Trial active \u2014 {days} day(s) left.{link_part}"
         else:
-            link_part = f"\nReactivate: {PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
-            return f"\u26d4 Trial ended. Alerts paused.{link_part}"
+            link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
+            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
 
     if cmd == "HELP":
         return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Close/acknowledge alert\n"
@@ -1116,13 +1116,13 @@ async def admin_billing(request: Request):
 
     elif action == "send_billing_sms":
         PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK","")
-        link_part = f"\nPay here: {PAYMENT_LINK}" if PAYMENT_LINK else ""
+        link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
         status = biz.get("sub_status","trialing")
         days = trial_days_left(biz)
         if status == "active":
             msg = "\u2705 Your Hotline subscription is active."
         elif status in ("expired","canceled","past_due"):
-            msg = f"\u26d4 Your Hotline account is paused.{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
         else:
             msg = f"\u23f0 Your Hotline trial has {days} day(s) left.{link_part}"
         phones = get_alert_phones(biz)
@@ -2113,6 +2113,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready sign instantly.</p>
 <div class="card">
 <div class="trial">14-day free trial &middot; No credit card required</div>
+<div style="text-align:center;font-size:13px;color:#888;margin:-8px 0 16px">Then $19.99/month. Cancel anytime.</div>
 <div class="result" id="result"></div>
 <label>Business name</label><input type="text" id="f-name" placeholder="Joe's Coffee">
 <label>Your cell phone</label><input type="tel" id="f-phone" placeholder="(727) 555-1234">
