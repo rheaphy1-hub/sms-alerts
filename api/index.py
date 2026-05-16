@@ -97,7 +97,9 @@ def init_db():
     for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'weekly\'"),
                          ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'"),
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
-                         ("business_code","\'\'")]:
+                         ("business_code","\'\'"),("trial_ends_at","\'\'"),
+                         ("sub_status","\'trialing\'"),("stripe_customer_id","\'\'"),
+                         ("stripe_sub_id","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
@@ -135,10 +137,11 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
     website_info = scrape_website_info(website_url) if website_url else ""
     if not business_code:
         business_code = _gen_business_code()
+    trial_end = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
     try:
         with get_db() as c:
-            _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"),
-                     (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, now))
+            _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
+                     (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
         return business_code
     except: return None
 
@@ -226,6 +229,72 @@ def set_alert_tier3(bid, on):
 
 def get_all_businesses():
     with get_db() as c: return _fetchall(c, "SELECT * FROM businesses")
+
+# --- Trial / Subscription helpers ---
+def can_send_alerts(biz):
+    """Allow alerts if trialing (within window) or active. Block if expired/canceled."""
+    status = biz.get("sub_status") or "trialing"
+    if status == "active":
+        return True
+    trial_end = (biz.get("trial_ends_at") or "").strip()
+    if trial_end:
+        try:
+            if datetime.fromisoformat(trial_end) > datetime.now(timezone.utc):
+                return True
+        except Exception:
+            pass
+    return False
+
+def trial_days_left(biz):
+    trial_end = (biz.get("trial_ends_at") or "").strip()
+    if not trial_end:
+        return 0
+    try:
+        delta = datetime.fromisoformat(trial_end) - datetime.now(timezone.utc)
+        return max(0, delta.days)
+    except Exception:
+        return 0
+
+def set_sub_status(bid, status, stripe_customer_id="", stripe_sub_id=""):
+    with get_db() as c:
+        if stripe_customer_id and stripe_sub_id:
+            _execute(c, _q("UPDATE businesses SET sub_status=?,stripe_customer_id=?,stripe_sub_id=? WHERE id=?"),
+                     (status, stripe_customer_id, stripe_sub_id, bid))
+        elif stripe_customer_id:
+            _execute(c, _q("UPDATE businesses SET sub_status=?,stripe_customer_id=? WHERE id=?"),
+                     (status, stripe_customer_id, bid))
+        else:
+            _execute(c, _q("UPDATE businesses SET sub_status=? WHERE id=?"), (status, bid))
+
+def get_business_by_stripe_customer(stripe_customer_id):
+    with get_db() as c:
+        return _fetchone(c, _q("SELECT * FROM businesses WHERE stripe_customer_id=?"), (stripe_customer_id,))
+
+def send_trial_warnings():
+    """Daily cron: warn on day 13, expire on day 14+."""
+    sent = 0
+    PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
+    for biz in get_all_businesses():
+        status = biz.get("sub_status") or "trialing"
+        if status != "trialing":
+            continue
+        days = trial_days_left(biz)
+        phones = get_alert_phones(biz)
+        if days == 1:
+            link_part = f"\nAdd payment to keep alerts: {PAYMENT_LINK}" if PAYMENT_LINK else ""
+            msg = f"\u23f0 Hotline trial ends tomorrow.{link_part}"
+            for p in phones: send_sms(p, msg)
+            logger.info(f"[TRIAL WARNING] {biz['id']}")
+            sent += 1
+        elif days == 0:
+            set_sub_status(biz["id"], "expired")
+            link_part = f"\nReactivate: {PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
+            msg = f"\u26d4 Hotline paused \u2014 trial ended.{link_part}"
+            for p in phones: send_sms(p, msg)
+            logger.info(f"[TRIAL EXPIRED] {biz['id']}")
+            sent += 1
+    return sent
+
 
 def save_pending_signup(name, phone, phone2, email, website_url):
     now = datetime.now(timezone.utc).isoformat()
@@ -551,6 +620,19 @@ def handle_owner_command(text, business, sender_phone=""):
         for p in others: send_sms(p, f"\u2705 Alert #{msg['id']} acknowledged by {short}.")
         return f"\u2705 Alert #{msg['id']} acknowledged.\n\"{msg['message_text'][:80]}\""
 
+    if cmd == "BILLING":
+        status = business.get("sub_status") or "trialing"
+        days = trial_days_left(business)
+        PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
+        if status == "active":
+            return "\u2705 Subscription active. Reply BILLING CANCEL to cancel."
+        elif status == "trialing":
+            link_part = f"\nPay here when ready: {PAYMENT_LINK}" if PAYMENT_LINK else ""
+            return f"Trial active \u2014 {days} day(s) left.{link_part}"
+        else:
+            link_part = f"\nReactivate: {PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
+            return f"\u26d4 Trial ended. Alerts paused.{link_part}"
+
     if cmd == "HELP":
         return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Close/acknowledge alert\n"
                 "OK 2 \u2014 Acknowledge specific alert\nREPLY \u2014 Reply to customer (privately)\n"
@@ -560,7 +642,7 @@ def handle_owner_command(text, business, sender_phone=""):
                 "ALERTS \u2014 View/change alert level\n"
                 "TIER2 \u2014 Critical issues only\nTIER3 \u2014 Add reputation alerts\n"
                 "QUIET 2H \u2014 Silence alerts for X hours\nPAUSE / RESUME\n"
-                "DIGEST DAILY / WEEKLY\nHELP \u2014 This message")
+                "DIGEST DAILY / WEEKLY\nBILLING \u2014 Subscription status\nHELP \u2014 This message")
 
     if cmd == "REPLY":
         ctx_id = get_context(bid)
@@ -1399,7 +1481,10 @@ def _process_customer_message(biz, sender, body):
 
     logger.info(f"[CLASSIFY] biz={biz['id']} tier={tier} conf={conf:.2f} cat={cat} summary={summary!r}")
 
-    if alert_phones and should_alert and not (silenced and tier != 1):
+    _trial_ok = can_send_alerts(biz)
+    if not _trial_ok and tier != 1:
+        logger.info(f"[TRIAL BLOCKED] Alert suppressed for {biz['id']} — trial expired or unpaid")
+    elif alert_phones and should_alert and not (silenced and tier != 1):
         if recent_count < RATE_LIMIT_MAX:
             if tier == 1:
                 alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply DETAILS for full message."
@@ -2104,6 +2189,90 @@ footer a{color:#aaa}
 
 @app.get("/terms")
 def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Stripe sends events here after payment succeeds/fails."""
+    _ensure_init()
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+
+    # Verify signature
+    if STRIPE_WEBHOOK_SECRET:
+        try:
+            # Manual HMAC verification (no stripe SDK required)
+            import hmac as _hmac, hashlib as _hashlib
+            parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
+            ts = parts.get("t", "")
+            v1 = parts.get("v1", "")
+            signed = f"{ts}.{payload.decode()}"
+            expected = _hmac.new(STRIPE_WEBHOOK_SECRET.encode(), signed.encode(), _hashlib.sha256).hexdigest()
+            if not _hmac.compare_digest(expected, v1):
+                logger.warning("[STRIPE] Invalid webhook signature")
+                return JSONResponse({"error": "Invalid signature"}, status_code=400)
+        except Exception as e:
+            logger.error(f"[STRIPE] Signature check failed: {e}")
+            return JSONResponse({"error": "Signature error"}, status_code=400)
+
+    try:
+        event = json.loads(payload)
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    event_type = event.get("type", "")
+    data = event.get("data", {}).get("object", {})
+    customer_id = data.get("customer", "")
+    logger.info(f"[STRIPE] Event: {event_type} customer={customer_id}")
+
+    biz = get_business_by_stripe_customer(customer_id) if customer_id else None
+
+    if event_type == "invoice.payment_succeeded":
+        if biz:
+            set_sub_status(biz["id"], "active")
+            logger.info(f"[STRIPE] Payment succeeded — {biz['id']} set active")
+            # Notify owner if they were previously blocked
+            if (biz.get("sub_status") or "trialing") in ("expired", "past_due"):
+                for p in get_alert_phones(biz):
+                    send_sms(p, "\u2705 Payment received. Hotline alerts are active again.")
+
+    elif event_type == "invoice.payment_failed":
+        if biz:
+            set_sub_status(biz["id"], "past_due")
+            logger.info(f"[STRIPE] Payment failed — {biz['id']} set past_due")
+            PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
+            link_part = f"\nUpdate payment: {PAYMENT_LINK}" if PAYMENT_LINK else ""
+            for p in get_alert_phones(biz):
+                send_sms(p, f"\u26a0\ufe0f Hotline payment failed. Alerts may stop soon.{link_part}")
+
+    elif event_type == "customer.subscription.updated":
+        status_map = {"active": "active", "past_due": "past_due", "canceled": "canceled",
+                      "unpaid": "past_due", "trialing": "trialing"}
+        stripe_status = data.get("status", "")
+        mapped = status_map.get(stripe_status, stripe_status)
+        if biz and mapped:
+            set_sub_status(biz["id"], mapped)
+            logger.info(f"[STRIPE] Sub updated — {biz['id']} => {mapped}")
+
+    elif event_type == "customer.subscription.deleted":
+        if biz:
+            set_sub_status(biz["id"], "canceled")
+            logger.info(f"[STRIPE] Sub canceled — {biz['id']}")
+            for p in get_alert_phones(biz):
+                send_sms(p, "\u26d4 Hotline subscription canceled. Alerts are paused.")
+
+    return JSONResponse({"received": True})
+
+
+@app.post("/cron/trial-warnings")
+def cron_trial_warnings():
+    """Call daily via Vercel cron or external scheduler."""
+    _ensure_init()
+    n = send_trial_warnings()
+    return {"warnings_sent": n}
+
 
 @app.post("/signup/create")
 async def signup_create(request_data:dict=None):
