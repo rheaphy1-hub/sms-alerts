@@ -1731,16 +1731,15 @@ def _twiml(msg):
 
 # --- Shared nav + styles ---
 NAV_CSS = """
-.nav{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;max-width:960px;margin:0 auto}
-.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none}
-.nav .logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
-.nav-links{display:flex;gap:20px;align-items:center}
+.nav{display:flex;justify-content:center;align-items:center;padding:12px 24px;max-width:960px;margin:0 auto;position:relative}
+.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;position:absolute;left:24px}
+.nav-links{display:flex;gap:20px;align-items:center;margin:0 auto}
 .nav-links a{font-size:14px;color:#666;text-decoration:none;font-weight:500}
 .nav-links a:hover{color:#1a1a1a}
 .nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
-.hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
-@media(max-width:600px){.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10}.nav-links.open{display:flex}.hamburger{display:block}}
+.hamburger{display:none;cursor:pointer;font-size:22px;color:#666;position:absolute;right:24px}
+@media(max-width:600px){.nav{justify-content:space-between;padding:12px 16px}.nav .logo{position:static;font-size:12px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10}.nav-links.open{display:flex}.hamburger{display:block;position:static}}
 """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
@@ -1890,9 +1889,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1>Know when your business needs you.<br><em>AI handles the rest.</em></h1>
+<h1 style="max-width:700px;margin:0 auto 12px">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
-<p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#888;font-weight:700">No app. No software. No setup. No training.</strong></p>
+<p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
 <div class="examples"><p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p><div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Your bathroom is flooding!</div>
 <div class="ex" onclick="tryEx(this)">I've been waiting 25 minutes, nobody's helped me</div>
@@ -1924,6 +1923,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
 <div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
 <div class="cmd-btn" onclick="ownerCmd('REPLY')">REPLY</div>
+<div class="cmd-btn" onclick="resetDemo()" style="background:#f0f0f0;color:#666">Reset</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
@@ -1943,6 +1943,7 @@ function addB(c,cls,label,text,tier){const d=document.createElement('div');d.cla
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
+function resetDemo(){history=[];lastData=null;acked=false;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Owner alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('owner-inp').value='';hideOwnerInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
 function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 
