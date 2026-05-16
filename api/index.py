@@ -935,8 +935,28 @@ async def admin_welcome(request: Request):
     biz_id = body.get("biz_id","")
     with get_db() as c: biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
     if not biz: return {"error":"Not found"}
+    phones = get_alert_phones(biz)
+    # 1. Welcome + commands
     msg = WELCOME_MSG.format(name=biz["name"],twilio=biz["twilio_number"])
-    for p in get_alert_phones(biz): send_sms(p,msg)
+    for p in phones: send_sms(p, msg)
+    # 2. Asset links (sign PDF + QR)
+    code = biz.get("business_code","")
+    if code:
+        base = os.getenv("BASE_URL", "https://hotlinetxt.com")
+        asset_msg = (
+            f"Your Hotline assets for {biz['name']}:\n"
+            f"Print-ready sign: {base}/signs/{code}.pdf\n"
+            f"Plain QR image (custom signage): {base}/qr/{code}.png"
+        )
+        for p in phones: send_sms(p, asset_msg)
+    # 3. Preference prompt
+    pref_prompt = (
+        "One quick setup \u2014 what alerts do you want?\n\n"
+        "Reply TIER2 \u2014 Critical only (equipment failures, no staff, safety issues)\n"
+        "Reply TIER3 \u2014 Everything including complaints & feedback\n\n"
+        "You can change this anytime by texting ALERTS."
+    )
+    for p in phones: send_sms(p, pref_prompt)
     return {"success":True}
 
 @app.get("/admin/list")
