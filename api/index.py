@@ -281,15 +281,15 @@ def send_trial_warnings():
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
         if days == 1:
-            link_part = f"\nAdd payment to keep alerts: {PAYMENT_LINK}" if PAYMENT_LINK else ""
-            msg = f"\u23f0 Hotline trial ends tomorrow.{link_part}"
+            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
+            msg = f"Your free Hotline trial ends tomorrow.{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
             sent += 1
         elif days == 0:
             set_sub_status(biz["id"], "expired")
-            link_part = f"\nReactivate: {PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
-            msg = f"\u26d4 Hotline paused \u2014 trial ended.{link_part}"
+            link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
