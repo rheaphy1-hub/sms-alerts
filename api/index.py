@@ -1731,16 +1731,16 @@ def _twiml(msg):
 
 # --- Shared nav + styles ---
 NAV_CSS = """
-.nav{display:flex;justify-content:center;align-items:center;gap:60px;padding:12px 24px;max-width:960px;margin:0 auto}
-.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none}
+.nav{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto}
+.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;position:absolute;left:50%;transform:translateX(-50%)}
 .nav .logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
-.nav-links{display:flex;gap:20px;align-items:center}
+.nav-links{display:flex;gap:20px;align-items:center;margin-left:auto}
 .nav-links a{font-size:14px;color:#666;text-decoration:none;font-weight:500}
 .nav-links a:hover{color:#1a1a1a}
 .nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
 .hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
-@media(max-width:600px){.nav{gap:10px;flex-wrap:wrap;justify-content:space-between;padding:8px 16px}.nav .logo{font-size:11px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10}.nav-links.open{display:flex}.hamburger{display:block}}
+@media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;font-size:11px;flex:0 0 auto}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
 """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
@@ -1890,10 +1890,10 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1 style="max-width:700px;margin:0 auto 12px">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
+<h1 style="max-width:900px;margin:0 auto 12px;font-size:clamp(32px,5vw,48px);line-height:1.2">Know when your business needs you. <em>AI handles the rest.</em></h1>
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
-<div style="display:flex;gap:12px;margin-bottom:12px;align-items:center"><p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:0;text-transform:uppercase;letter-spacing:0.06em;flex:1">Try a scenario or type your own</p><button onclick="resetDemo()" style="padding:6px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Reset</button></div>
+<p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p>
 <div class="examples">
 <div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Your bathroom is flooding!</div>
@@ -1905,7 +1905,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="ex" onclick="tryEx(this)">Gas pump is showing an error</div>
 <div class="ex" onclick="tryEx(this)">Arcade machine is jammed and eating coins</div>
 <div class="ex" onclick="tryEx(this)">Parking gate is stuck closed</div>
-</div></div>
+</div>
+<div style="margin-top:12px"><button onclick="resetDemo()" style="padding:6px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset</button></div>
+</div>
 <div class="phones">
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 87%</span></div>
