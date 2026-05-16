@@ -1058,6 +1058,81 @@ async def admin_remove(request: Request):
     logger.info(f"[ADMIN] Removed business {biz_id}")
     return {"success":True}
 
+@app.post("/admin/billing")
+async def admin_billing(request: Request):
+    """Set sub_status, extend trial, or credit months."""
+    _ensure_init()
+    if not _get_admin_session(request): return JSONResponse({"error":"Unauthorized"}, status_code=401)
+    body = await request.json()
+    biz_id = body.get("biz_id","").strip()
+    action = body.get("action","").strip()  # set_status | extend_trial | credit_months | send_billing_sms
+    if not biz_id: return {"error":"biz_id required"}
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
+    if not biz: return {"error":"Not found"}
+
+    if action == "set_status":
+        status = body.get("status","").strip()
+        allowed = ("trialing","active","past_due","expired","canceled","comped")
+        if status not in allowed: return {"error":f"status must be one of {allowed}"}
+        with get_db() as c:
+            _execute(c, _q("UPDATE businesses SET sub_status=? WHERE id=?"), (status, biz_id))
+        logger.info(f"[ADMIN BILLING] {biz_id} status => {status}")
+        return {"success":True, "status":status}
+
+    elif action == "extend_trial":
+        days = int(body.get("days", 7))
+        if days < 1 or days > 365: return {"error":"days must be 1-365"}
+        current = (biz.get("trial_ends_at") or "").strip()
+        try:
+            base_dt = datetime.fromisoformat(current) if current else datetime.now(timezone.utc)
+            # If already expired, extend from now
+            if base_dt < datetime.now(timezone.utc):
+                base_dt = datetime.now(timezone.utc)
+        except Exception:
+            base_dt = datetime.now(timezone.utc)
+        new_end = (base_dt + timedelta(days=days)).isoformat()
+        with get_db() as c:
+            _execute(c, _q("UPDATE businesses SET trial_ends_at=?, sub_status='trialing' WHERE id=?"), (new_end, biz_id))
+        logger.info(f"[ADMIN BILLING] {biz_id} trial extended +{days}d => {new_end[:10]}")
+        return {"success":True, "trial_ends_at": new_end[:10], "days_added": days}
+
+    elif action == "credit_months":
+        months = int(body.get("months", 1))
+        if months < 1 or months > 24: return {"error":"months must be 1-24"}
+        days = months * 30
+        current = (biz.get("trial_ends_at") or "").strip()
+        try:
+            base_dt = datetime.fromisoformat(current) if current else datetime.now(timezone.utc)
+            if base_dt < datetime.now(timezone.utc):
+                base_dt = datetime.now(timezone.utc)
+        except Exception:
+            base_dt = datetime.now(timezone.utc)
+        new_end = (base_dt + timedelta(days=days)).isoformat()
+        with get_db() as c:
+            _execute(c, _q("UPDATE businesses SET trial_ends_at=?, sub_status='trialing' WHERE id=?"), (new_end, biz_id))
+        logger.info(f"[ADMIN BILLING] {biz_id} credited {months} month(s) => {new_end[:10]}")
+        return {"success":True, "trial_ends_at": new_end[:10], "months_credited": months}
+
+    elif action == "send_billing_sms":
+        PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK","")
+        link_part = f"\nPay here: {PAYMENT_LINK}" if PAYMENT_LINK else ""
+        status = biz.get("sub_status","trialing")
+        days = trial_days_left(biz)
+        if status == "active":
+            msg = "\u2705 Your Hotline subscription is active."
+        elif status in ("expired","canceled","past_due"):
+            msg = f"\u26d4 Your Hotline account is paused.{link_part}"
+        else:
+            msg = f"\u23f0 Your Hotline trial has {days} day(s) left.{link_part}"
+        phones = get_alert_phones(biz)
+        for p in phones: send_sms(p, msg)
+        logger.info(f"[ADMIN BILLING] Billing SMS sent to {biz_id}")
+        return {"success":True, "sms_sent_to": phones}
+
+    return {"error":"Unknown action"}
+
+
 @app.get("/admin")
 def admin_ui(request: Request):
     _ensure_init()
@@ -1076,23 +1151,38 @@ def admin_ui(request: Request):
         pending_rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No pending signups.</td></tr>'
 
     # --- Active businesses table ---
+    STATUS_BADGE = {
+        "trialing": ("<span style='background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px'>TRIAL</span>", "trialing"),
+        "active":   ("<span style='background:#dcfce7;color:#166534;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px'>ACTIVE</span>", "active"),
+        "past_due": ("<span style='background:#fef9c3;color:#854d0e;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px'>PAST DUE</span>", "past_due"),
+        "expired":  ("<span style='background:#fee2e2;color:#991b1b;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px'>EXPIRED</span>", "expired"),
+        "canceled": ("<span style='background:#f3f4f6;color:#6b7280;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px'>CANCELED</span>", "canceled"),
+        "comped":   ("<span style='background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px'>COMPED</span>", "comped"),
+    }
     businesses = get_all_businesses()
     rows = ""
     for b in businesses:
         s = get_stats(b["id"])
         bid = b["id"]
+        bstatus = (b.get("sub_status") or "trialing")
+        badge_html, _ = STATUS_BADGE.get(bstatus, (bstatus, bstatus))
+        days = trial_days_left(b)
+        trial_info = f"<br><span style='font-size:11px;color:#888'>{days}d left</span>" if bstatus == "trialing" else ""
+        trial_end_val = (b.get("trial_ends_at") or "")[:10]
         rows += (
             f'<tr id="row-{bid}">'
-            f'<td style="padding:12px 16px;font-weight:600">{b["name"]}</td>'
+            f'<td style="padding:12px 16px;font-weight:600">{b["name"]}<br><span style="font-size:11px;color:#aaa">{b.get("owner_phone","")}</span></td>'
             f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
-            f'<td style="padding:12px 16px">'
-            f'<a href="#" onclick="adminResend(\'{bid}\');return false" style="color:#2563eb;font-size:13px;margin-right:12px">Resend</a>'
-            f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:13px">Remove</a>'
+            f'<td style="padding:12px 16px">{badge_html}{trial_info}</td>'
+            f'<td style="padding:12px 16px;white-space:nowrap">'
+            f'<a href="#" onclick="adminResend(\'{bid}\');return false" style="color:#2563eb;font-size:12px;margin-right:10px">Resend</a>'
+            f'<a href="#" onclick="openBilling(\'{bid}\',\'{b["name"]}\',\'{bstatus}\',\'{trial_end_val}\');return false" style="color:#7c3aed;font-size:12px;margin-right:10px">Billing</a>'
+            f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:12px">Remove</a>'
             f'</td></tr>'
         )
-    if not rows: rows = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
+    if not rows: rows = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
 <body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6">
@@ -1127,13 +1217,54 @@ def admin_ui(request: Request):
         <th style="padding:10px 16px;text-align:left;font-size:12px;text-transform:uppercase;color:#888">Code</th>
         <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Msgs</th>
         <th style="padding:10px 16px;text-align:center;font-size:12px;text-transform:uppercase;color:#888">Flagged</th>
+        <th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Status</th>
         <th style="padding:10px 16px;font-size:12px;text-transform:uppercase;color:#888">Actions</th>
       </tr></thead>
       <tbody id="biz-tbody">{rows}</tbody>
     </table>
   </div>
 </div>
+<!-- Billing Modal -->
+<div id="billing-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:28px;width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.15)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <h3 id="bm-title" style="margin:0;font-size:16px"></h3>
+      <a href="#" onclick="closeBilling();return false" style="color:#888;font-size:20px;text-decoration:none">&times;</a>
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;font-weight:600;color:#888;text-transform:uppercase">Set Status</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <button onclick="setBillingStatus('trialing')" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #bfdbfe;background:#dbeafe;color:#1d4ed8;cursor:pointer">Trial</button>
+        <button onclick="setBillingStatus('active')" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #bbf7d0;background:#dcfce7;color:#166534;cursor:pointer">Active</button>
+        <button onclick="setBillingStatus('comped')" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #e9d5ff;background:#f3e8ff;color:#6b21a8;cursor:pointer">Comped</button>
+        <button onclick="setBillingStatus('expired')" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #fecaca;background:#fee2e2;color:#991b1b;cursor:pointer">Expired</button>
+        <button onclick="setBillingStatus('canceled')" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #e5e7eb;background:#f3f4f6;color:#6b7280;cursor:pointer">Canceled</button>
+      </div>
+    </div>
+    <div style="border-top:1px solid #f0f0ec;padding-top:16px;margin-bottom:16px">
+      <label style="font-size:12px;font-weight:600;color:#888;text-transform:uppercase">Extend Trial</label>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input id="bm-days" type="number" min="1" max="365" value="7" style="width:70px;padding:6px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px">
+        <span style="line-height:32px;font-size:13px;color:#888">days</span>
+        <button onclick="doExtendTrial()" style="flex:1;padding:6px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer">Extend</button>
+      </div>
+    </div>
+    <div style="border-top:1px solid #f0f0ec;padding-top:16px;margin-bottom:16px">
+      <label style="font-size:12px;font-weight:600;color:#888;text-transform:uppercase">Credit Months</label>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input id="bm-months" type="number" min="1" max="24" value="1" style="width:70px;padding:6px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px">
+        <span style="line-height:32px;font-size:13px;color:#888">months</span>
+        <button onclick="doCreditMonths()" style="flex:1;padding:6px 12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer">Credit</button>
+      </div>
+      <p style="font-size:11px;color:#aaa;margin:6px 0 0">1 month = 30 days added to trial window.</p>
+    </div>
+    <div style="border-top:1px solid #f0f0ec;padding-top:16px">
+      <button onclick="doSendBillingSms()" style="width:100%;padding:8px;background:#f5f5f0;color:#333;border:1px solid #e0e0dc;border-radius:6px;font-size:13px;cursor:pointer">📱 Send Billing SMS to Owner</button>
+    </div>
+  </div>
+</div>
 <script>
+var _bmBizId="",_bmName="";
 function toast(msg,ok){{var el=document.getElementById("toast");el.textContent=msg;el.style.background=ok?"#166534":"#991b1b";el.style.display="block";setTimeout(()=>el.style.display="none",3000);}}
 async function adminPost(path,body){{
   const r=await fetch(path,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
@@ -1151,6 +1282,35 @@ async function adminRemove(bizId,name){{
   if(d&&d.success){{document.getElementById("row-"+bizId).remove();toast("Removed "+name,true);}}
   else toast((d&&d.error)||"Failed",false);
 }}
+function openBilling(bizId,name,status,trialEnd){{
+  _bmBizId=bizId; _bmName=name;
+  document.getElementById("bm-title").textContent="Billing: "+name;
+  document.getElementById("billing-modal").style.display="flex";
+}}
+function closeBilling(){{document.getElementById("billing-modal").style.display="none";}}
+async function setBillingStatus(status){{
+  const d=await adminPost("/admin/billing",{{biz_id:_bmBizId,action:"set_status",status:status}});
+  if(d&&d.success){{toast("Status → "+status,true);setTimeout(()=>location.reload(),800);}}
+  else toast((d&&d.error)||"Failed",false);
+}}
+async function doExtendTrial(){{
+  const days=parseInt(document.getElementById("bm-days").value);
+  const d=await adminPost("/admin/billing",{{biz_id:_bmBizId,action:"extend_trial",days:days}});
+  if(d&&d.success){{toast("Trial extended +"+days+"d (ends "+d.trial_ends_at+")",true);setTimeout(()=>location.reload(),1200);}}
+  else toast((d&&d.error)||"Failed",false);
+}}
+async function doCreditMonths(){{
+  const months=parseInt(document.getElementById("bm-months").value);
+  const d=await adminPost("/admin/billing",{{biz_id:_bmBizId,action:"credit_months",months:months}});
+  if(d&&d.success){{toast("Credited "+months+" month(s), ends "+d.trial_ends_at,true);setTimeout(()=>location.reload(),1200);}}
+  else toast((d&&d.error)||"Failed",false);
+}}
+async function doSendBillingSms(){{
+  const d=await adminPost("/admin/billing",{{biz_id:_bmBizId,action:"send_billing_sms"}});
+  if(d&&d.success)toast("Billing SMS sent ✓",true);
+  else toast((d&&d.error)||"Failed",false);
+}}
+document.getElementById("billing-modal").addEventListener("click",function(e){{if(e.target===this)closeBilling();}});
 </script>
 </body></html>'''
     return Response(content=html, media_type="text/html")
