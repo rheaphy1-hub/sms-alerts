@@ -1731,15 +1731,16 @@ def _twiml(msg):
 
 # --- Shared nav + styles ---
 NAV_CSS = """
-.nav{display:flex;justify-content:center;align-items:center;padding:12px 24px;max-width:960px;margin:0 auto;position:relative}
-.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;position:absolute;left:24px}
-.nav-links{display:flex;gap:20px;align-items:center;margin:0 auto}
+.nav{display:flex;justify-content:center;align-items:center;gap:60px;padding:12px 24px;max-width:960px;margin:0 auto}
+.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none}
+.nav .logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
+.nav-links{display:flex;gap:20px;align-items:center}
 .nav-links a{font-size:14px;color:#666;text-decoration:none;font-weight:500}
 .nav-links a:hover{color:#1a1a1a}
 .nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
-.hamburger{display:none;cursor:pointer;font-size:22px;color:#666;position:absolute;right:24px}
-@media(max-width:600px){.nav{justify-content:space-between;padding:12px 16px}.nav .logo{position:static;font-size:12px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10}.nav-links.open{display:flex}.hamburger{display:block;position:static}}
+.hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
+@media(max-width:600px){.nav{gap:10px;flex-wrap:wrap;justify-content:space-between;padding:8px 16px}.nav .logo{font-size:11px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10}.nav-links.open{display:flex}.hamburger{display:block}}
 """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
@@ -1892,7 +1893,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h1 style="max-width:700px;margin:0 auto 12px">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
-<div class="examples"><p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p><div class="ex-row">
+<div style="display:flex;gap:12px;margin-bottom:12px;align-items:center"><p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:0;text-transform:uppercase;letter-spacing:0.06em;flex:1">Try a scenario or type your own</p><button onclick="resetDemo()" style="padding:6px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Reset</button></div>
+<div class="examples">
+<div class="ex-row">
 <div class="ex" onclick="tryEx(this)">Your bathroom is flooding!</div>
 <div class="ex" onclick="tryEx(this)">I've been waiting 25 minutes, nobody's helped me</div>
 <div class="ex" onclick="tryEx(this)">The front door is locked and there's a line outside</div>
@@ -1923,7 +1926,6 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
 <div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
 <div class="cmd-btn" onclick="ownerCmd('REPLY')">REPLY</div>
-<div class="cmd-btn" onclick="resetDemo()" style="background:#f0f0f0;color:#666">Reset</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
