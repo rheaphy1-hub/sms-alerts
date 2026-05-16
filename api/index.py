@@ -1890,7 +1890,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1 style="max-width:900px;margin:0 auto 12px;font-size:clamp(32px,5vw,48px);line-height:1.2">Know when your business needs you. <em>AI handles the rest.</em></h1>
+<h1 style="max-width:800px;margin:0 auto 12px;font-size:clamp(28px,4vw,44px);line-height:1.15">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
 <p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p>
