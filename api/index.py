@@ -1972,6 +1972,12 @@ def _process_customer_message(biz, sender, body):
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
     cat = c.get("category", "other")
 
+    # Always point DETAILS at the newest flagged message, even if the alert SMS
+    # gets suppressed (rate limit, muted, trial expired). Owner texting DETAILS
+    # should see what just came in, not a stale alert from days ago.
+    if tier in (1, 2, 3):
+        set_context(biz["id"], msg_id)
+
     alert_phones = get_alert_phones(biz)
     should_alert_t3 = biz.get("alert_tier3") and tier == 3 and conf > 0.5
     should_alert = tier == 1 or (tier == 2 and conf > 0.7) or should_alert_t3
@@ -1996,7 +2002,6 @@ def _process_customer_message(biz, sender, body):
                 ok = send_sms(p, alert)   # uses shared number via _twilio_from
                 logger.info(f"[ALERT SENT] to={p} ok={ok} msg={alert!r}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
-            set_context(biz["id"], msg_id)
         else:
             logger.warning(f"[RATE LIMITED] {biz['id']} hit {recent_count} alerts in {RATE_LIMIT_WINDOW}min window")
 
