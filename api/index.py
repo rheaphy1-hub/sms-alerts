@@ -2453,7 +2453,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 _ARTICLE_FOOT = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>"""
 
-_ARTICLE_CTA = """<div class="article-cta"><h3>Set up your hotline today.</h3><a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up &rarr;</a></div>"""
+_ARTICLE_CTA = """<div class="article-cta"><h3>Set up your Hotline today.</h3><a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up &rarr;</a></div>"""
 
 RESOURCES_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Resources \u2014 Hotline</title>
@@ -2494,7 +2494,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </a>
 <a href="/resources/why-you-need-a-hotline" class="card">
 <div class="card-meta"><span>01 &mdash; Strategy</span><span>3 min read</span></div>
-<h2>Why you need a hotline (and why Hotline is the easiest way to run one)</h2>
+<h2>Why your business needs a direct customer line (and why Hotline is the easiest way to run one)</h2>
 <p>Your staff won't always tell you what's wrong. Your customers will, if you give them a way to reach you.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
@@ -2755,14 +2755,14 @@ function toggle(btn){
 
 
 RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Why you need a hotline \u2014 Hotline</title>
+<title>Why your business needs a direct customer line \u2014 Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>""" + _ARTICLE_CSS + """</style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
 <div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ 01 &mdash; Strategy</div>
 <header class="ah">
-<h1>Why you need a hotline (and why Hotline is the easiest way to run one)</h1>
+<h1>Why your business needs a direct customer line (and why Hotline is the easiest way to run one)</h1>
 <div class="ameta"><span>Strategy</span><span>3 min read</span></div>
 </header>
 <article>
@@ -2777,7 +2777,7 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Every business has this gap. Problems happen at the floor level. Owners operate above it. The information that travels between the two gets filtered by time, by staff who don't want to deliver bad news, and by systems that only catch things after the fact.</p>
 
-<p>A hotline closes that gap. It gives customers a direct line to you, in the moment, while the problem is still fixable.</p>
+<p>That gap closes when customers have a direct line to you, in the moment, while the problem is still fixable.</p>
 
 <p>Not a survey. Not a comment card. A text message that reaches you in real time.</p>
 
@@ -2804,7 +2804,7 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <h2>The risk if you skip it</h2>
 
-<p>No hotline means problems compound. One bad shift becomes a pattern. One broken machine sits broken for a week because nobody flagged it. One frustrated customer turns into ten reviews you never saw coming.</p>
+<p>Without it, problems compound. One bad shift becomes a pattern. One broken machine sits broken for a week because nobody flagged it. One frustrated customer turns into ten reviews you never saw coming.</p>
 
 <p>You can't fix what you don't know about. you will know.</p>
 
