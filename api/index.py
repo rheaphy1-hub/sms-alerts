@@ -3,6 +3,10 @@ Hotline — SMS Alert System. Single-file Vercel deployment.
 """
 import os, re, json, logging, io
 from datetime import datetime, timezone, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query, Request
 from fastapi.responses import JSONResponse
@@ -592,9 +596,136 @@ def get_reply_mode(bid):
         try: v = int(row["owner_reply_mode"]) if row else 0; return v if v else 0
         except: return 0
 
-def _fmt_ts(iso):
-    try: return datetime.fromisoformat(iso).strftime("%b %d %I:%M%p").replace(" 0"," ")
-    except: return iso[:16]
+# US area code -> IANA timezone (covers continental US + AK/HI; multi-tz states
+# default to the dominant zone for that area code). Used to display alert times
+# in the owner's local time without asking them to configure anything.
+_AREA_CODE_TZ = {
+    # Eastern
+    "201":"America/New_York","202":"America/New_York","203":"America/New_York","207":"America/New_York",
+    "212":"America/New_York","215":"America/New_York","216":"America/New_York","217":"America/Chicago",
+    "218":"America/Chicago","219":"America/Chicago","220":"America/New_York","223":"America/New_York",
+    "224":"America/Chicago","225":"America/Chicago","227":"America/New_York","228":"America/Chicago",
+    "229":"America/New_York","231":"America/New_York","234":"America/New_York","239":"America/New_York",
+    "240":"America/New_York","248":"America/New_York","251":"America/Chicago","252":"America/New_York",
+    "253":"America/Los_Angeles","254":"America/Chicago","256":"America/Chicago","260":"America/New_York",
+    "262":"America/Chicago","267":"America/New_York","269":"America/New_York","270":"America/Chicago",
+    "272":"America/New_York","276":"America/New_York","281":"America/Chicago","283":"America/New_York",
+    "301":"America/New_York","302":"America/New_York","303":"America/Denver","304":"America/New_York",
+    "305":"America/New_York","307":"America/Denver","308":"America/Chicago","309":"America/Chicago",
+    "310":"America/Los_Angeles","312":"America/Chicago","313":"America/New_York","314":"America/Chicago",
+    "315":"America/New_York","316":"America/Chicago","317":"America/New_York","318":"America/Chicago",
+    "319":"America/Chicago","320":"America/Chicago","321":"America/New_York","323":"America/Los_Angeles",
+    "325":"America/Chicago","330":"America/New_York","331":"America/Chicago","334":"America/Chicago",
+    "336":"America/New_York","337":"America/Chicago","339":"America/New_York","346":"America/Chicago",
+    "347":"America/New_York","351":"America/New_York","352":"America/New_York","360":"America/Los_Angeles",
+    "361":"America/Chicago","364":"America/Chicago","380":"America/New_York","385":"America/Denver",
+    "386":"America/New_York","401":"America/New_York","402":"America/Chicago","404":"America/New_York",
+    "405":"America/Chicago","406":"America/Denver","407":"America/New_York","408":"America/Los_Angeles",
+    "409":"America/Chicago","410":"America/New_York","412":"America/New_York","413":"America/New_York",
+    "414":"America/Chicago","415":"America/Los_Angeles","417":"America/Chicago","419":"America/New_York",
+    "423":"America/New_York","424":"America/Los_Angeles","425":"America/Los_Angeles","430":"America/Chicago",
+    "432":"America/Chicago","434":"America/New_York","435":"America/Denver","440":"America/New_York",
+    "442":"America/Los_Angeles","443":"America/New_York","458":"America/Los_Angeles","463":"America/New_York",
+    "464":"America/Chicago","469":"America/Chicago","470":"America/New_York","475":"America/New_York",
+    "478":"America/New_York","479":"America/Chicago","480":"America/Phoenix","484":"America/New_York",
+    "501":"America/Chicago","502":"America/New_York","503":"America/Los_Angeles","504":"America/Chicago",
+    "505":"America/Denver","507":"America/Chicago","508":"America/New_York","509":"America/Los_Angeles",
+    "510":"America/Los_Angeles","512":"America/Chicago","513":"America/New_York","515":"America/Chicago",
+    "516":"America/New_York","517":"America/New_York","518":"America/New_York","520":"America/Phoenix",
+    "530":"America/Los_Angeles","531":"America/Chicago","534":"America/Chicago","539":"America/Chicago",
+    "540":"America/New_York","541":"America/Los_Angeles","551":"America/New_York","557":"America/Chicago",
+    "559":"America/Los_Angeles","561":"America/New_York","562":"America/Los_Angeles","563":"America/Chicago",
+    "564":"America/Los_Angeles","567":"America/New_York","570":"America/New_York","571":"America/New_York",
+    "573":"America/Chicago","574":"America/New_York","575":"America/Denver","580":"America/Chicago",
+    "585":"America/New_York","586":"America/New_York","601":"America/Chicago","602":"America/Phoenix",
+    "603":"America/New_York","605":"America/Chicago","606":"America/New_York","607":"America/New_York",
+    "608":"America/Chicago","609":"America/New_York","610":"America/New_York","612":"America/Chicago",
+    "614":"America/New_York","615":"America/Chicago","616":"America/New_York","617":"America/New_York",
+    "618":"America/Chicago","619":"America/Los_Angeles","620":"America/Chicago","623":"America/Phoenix",
+    "626":"America/Los_Angeles","628":"America/Los_Angeles","629":"America/Chicago","630":"America/Chicago",
+    "631":"America/New_York","636":"America/Chicago","640":"America/New_York","641":"America/Chicago",
+    "646":"America/New_York","650":"America/Los_Angeles","651":"America/Chicago","657":"America/Los_Angeles",
+    "660":"America/Chicago","661":"America/Los_Angeles","662":"America/Chicago","667":"America/New_York",
+    "669":"America/Los_Angeles","678":"America/New_York","680":"America/New_York","681":"America/New_York",
+    "682":"America/Chicago","684":"Pacific/Pago_Pago","689":"America/New_York","701":"America/Chicago",
+    "702":"America/Los_Angeles","703":"America/New_York","704":"America/New_York","706":"America/New_York",
+    "707":"America/Los_Angeles","708":"America/Chicago","712":"America/Chicago","713":"America/Chicago",
+    "714":"America/Los_Angeles","715":"America/Chicago","716":"America/New_York","717":"America/New_York",
+    "718":"America/New_York","719":"America/Denver","720":"America/Denver","724":"America/New_York",
+    "725":"America/Los_Angeles","726":"America/Chicago","727":"America/New_York","731":"America/Chicago",
+    "732":"America/New_York","734":"America/New_York","737":"America/Chicago","740":"America/New_York",
+    "743":"America/New_York","747":"America/Los_Angeles","754":"America/New_York","757":"America/New_York",
+    "758":"America/Port_of_Spain","760":"America/Los_Angeles","762":"America/New_York","763":"America/Chicago",
+    "765":"America/New_York","769":"America/Chicago","770":"America/New_York","771":"America/New_York",
+    "772":"America/New_York","773":"America/Chicago","774":"America/New_York","775":"America/Los_Angeles",
+    "779":"America/Chicago","781":"America/New_York","785":"America/Chicago","786":"America/New_York",
+    "801":"America/Denver","802":"America/New_York","803":"America/New_York","804":"America/New_York",
+    "805":"America/Los_Angeles","806":"America/Chicago","808":"Pacific/Honolulu","810":"America/New_York",
+    "812":"America/New_York","813":"America/New_York","814":"America/New_York","815":"America/Chicago",
+    "816":"America/Chicago","817":"America/Chicago","818":"America/Los_Angeles","820":"America/Los_Angeles",
+    "828":"America/New_York","830":"America/Chicago","831":"America/Los_Angeles","832":"America/Chicago",
+    "835":"America/New_York","838":"America/New_York","843":"America/New_York","845":"America/New_York",
+    "847":"America/Chicago","848":"America/New_York","850":"America/Chicago","854":"America/New_York",
+    "856":"America/New_York","857":"America/New_York","858":"America/Los_Angeles","859":"America/New_York",
+    "860":"America/New_York","862":"America/New_York","863":"America/New_York","864":"America/New_York",
+    "865":"America/New_York","870":"America/Chicago","872":"America/Chicago","878":"America/New_York",
+    "901":"America/Chicago","903":"America/Chicago","904":"America/New_York","906":"America/New_York",
+    "907":"America/Anchorage","908":"America/New_York","909":"America/Los_Angeles","910":"America/New_York",
+    "912":"America/New_York","913":"America/Chicago","914":"America/New_York","915":"America/Denver",
+    "916":"America/Los_Angeles","917":"America/New_York","918":"America/Chicago","919":"America/New_York",
+    "920":"America/Chicago","925":"America/Los_Angeles","928":"America/Phoenix","929":"America/New_York",
+    "930":"America/New_York","931":"America/Chicago","934":"America/New_York","936":"America/Chicago",
+    "937":"America/New_York","938":"America/Chicago","940":"America/Chicago","941":"America/New_York",
+    "947":"America/New_York","949":"America/Los_Angeles","951":"America/Los_Angeles","952":"America/Chicago",
+    "954":"America/New_York","956":"America/Chicago","959":"America/New_York","970":"America/Denver",
+    "971":"America/Los_Angeles","972":"America/Chicago","973":"America/New_York","975":"America/Chicago",
+    "978":"America/New_York","979":"America/Chicago","980":"America/New_York","984":"America/New_York",
+    "985":"America/Chicago","986":"America/Denver","989":"America/New_York",
+}
+
+# Single-timezone US states (used as a stronger signal than area code when present)
+_STATE_TZ = {
+    "AL":"America/Chicago","AR":"America/Chicago","CA":"America/Los_Angeles","CO":"America/Denver",
+    "CT":"America/New_York","DC":"America/New_York","DE":"America/New_York","GA":"America/New_York",
+    "HI":"Pacific/Honolulu","IA":"America/Chicago","IL":"America/Chicago","LA":"America/Chicago",
+    "MA":"America/New_York","MD":"America/New_York","ME":"America/New_York","MN":"America/Chicago",
+    "MO":"America/Chicago","MS":"America/Chicago","MT":"America/Denver","NC":"America/New_York",
+    "NH":"America/New_York","NJ":"America/New_York","NM":"America/Denver","NV":"America/Los_Angeles",
+    "NY":"America/New_York","OH":"America/New_York","OK":"America/Chicago","PA":"America/New_York",
+    "RI":"America/New_York","SC":"America/New_York","UT":"America/Denver","VA":"America/New_York",
+    "VT":"America/New_York","WA":"America/Los_Angeles","WI":"America/Chicago","WV":"America/New_York",
+    "WY":"America/Denver",
+    # AZ uses Phoenix (no DST except Navajo Nation — accept this approximation)
+    "AZ":"America/Phoenix",
+}
+
+def _tz_for_business(business):
+    """Pick an IANA tz for a business. State (if known) wins over area code.
+    Falls back to env DEFAULT_TZ, then UTC."""
+    if not business: return os.getenv("DEFAULT_TZ","UTC")
+    state = (business.get("state") or "").upper().strip()
+    if state in _STATE_TZ: return _STATE_TZ[state]
+    phone = business.get("owner_phone") or ""
+    digits = re.sub(r"\D","",phone)
+    if len(digits)==11 and digits[0]=="1": digits = digits[1:]
+    if len(digits)>=10:
+        ac = digits[:3]
+        if ac in _AREA_CODE_TZ: return _AREA_CODE_TZ[ac]
+    return os.getenv("DEFAULT_TZ","UTC")
+
+def _fmt_ts(iso, business=None):
+    """Format a stored UTC iso timestamp in the business's local tz.
+    Falls back to raw iso slice on any parse error."""
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+        tz_name = _tz_for_business(business)
+        if ZoneInfo is not None:
+            try: dt = dt.astimezone(ZoneInfo(tz_name))
+            except Exception: dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%b %d %I:%M%p").replace(" 0"," ")
+    except Exception:
+        return iso[:16] if iso else ""
 
 def _fmt_phone_short(phone):
     d = _normalize_phone(phone).replace("+","")
@@ -647,7 +778,7 @@ def handle_owner_command(text, business, sender_phone=""):
         if len(unacked) > 1:
             lines = [f"{len(unacked)} open alerts. Reply OK #N to acknowledge one:\n"]
             for m in unacked[:5]:
-                lines.append(f"  #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
+                lines.append(f"  #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'], business)})")
             lines.append("\nExample: OK 2")
             return "\n".join(lines)
 
@@ -705,9 +836,10 @@ def handle_owner_command(text, business, sender_phone=""):
         if not msg: return "No alerts on record."
         set_context(bid, msg["id"])
         ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
-        return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'])}\n"
+        return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'], business)}\n"
                 f"Category: {msg['category']}\n"
-                f"Message: \"{msg['message_text']}\"\nReply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.")
+                f"Message:\n{msg['message_text']}\n\n"
+                f"Reply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.")
 
     if cmd == "LIST ALL":
         msgs = get_recent_all(bid, 5)
@@ -716,7 +848,7 @@ def handle_owner_command(text, business, sender_phone=""):
         lines = ["Last 5 messages:\n"]
         for m in msgs:
             ack_mark = " \u2705" if m["acknowledged"] else ""
-            lines.append(f"{icons.get(m['tier'],chr(0x1f4ac))} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])}){ack_mark}")
+            lines.append(f"{icons.get(m['tier'],chr(0x1f4ac))} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'], business)}){ack_mark}")
         return "\n".join(lines)
 
     if cmd == "LIST":
@@ -725,7 +857,7 @@ def handle_owner_command(text, business, sender_phone=""):
         lines = ["Last 5 flagged:\n"]
         for m in msgs:
             icon = "\u2705" if m["acknowledged"] else "\u26a0\ufe0f"
-            lines.append(f"{icon} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'])})")
+            lines.append(f"{icon} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'], business)})")
         lines.append("\nReply OK #N to acknowledge. DETAILS for full message.")
         return "\n".join(lines)
 
@@ -2139,7 +2271,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>
 <script>
 let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
@@ -2308,7 +2440,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <span class="fine">No card. No app. Cancel by text.</span>
 </div>
 
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>
 </body></html>"""
 
 @app.get("/how-it-works")
@@ -2395,7 +2527,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>
 </body></html>"""
 
 @app.get("/industries")
@@ -2451,7 +2583,7 @@ article ul li::before{content:'*';position:absolute;left:0;color:#ea580c;font-we
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
 """
 
-_ARTICLE_FOOT = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>"""
+_ARTICLE_FOOT = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>"""
 
 _ARTICLE_CTA = """<div class="article-cta"><h3>Set up your Hotline today.</h3><a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up &rarr;</a></div>"""
 
@@ -3066,7 +3198,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>Customers scan, AI filters, you get alerted</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>
 <script>
 async function signup(){
   const name=document.getElementById('f-name').value.trim();
@@ -3177,10 +3309,9 @@ footer a{color:#aaa}
 <h2>10. Contact</h2>
 <p>For privacy questions, data deletion requests, or to opt out of SMS communications, contact:</p>
 <p style="margin-top:8px"><strong>Email:</strong> <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a><br>
-<strong>Website:</strong> <a href="https://HotlineTXT.com">HotlineTXT.com</a><br>
-<strong>Mailing Address:</strong> Hotline / HotlineTXT.com, 8405 Siskin CV, Austin, TX 78745</p>
+<strong>Website:</strong> <a href="https://HotlineTXT.com">HotlineTXT.com</a></p>
 </div>
-<footer>Hotline &middot; <a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Service</a> &middot; <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; <a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Service</a> &middot; <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener">Instagram</a></footer>
 </body></html>"""
 
 @app.get("/privacy")
@@ -3264,10 +3395,9 @@ footer a{color:#aaa}
 <h2>12. Contact</h2>
 <p>For questions about these Terms, contact:</p>
 <p style="margin-top:8px"><strong>Email:</strong> <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a><br>
-<strong>Website:</strong> <a href="https://HotlineTXT.com">HotlineTXT.com</a><br>
-<strong>Mailing Address:</strong> Hotline / HotlineTXT.com, 8405 Siskin CV, Austin, TX 78745</p>
+<strong>Website:</strong> <a href="https://HotlineTXT.com">HotlineTXT.com</a></p>
 </div>
-<footer>Hotline &middot; <a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Service</a> &middot; <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; <a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Service</a> &middot; <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener">Instagram</a></footer>
 </body></html>"""
 
 @app.get("/terms")
