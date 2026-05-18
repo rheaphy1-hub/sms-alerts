@@ -827,14 +827,17 @@ def handle_owner_command(text, business, sender_phone=""):
         return f"Replying to customer re: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
 
     if cmd == "DETAILS":
-        # Always return the newest flagged message. Ignore any stored context
-        # so DETAILS can't get stuck on an old alert.
-        recent = get_recent_flagged(bid, 1)
+        # Return the newest customer message regardless of tier. Showing tier
+        # in the output makes it obvious when classification is wrong.
+        recent = get_recent_all(bid, 1)
         msg = recent[0] if recent else None
-        if not msg: return "No alerts on record."
+        if not msg: return "No messages on record."
         set_context(bid, msg["id"])
         ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
+        tier = msg.get("tier") or 0
+        tier_label = {1:"1 (URGENT)",2:"2 (Issue)",3:"3 (Feedback)",4:"4 (Routine)"}.get(tier, str(tier))
         return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'], business)}\n"
+                f"Tier: {tier_label}\n"
                 f"Category: {msg['category']}\n"
                 f"Message:\n{msg['message_text']}\n\n"
                 f"Reply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.")
