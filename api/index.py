@@ -94,9 +94,13 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS conversation_state (
             id {s} {pk}, business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
             last_owner_reply_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS customer_sessions (
+            id {s} {pk}, customer_phone TEXT NOT NULL, business_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
+        "CREATE INDEX IF NOT EXISTS idx_sess_phone ON customer_sessions(customer_phone)",
     ]
     for stmt in statements:
         try:
@@ -222,30 +226,41 @@ def mark_owner_replied(bid, customer_phone):
     """Record that the owner just replied to this customer. Suppresses AI auto-replies for CONVERSATION_WINDOW_MIN minutes."""
     now = datetime.now(timezone.utc).isoformat()
     cust = _normalize_phone(customer_phone)
-    with get_db() as c:
-        row = _fetchone(c, _q("SELECT id FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
-        if row:
-            _execute(c, _q("UPDATE conversation_state SET last_owner_reply_at=? WHERE id=?"), (now, row["id"]))
-        else:
-            _execute(c, _q("INSERT INTO conversation_state (business_id,customer_phone,last_owner_reply_at) VALUES (?,?,?)"), (bid, cust, now))
+    try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT id FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+            if row:
+                _execute(c, _q("UPDATE conversation_state SET last_owner_reply_at=? WHERE id=?"), (now, row["id"]))
+            else:
+                _execute(c, _q("INSERT INTO conversation_state (business_id,customer_phone,last_owner_reply_at) VALUES (?,?,?)"), (bid, cust, now))
+        logger.info(f"[CONVO MARK] bid={bid} cust=...{cust[-4:]}")
+    except Exception as e:
+        logger.error(f"[CONVO MARK] {e}")
 
 def end_conversation(bid, customer_phone):
     """Clear the active window so AI resumes immediately."""
     cust = _normalize_phone(customer_phone)
-    with get_db() as c:
-        _execute(c, _q("DELETE FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+    try:
+        with get_db() as c:
+            _execute(c, _q("DELETE FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+        logger.info(f"[CONVO END] bid={bid} cust=...{cust[-4:]}")
+    except Exception as e:
+        logger.error(f"[CONVO END] {e}")
 
 def is_conversation_active(bid, customer_phone):
     """True if owner replied to this customer in the last CONVERSATION_WINDOW_MIN minutes."""
     cust = _normalize_phone(customer_phone)
-    with get_db() as c:
-        row = _fetchone(c, _q("SELECT last_owner_reply_at FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
-    if not row: return False
     try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT last_owner_reply_at FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+        if not row: return False
         last = datetime.fromisoformat(row["last_owner_reply_at"])
         if last.tzinfo is None: last = last.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - last) < timedelta(minutes=CONVERSATION_WINDOW_MIN)
-    except Exception:
+        active = (datetime.now(timezone.utc) - last) < timedelta(minutes=CONVERSATION_WINDOW_MIN)
+        logger.info(f"[CONVO CHECK] bid={bid} cust=...{cust[-4:]} active={active}")
+        return active
+    except Exception as e:
+        logger.error(f"[CONVO CHECK] {e}")
         return False
 
 
@@ -1862,35 +1877,23 @@ def qr_png(business_code: str):
 # Persisted in the DB so it survives serverless cold starts.
 SESSION_TTL_MINUTES = 30
 
-def _ensure_session_table():
-    s = "SERIAL" if USE_POSTGRES else "INTEGER"
-    pk = "PRIMARY KEY" if USE_POSTGRES else "PRIMARY KEY AUTOINCREMENT"
-    try:
-        with get_db() as c:
-            _execute(c, f"""CREATE TABLE IF NOT EXISTS customer_sessions (
-                id {s} {pk}, customer_phone TEXT NOT NULL, business_id TEXT NOT NULL,
-                expires_at TEXT NOT NULL)""")
-            _execute(c, "CREATE INDEX IF NOT EXISTS idx_sess_phone ON customer_sessions(customer_phone)")
-    except Exception as e:
-        logger.warning(f"customer_sessions init skipped: {e}")
-
 def _set_customer_session(phone: str, business_id: str):
-    _ensure_session_table()
     expires = (datetime.now(timezone.utc) + timedelta(minutes=SESSION_TTL_MINUTES)).isoformat()
     cust = _normalize_phone(phone)
-    with get_db() as c:
-        # Upsert: delete then insert, simpler than dialect-specific ON CONFLICT
-        _execute(c, _q("DELETE FROM customer_sessions WHERE customer_phone=?"), (cust,))
-        _execute(c, _q("INSERT INTO customer_sessions (customer_phone,business_id,expires_at) VALUES (?,?,?)"), (cust, business_id, expires))
+    try:
+        with get_db() as c:
+            _execute(c, _q("DELETE FROM customer_sessions WHERE customer_phone=?"), (cust,))
+            _execute(c, _q("INSERT INTO customer_sessions (customer_phone,business_id,expires_at) VALUES (?,?,?)"), (cust, business_id, expires))
+    except Exception as e:
+        logger.error(f"[SESSION SET] {e}")
 
 def _get_customer_session(phone: str):
     """Return business_id if session exists and hasn't expired, else None."""
-    _ensure_session_table()
     cust = _normalize_phone(phone)
-    with get_db() as c:
-        row = _fetchone(c, _q("SELECT business_id, expires_at FROM customer_sessions WHERE customer_phone=?"), (cust,))
-    if not row: return None
     try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT business_id, expires_at FROM customer_sessions WHERE customer_phone=?"), (cust,))
+        if not row: return None
         exp = datetime.fromisoformat(row["expires_at"])
         if exp.tzinfo is None: exp = exp.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) > exp:
@@ -1898,7 +1901,8 @@ def _get_customer_session(phone: str):
                 _execute(c, _q("DELETE FROM customer_sessions WHERE customer_phone=?"), (cust,))
             return None
         return row["business_id"]
-    except Exception:
+    except Exception as e:
+        logger.error(f"[SESSION GET] {e}")
         return None
 
 def _parse_business_code_from_body(body: str):
