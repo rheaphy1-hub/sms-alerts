@@ -2261,7 +2261,7 @@ function ownerCmd(raw){
     if(cmd==='CLOSE'){replyMode=false;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
     replyMode=false;
     addB(mo,'cmd','',raw.trim());
-    addB(mo,'resp','','Reply sent. AI quiet for 15min.\nType CLOSE when done, or just let it time out.');
+    addB(mo,'resp','','Reply sent. AI quiet for 15min.\\nType CLOSE when done, or just let it time out.');
     addB(mc,'in','Owner reply',raw.trim());
     inp.placeholder='Type a command...';
     return;
@@ -2273,17 +2273,17 @@ function ownerCmd(raw){
   if(cmd==='REPLY'){
     if(!lastData){addB(mo,'resp','','No messages to reply to.');return}
     replyMode=true;
-    addB(mo,'resp','','Replying to: "'+lastData.original_message.slice(0,60)+'"\nType your reply now, or NEVERMIND.\nType CLOSE when finished to close the line with customer.');
+    addB(mo,'resp','','Replying to: "'+lastData.original_message.slice(0,60)+'"\\nType your reply now, or NEVERMIND.\\nType CLOSE when finished to close the line with customer.');
     inp.placeholder='Type your reply...';
     inp.focus();
     return;
   }
   if(cmd==='CLOSE'){addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
   if(cmd==='MENU'||cmd==='?'){
-    addB(mo,'resp','','Commands:\nREPLY \u2014 Reply to last customer\nCLOSE \u2014 End conversation\nSTATUS \u2014 Alert status + level\nALERTS \u2014 Change alert level\nTIER2 \u2014 Critical only\nTIER3 \u2014 Add reputation alerts\nPAUSE / RESUME\nBILLING \u2014 Subscription\nMENU \u2014 This message');
+    addB(mo,'resp','','Commands:\\nREPLY \u2014 Reply to last customer\\nCLOSE \u2014 End conversation\\nSTATUS \u2014 Alert status + level\\nALERTS \u2014 Change alert level\\nTIER2 \u2014 Critical only\\nTIER3 \u2014 Add reputation alerts\\nPAUSE / RESUME\\nBILLING \u2014 Subscription\\nMENU \u2014 This message');
     return;
   }
-  if(cmd==='STATUS'){addB(mo,'resp','','&#128276; Alerts ON.\nAlert level: Tier 2 critical only\nReply ALERTS to change.');return}
+  if(cmd==='STATUS'){addB(mo,'resp','','&#128276; Alerts ON.\\nAlert level: Tier 2 critical only\\nReply ALERTS to change.');return}
   if(cmd==='PAUSE'){addB(mo,'resp','','&#128244; Alerts PAUSED. Reply RESUME to turn back on.');return}
   if(cmd==='RESUME'){addB(mo,'resp','','&#128276; Alerts resumed.');return}
   addB(mo,'resp','','Unknown command. Reply MENU for commands.');
@@ -2308,13 +2308,13 @@ async function sendDemo(){
     await new Promise(r=>setTimeout(r,400));
     const when=fmtTime();
     if(d.tier===1){
-      const alert='🚨 URGENT ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply+'\n\nReply REPLY to message customer back.';
+      const alert='🚨 URGENT ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
       addB(mo,'alert-red','',alert,1);showOwnerInput();
     } else if(d.tier===2){
-      const alert='⚠️ Issue ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply+'\n\nReply REPLY to message customer back.';
+      const alert='⚠️ Issue ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
       addB(mo,'alert','',alert,2);showOwnerInput();
     } else if(d.tier===3){
-      const alert='💬 Feedback ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply;
+      const alert='💬 Feedback ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply;
       addB(mo,'feedback','',alert,3);showOwnerInput();
     } else {
       addB(mo,'info','','&#128172; '+d.summary,4);showOwnerInput();
