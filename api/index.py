@@ -1223,7 +1223,7 @@ def admin_ui(request: Request):
         alert_phones_display = alert_phones_str if alert_phones_str else b.get("owner_phone","")
         rows += (
             f'<tr id="row-{bid}">'
-            f'<td style="padding:12px 16px;font-weight:600">{b["name"]}<br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
+            f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace(chr(39), "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
             f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
@@ -1237,84 +1237,72 @@ def admin_ui(request: Request):
     if not rows: rows = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
     # --- Metrics ---
-    now_utc = datetime.now(timezone.utc)
-    cutoff_30 = (now_utc - timedelta(days=30)).isoformat()
-    cutoff_7  = (now_utc - timedelta(days=7)).isoformat()
-    all_biz   = businesses  # already fetched above
+    now_utc    = datetime.now(timezone.utc)
+    cutoff_30  = (now_utc - timedelta(days=30)).isoformat()
+    cutoff_7   = (now_utc - timedelta(days=7)).isoformat()
+    all_biz    = businesses
 
-    total_biz      = len(all_biz)
     active_count   = sum(1 for b in all_biz if (b.get("sub_status") or "trialing") == "active")
     trialing_count = sum(1 for b in all_biz if (b.get("sub_status") or "trialing") == "trialing")
     churned_count  = sum(1 for b in all_biz if (b.get("sub_status") or "") in ("canceled", "expired"))
+    total_biz      = len(all_biz)
     mrr            = round(active_count * 19.99, 2)
+    new_30d        = sum(1 for b in all_biz if (b.get("created_at") or "") >= cutoff_30)
 
-    # Signups in last 30d
-    new_30d = sum(1 for b in all_biz if (b.get("created_at") or "") >= cutoff_30)
+    churn_denom  = active_count + churned_count
+    churn_rate   = f"{round(churned_count / churn_denom * 100)}%" if churn_denom else "—"
+    conv_denom   = active_count + churned_count + trialing_count
+    conv_rate    = f"{round(active_count / conv_denom * 100)}%" if conv_denom else "—"
 
-    # Churn rate: churned / (churned + active) — simple ratio
-    churn_denom = active_count + churned_count
-    churn_rate  = f"{round(churned_count / churn_denom * 100)}%" if churn_denom else "—"
-
-    # Trial conversion: active / total signups that are past trial start
-    conv_denom = active_count + churned_count + trialing_count
-    conv_rate  = f"{round(active_count / conv_denom * 100)}%" if conv_denom else "—"
-
-    # Message volume last 7d
     with get_db() as c:
-        msg_7d = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE created_at>?"), (cutoff_7,))["cnt"]
-        tier1_7d = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier=1 AND created_at>?"), (cutoff_7,))["cnt"]
-        # Top category last 30d
+        msg_7d      = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE created_at>?"), (cutoff_7,))["cnt"]
+        tier1_7d    = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier=1 AND created_at>?"), (cutoff_7,))["cnt"]
         top_cat_row = _fetchone(c, _q("SELECT category, COUNT(*) as cnt FROM messages WHERE created_at>? AND tier IN (1,2) GROUP BY category ORDER BY cnt DESC LIMIT 1"), (cutoff_30,))
-        top_cat = top_cat_row["category"].replace("_"," ").title() if top_cat_row else "—"
-        # Geographic breakdown — top 5 states
-        state_rows = _fetchall(c, "SELECT state, COUNT(*) as cnt FROM businesses WHERE state != '' GROUP BY state ORDER BY cnt DESC LIMIT 5")
-        # Engagement: ack rate last 30d
-        flagged_30d = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier IN (1,2) AND created_at>?"), (cutoff_30,))["cnt"]
-        acked_30d   = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier IN (1,2) AND acknowledged=1 AND created_at>?"), (cutoff_30,))["cnt"]
-
-    ack_rate  = f"{round(acked_30d / flagged_30d * 100)}%" if flagged_30d else "—"
-    geo_pills = " ".join(f'<span style="display:inline-block;background:#f5f5f0;border-radius:99px;padding:3px 10px;font-size:12px;margin:2px">{r["state"]} <strong>{r["cnt"]}</strong></span>' for r in state_rows) or "<span style='color:#aaa;font-size:13px'>No data yet</span>"
+        top_cat     = top_cat_row["category"].replace("_"," ").title() if top_cat_row else "—"
 
     def stat_card(label, value, sub="", color="#1a1a1a"):
         sub_html = f'<div style="font-size:11px;color:#aaa;margin-top:4px">{sub}</div>' if sub else ""
-        return (f'<div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 20px;min-width:120px;flex:1">'
+        return (f'<div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 20px;min-width:110px;flex:1">'
                 f'<div style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em;margin-bottom:6px">{label}</div>'
-                f'<div style="font-size:26px;font-weight:700;color:{color};line-height:1">{value}</div>'
-                f'{sub_html}'
-                f'</div>')
+                f'<div style="font-size:24px;font-weight:700;color:{color};line-height:1">{value}</div>'
+                f'{sub_html}</div>')
 
     metrics_html = f'''
-  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Metrics</h2>
-  <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px">
-    {stat_card("MRR", f"${mrr:,.2f}", f"{active_count} active subs", "#166534")}
-    {stat_card("Total Businesses", total_biz, f"{new_30d} new last 30d")}
-    {stat_card("Trialing", trialing_count, "free trial")}
-    {stat_card("Churned", churned_count, f"churn rate {churn_rate}", "#991b1b" if churned_count else "#1a1a1a")}
-    {stat_card("Trial → Paid", conv_rate, "conversion rate", "#ea580c")}
-  </div>
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Overview</h2>
   <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px">
+    {stat_card("MRR", f"${mrr:,.2f}", f"{active_count} active subs", "#166534")}
+    {stat_card("Total", total_biz, f"{new_30d} new last 30d")}
+    {stat_card("Trialing", trialing_count, "in free trial")}
+    {stat_card("Churned", churned_count, f"of {churn_denom} ever paid" if churn_denom else "", "#991b1b" if churned_count else "#1a1a1a")}
+    {stat_card("Trial → Paid", conv_rate, "conversion rate", "#ea580c")}
+    {stat_card("Churn Rate", churn_rate, "paid who left", "#991b1b" if churned_count else "#1a1a1a")}
     {stat_card("Messages (7d)", msg_7d, f"{tier1_7d} emergencies")}
-    {stat_card("Ack Rate (30d)", ack_rate, f"{acked_30d}/{flagged_30d} flagged")}
     {stat_card("Top Issue (30d)", top_cat)}
-    <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 20px;flex:2;min-width:200px">
-      <div style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em;margin-bottom:8px">Top States</div>
-      <div>{geo_pills}</div>
-    </div>
   </div>'''
 
-    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
+    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title>
+<style>
+#drawer{{position:fixed;top:0;right:-480px;width:480px;max-width:100vw;height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px}}
+#drawer.open{{right:0}}
+#drawer-overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:199}}
+#drawer-overlay.open{{display:block}}
+.tier-1{{background:#fee2e2;color:#991b1b;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:700}}
+.tier-2{{background:#fef9c3;color:#854d0e;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:700}}
+.tier-3{{background:#f5f5f0;color:#888;font-size:11px;padding:2px 7px;border-radius:4px}}
+.tier-4{{background:#f5f5f0;color:#aaa;font-size:11px;padding:2px 7px;border-radius:4px}}
+.msg-row{{padding:10px 0;border-bottom:1px solid #f0f0ec;font-size:13px;line-height:1.4}}
+.msg-row:last-child{{border-bottom:none}}
+</style>
+</head>
 <body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6">
 <div style="max-width:960px;margin:0 auto">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:28px">
     <h1 style="font-size:24px;margin:0">Hotline Admin</h1>
     <a href="/admin/logout" style="font-size:13px;color:#888;text-decoration:none">Sign out</a>
   </div>
-
   <div id="toast" style="display:none;background:#166534;color:#fff;font-size:13px;padding:8px 14px;border-radius:6px;margin-bottom:16px"></div>
-
   {metrics_html}
-
-  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Active Businesses</h2>
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Businesses</h2>
   <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:14px">
       <thead><tr style="background:#f5f5f0;border-bottom:1px solid #e0e0dc">
@@ -1329,8 +1317,19 @@ def admin_ui(request: Request):
     </table>
   </div>
 </div>
+
+<!-- Customer drill-down drawer -->
+<div id="drawer-overlay" onclick="closeDrawer()"></div>
+<div id="drawer">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <h2 id="drawer-title" style="font-size:17px;font-weight:700;margin:0"></h2>
+    <a href="#" onclick="closeDrawer();return false" style="color:#aaa;font-size:22px;text-decoration:none;line-height:1">&times;</a>
+  </div>
+  <div id="drawer-body" style="color:#444;font-size:14px">Loading...</div>
+</div>
+
 <!-- Billing Modal -->
-<div id="billing-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">
+<div id="billing-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:300;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:12px;padding:28px;width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.15)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
       <h3 id="bm-title" style="margin:0;font-size:16px"></h3>
@@ -1422,10 +1421,106 @@ async function editPhones(bizId,currentPhones){{
   if(d&&d.success){{toast("Alert phones updated ✓",true);setTimeout(()=>location.reload(),800);}}
   else toast((d&&d.error)||"Failed",false);
 }}
+function closeDrawer(){{
+  document.getElementById("drawer").classList.remove("open");
+  document.getElementById("drawer-overlay").classList.remove("open");
+}}
+async function openDrawer(bizId, bizName){{
+  document.getElementById("drawer-title").textContent=bizName;
+  document.getElementById("drawer-body").innerHTML="<div style='color:#aaa;padding:40px 0;text-align:center'>Loading...</div>";
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer-overlay").classList.add("open");
+  try{{
+    const r=await fetch("/admin/business/"+encodeURIComponent(bizId));
+    if(!r.ok){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Failed to load.</p>";return;}}
+    const d=await r.json();
+    const b=d.business; const s=d.stats; const msgs=d.messages;
+    const loc=b.city&&b.state?b.city+", "+b.state:b.zip||"—";
+    const signed=b.created_at?b.created_at.slice(0,10):"—";
+    const days_ago=b.created_at?Math.floor((Date.now()-new Date(b.created_at))/86400000)+" days ago":"";
+    const ack_pct=s.flagged_all>0?Math.round(s.acked_all/s.flagged_all*100)+"%":"—";
+    const tier_badge=(t)=>{{
+      if(t==1)return"<span class='tier-1'>T1 Emergency</span>";
+      if(t==2)return"<span class='tier-2'>T2 Critical</span>";
+      if(t==3)return"<span class='tier-3'>T3 Reputation</span>";
+      return"<span class='tier-4'>T4 Routine</span>";
+    }};
+    const msg_rows=msgs.map(m=>`<div class="msg-row">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px">
+        <span style="color:#444">${{m.message_text.slice(0,120)}}${{m.message_text.length>120?"…":""}}</span>
+        ${{tier_badge(m.tier)}}
+      </div>
+      <div style="color:#aaa;font-size:11px">${{m.category||"—"}} &middot; ${{m.sentiment||"—"}} &middot; ${{(m.created_at||"").slice(0,16).replace("T"," ")}} ${{m.acknowledged?"✓ acked":""}}</div>
+    </div>`).join("")||"<p style='color:#aaa;font-size:13px'>No messages yet.</p>";
+    document.getElementById("drawer-body").innerHTML=`
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px">
+        <div style="background:#f8f8f6;border-radius:8px;padding:12px">
+          <div style="font-size:11px;text-transform:uppercase;color:#aaa;margin-bottom:8px">Business info</div>
+          <table style="font-size:13px;width:100%;border-collapse:collapse">
+            <tr><td style="color:#aaa;padding:3px 0;white-space:nowrap;padding-right:10px">Code</td><td style="font-weight:600;color:#ea580c">${{b.business_code||"—"}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Phone</td><td>${{b.owner_phone||"—"}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Email</td><td>${{b.email||"—"}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Location</td><td>${{loc}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Website</td><td>${{b.website_url?`<a href="${{b.website_url}}" target="_blank" style="color:#2563eb">${{b.website_url.replace(/^https?:\\/\\//,"")}}</a>`:"—"}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Signed up</td><td>${{signed}} <span style="color:#aaa">(${{days_ago}})</span></td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Alert tier</td><td>${{b.alert_tier3?"Tier 3 (all)":"Tier 2 (critical)"}}</td></tr>
+          </table>
+        </div>
+        <div style="background:#f8f8f6;border-radius:8px;padding:12px">
+          <div style="font-size:11px;text-transform:uppercase;color:#aaa;margin-bottom:8px">Usage</div>
+          <table style="font-size:13px;width:100%;border-collapse:collapse">
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">All msgs</td><td style="font-weight:600">${{s.total_all}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Last 30d</td><td>${{s.total_30d}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Last 7d</td><td>${{s.total_7d}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">T1 emergencies</td><td style="color:#991b1b;font-weight:600">${{s.tier1_all}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">T2 critical</td><td style="color:#854d0e">${{s.tier2_all}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Ack rate</td><td>${{ack_pct}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Top category</td><td>${{s.top_category||"—"}}</td></tr>
+            <tr><td style="color:#aaa;padding:3px 0;padding-right:10px">Last message</td><td style="font-size:12px">${{s.last_msg_at?s.last_msg_at.slice(0,16).replace("T"," "):"never"}}</td></tr>
+          </table>
+        </div>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
+      <div>${{msg_rows}}</div>`;
+  }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
+}}
 document.getElementById("billing-modal").addEventListener("click",function(e){{if(e.target===this)closeBilling();}});
 </script>
 </body></html>'''
     return Response(content=html, media_type="text/html")
+
+
+@app.get("/admin/business/{biz_id}")
+def admin_business_detail(biz_id: str, request: Request):
+    _ensure_init()
+    if not _get_admin_session(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
+    if not biz:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    now_utc   = datetime.now(timezone.utc)
+    cutoff_30 = (now_utc - timedelta(days=30)).isoformat()
+    cutoff_7  = (now_utc - timedelta(days=7)).isoformat()
+    with get_db() as c:
+        total_all  = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=?"), (biz_id,))["cnt"]
+        total_30d  = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND created_at>?"), (biz_id, cutoff_30))["cnt"]
+        total_7d   = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND created_at>?"), (biz_id, cutoff_7))["cnt"]
+        tier1_all  = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier=1"), (biz_id,))["cnt"]
+        tier2_all  = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier=2"), (biz_id,))["cnt"]
+        flagged_all= _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2)"), (biz_id,))["cnt"]
+        acked_all  = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=1"), (biz_id,))["cnt"]
+        top_row    = _fetchone(c, _q("SELECT category, COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) GROUP BY category ORDER BY cnt DESC LIMIT 1"), (biz_id,))
+        last_msg   = _fetchone(c, _q("SELECT created_at FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT 1"), (biz_id,))
+        msgs       = _fetchall(c, _q("SELECT message_text, tier, category, sentiment, acknowledged, created_at FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT 10"), (biz_id,))
+    stats = {
+        "total_all": total_all, "total_30d": total_30d, "total_7d": total_7d,
+        "tier1_all": tier1_all, "tier2_all": tier2_all,
+        "flagged_all": flagged_all, "acked_all": acked_all,
+        "top_category": top_row["category"].replace("_"," ").title() if top_row else None,
+        "last_msg_at": last_msg["created_at"] if last_msg else None,
+    }
+    return JSONResponse({"business": dict(biz), "stats": stats, "messages": msgs})
 
 
 # --- SMS Incoming ---
