@@ -91,8 +91,12 @@ def init_db():
             phone2 TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
             website_url TEXT NOT NULL DEFAULT \'\',
             provisioned INTEGER DEFAULT 0, created_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS conversation_state (
+            id {s} {pk}, business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
+            last_owner_reply_at TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
+        "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
     ]
     for stmt in statements:
         try:
@@ -210,6 +214,40 @@ def log_alert(mid, bid, at):
 
 def update_auto_reply(mid, text):
     with get_db() as c: _execute(c, _q("UPDATE messages SET auto_reply=? WHERE id=?"), (text or "", mid))
+
+# --- Live conversation state (15-min owner-takeover window) ---
+CONVERSATION_WINDOW_MIN = 15
+
+def mark_owner_replied(bid, customer_phone):
+    """Record that the owner just replied to this customer. Suppresses AI auto-replies for CONVERSATION_WINDOW_MIN minutes."""
+    now = datetime.now(timezone.utc).isoformat()
+    cust = _normalize_phone(customer_phone)
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT id FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+        if row:
+            _execute(c, _q("UPDATE conversation_state SET last_owner_reply_at=? WHERE id=?"), (now, row["id"]))
+        else:
+            _execute(c, _q("INSERT INTO conversation_state (business_id,customer_phone,last_owner_reply_at) VALUES (?,?,?)"), (bid, cust, now))
+
+def end_conversation(bid, customer_phone):
+    """Clear the active window so AI resumes immediately."""
+    cust = _normalize_phone(customer_phone)
+    with get_db() as c:
+        _execute(c, _q("DELETE FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+
+def is_conversation_active(bid, customer_phone):
+    """True if owner replied to this customer in the last CONVERSATION_WINDOW_MIN minutes."""
+    cust = _normalize_phone(customer_phone)
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT last_owner_reply_at FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+    if not row: return False
+    try:
+        last = datetime.fromisoformat(row["last_owner_reply_at"])
+        if last.tzinfo is None: last = last.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last) < timedelta(minutes=CONVERSATION_WINDOW_MIN)
+    except Exception:
+        return False
+
 
 def mark_acknowledged(mid):
     with get_db() as c: _execute(c, _q("UPDATE messages SET acknowledged=1 WHERE id=?"), (mid,))
@@ -746,18 +784,40 @@ def handle_owner_command(text, business, sender_phone=""):
     raw = text.strip()
     cmd = raw.upper()
 
+    # Words that should be interpreted as commands even when we're in reply mode
+    # (so the owner can't accidentally text "STATUS" to the customer).
+    RESERVED = {
+        "CANCEL","NEVERMIND","END","DONE","CLOSE",
+        "MENU","HELP","?",
+        "STATUS","ALERTS","TIER2","TIER3","ALERTS CRITICAL","ALERTS ALL",
+        "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","REPLY",
+    }
+
     # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
     reply_mid = get_reply_mode(bid)
     if reply_mid:
-        if cmd in {"CANCEL","NEVERMIND","STOP"}:
+        if cmd in {"CANCEL","NEVERMIND"}:
             clear_reply_mode(bid)
             return "Reply cancelled."
-        clear_reply_mode(bid)
-        msg = get_message_by_id(reply_mid)
-        if msg:
-            send_sms(msg["from_number"], raw)
-            return "Reply sent to customer."
-        return "Could not find the original message."
+        if cmd in {"END","DONE","CLOSE"}:
+            msg = get_message_by_id(reply_mid)
+            clear_reply_mode(bid)
+            if msg: end_conversation(bid, msg["from_number"])
+            return "Conversation closed. AI auto-replies resumed."
+        # If owner types another reserved command, fall through to handle it
+        # instead of texting that word to the customer.
+        if cmd in RESERVED:
+            clear_reply_mode(bid)
+            # fall through below
+        else:
+            clear_reply_mode(bid)
+            msg = get_message_by_id(reply_mid)
+            if msg:
+                send_sms(msg["from_number"], raw)
+                mark_owner_replied(bid, msg["from_number"])
+                logger.info(f"[OWNER REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
+                return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType END when done, or just let it time out."
+            return "Could not find the original message."
 
     if cmd == "BILLING":
         status = business.get("sub_status") or "trialing"
@@ -772,24 +832,29 @@ def handle_owner_command(text, business, sender_phone=""):
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
             return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
 
-    if cmd == "HELP":
+    # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
+    # level for 10DLC compliance, so we use MENU as the in-app command.
+    if cmd in ("MENU", "?", "HELP"):
         return ("Commands:\n"
                 "REPLY \u2014 Reply to last customer\n"
+                "END \u2014 Close active conversation\n"
                 "STATUS \u2014 Alert status + level\n"
                 "ALERTS \u2014 Change alert level\n"
                 "TIER2 \u2014 Critical only\n"
                 "TIER3 \u2014 Add reputation alerts\n"
                 "PAUSE / RESUME\n"
                 "BILLING \u2014 Subscription\n"
-                "HELP \u2014 This message")
+                "MENU \u2014 This message")
 
     if cmd == "REPLY":
-        # Newest customer message wins. No context state.
         recent = get_recent_all(bid, 1)
         msg = recent[0] if recent else None
         if not msg: return "No messages to reply to."
         set_reply_mode(bid, msg["id"])
-        return f"Replying to: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
+        logger.info(f"[REPLY MODE] biz={bid} target_msg_id={msg['id']} text={msg['message_text'][:40]!r}")
+        return (f"Replying to: \"{msg['message_text'][:60]}\"\n"
+                f"Type your reply now, or CANCEL.\n"
+                f"Type END when finished to close the line with customer.")
 
     if cmd == "STATUS":
         name = business.get("name") or bid
@@ -811,7 +876,7 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
 
     if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED","LIKED","LOVED","THUMBED UP"]): return ""
-    return f"Unknown: \"{raw[:20]}\"\nReply HELP for commands."
+    return f"Unknown: \"{raw[:20]}\"\nReply MENU for commands."
 
 
 
@@ -1854,14 +1919,21 @@ def _scrub_hotline_header(body: str) -> str:
     return "\n".join(cleaned).strip()
 
 def _process_customer_message(biz, sender, body):
-    """Classify + alert for a customer message. Returns the auto-reply text."""
+    """Classify + alert for a customer message. Returns the auto-reply text (or empty if suppressed)."""
     website_info = biz.get("website_info", "")
     c = classify_message(body, website_info=website_info)
     msg_id = store_message(biz["id"], sender, body, c)
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
     cat = c.get("category", "other")
 
-    auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
+    # If the owner has recently replied to this customer, the human is on the
+    # line. Don't step on them with an AI message. Alerts still fire.
+    convo_active = is_conversation_active(biz["id"], sender)
+    if convo_active:
+        auto_reply = ""
+        logger.info(f"[CONVO ACTIVE] Suppressing auto-reply for {sender} \u2192 {biz['id']} (owner active)")
+    else:
+        auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
     update_auto_reply(msg_id, auto_reply)
 
     alert_phones = get_alert_phones(biz)
@@ -1887,10 +1959,11 @@ def _process_customer_message(biz, sender, body):
             else:
                 header = "\U0001f4ac Feedback"
             when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
+            reply_block = f"We replied:\n{auto_reply}\n\n" if auto_reply else "(AI silent \u2014 conversation active)\n\n"
             alert = (f"{header} ({when})\n"
                      f"Category: {cat}\n"
                      f"Customer:\n{body}\n\n"
-                     f"We replied:\n{auto_reply}\n\n"
+                     f"{reply_block}"
                      f"Reply REPLY to message customer back.")
             for p in alert_phones:
                 ok = send_sms(p, alert)
@@ -1951,6 +2024,8 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     return _twiml("Thanks for reaching out. To contact a business, please scan their QR code.")
 
 def _twiml(msg):
+    if not msg:
+        return Response(content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>', media_type="application/xml")
     return Response(content='<?xml version="1.0" encoding="UTF-8"?><Response><Message>'+msg.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")+'</Message></Response>', media_type="application/xml")
 
 
