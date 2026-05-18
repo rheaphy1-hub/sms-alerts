@@ -2406,37 +2406,37 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Will the business know it was me who texted? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>The business owner sees that a message came in, what it said, and roughly when. They do not see your name. Whether they can identify you from your phone number depends on whether they already have it saved. Hotline does not provide any additional identifying information beyond what the message itself contains.</p></div>
+<div class="faq-a"><p>No. Every message goes through the Hotline number, not your personal phone. The business owner sees the message content and when it came in. They do not see your phone number, your name, or any identifying information. As far as the owner knows, an anonymous customer sent a message through Hotline.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can the business see my personal phone number? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Not through Hotline's interface. Owners see the message content and timestamp. Phone numbers are stored in the system for routing and logging purposes but are not displayed in owner alerts or the owner command interface.</p></div>
+<div class="faq-a"><p>No. Your message travels through the Hotline system number, not directly from your phone to theirs. The owner's alert shows the message text and timestamp only. Your personal number is never displayed to the business, not in the alert, not in any reply thread, not anywhere in their interface.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Does the business owner have my contact info after I text? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No contact details are handed over to the business. If the owner replies to your message using the REPLY command, it comes back to your number via the Hotline system, but your number is not shared with them directly.</p></div>
+<div class="faq-a"><p>No. The owner has no way to contact you outside of Hotline unless you choose to share your information in the message itself. If the owner replies using the REPLY command, that message comes back to you through the Hotline number, keeping both sides anonymous throughout the conversation.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Who else can see my message besides the owner? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Any phone numbers the owner has added as alert recipients (a manager or business partner, for example) will receive the same alert. Messages are stored in Hotline's system for logging. They are not shared with third parties or used for marketing.</p></div>
+<div class="faq-a"><p>Any alert recipients the owner has added, such as a manager or business partner, will receive the same alert text. None of them see your phone number. Messages are stored in Hotline's system for logging. They are not shared with third parties or used for marketing.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Do customers ever see my personal cell number? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No. All messages to customers go out from the Hotline number, not your personal cell. When you reply to a customer using the REPLY command, they see the Hotline number as the sender. Your personal number is never exposed.</p></div>
+<div class="faq-a"><p>Never. All customer-facing messages, including auto-replies and any replies you send using the REPLY command, go out from the Hotline number. Customers see Hotline as the sender at all times. Your personal cell is not involved in any part of the customer-facing flow.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">What number do my alerts come from? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Your alerts come from the Hotline system number. It's worth saving it in your contacts as "Hotline Alerts" so you recognize it when something comes in.</p></div>
+<div class="faq-a"><p>Your alerts come from the Hotline system number. Save it as "Hotline Alerts" in your contacts so you recognize it. That same number is the one customers text in to, and the one your replies go out from. Everything runs through one shared number, which is what keeps both sides private.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can customers reply back to me directly? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>If a customer replies to the auto-response they received, that message comes back into Hotline and gets routed to you as a follow-up. It does not open a direct line between the customer and your personal number. Everything stays within the Hotline system.</p></div>
+<div class="faq-a"><p>If a customer replies to their auto-response, that message routes back to you through Hotline. It does not create a direct SMS thread between their phone and yours. The conversation stays inside the Hotline system on both ends. Neither party ever has direct access to the other's personal number.</p></div>
 </div>
 
 <div class="faq-item">
@@ -2620,62 +2620,60 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </header>
 <article>
 
-<p class="lead">Getting the alert is step one. What you do in the next few minutes matters more than most owners realize.</p>
+<p class="lead">Hotline handles every single message that comes in. You only hear about the ones that actually need you.</p>
 
-<p>The goal is not to fix every problem yourself. The goal is to make sure the problem gets handled and the customer feels heard. Those are two different jobs, and you only have to do one of them.</p>
+<p>That distinction matters. Most owners brace for a flood of notifications and then realize the opposite is true. Hotline reads 100% of incoming messages, responds to each customer automatically with the right tone, and filters everything before it reaches you. Compliments, questions, minor complaints, spam, all of it gets processed without you lifting a finger.</p>
 
-<h2>Speed matters more than the fix</h2>
+<p>What makes it through to your phone is a short list: real operational problems and emergencies. That's the job you actually need to do.</p>
 
-<p>When a customer texts a complaint, they want to know someone is paying attention. A fast response, even a simple one, does most of the work.</p>
+<h2>What the AI handles so you don't have to</h2>
 
-<p>"Got it, someone is heading there now" is better than a perfect response sent twenty minutes later.</p>
+<p>Every customer who texts in gets an immediate auto-reply. Hotline writes that reply based on the type of message. An emergency gets a response telling the customer to call 911. A complaint gets an empathetic acknowledgment. A compliment gets a warm thank you. A question gets a prompt to wait for a follow-up.</p>
 
-<p>You don't need to solve it. You need to acknowledge it. The fix can happen in the background while the customer feels like they've been taken seriously.</p>
-
-<div class="callout">
-<div class="callout-label">The fast reply</div>
-<p>Text back something short and specific. "On it" works. "Got it, sending someone now" works. What doesn't work is silence, or a canned response that sounds like it came from a help desk.</p>
-</div>
-
-<h2>Don't overpromise</h2>
-
-<p>When you get an alert and you're stressed, it's tempting to throw something at the customer to make it go away. Free item, discount, promise of follow-up. Be careful.</p>
-
-<p>Overpromising creates a second problem on top of the first. If you say you'll call them and you don't, the original issue plus the missed call both end up in the review.</p>
-
-<p>"We're looking into it" is clean. "We'll comp your next visit" in a moment of panic is a commitment you now have to track and honor.</p>
+<p>You never write those responses. Hotline does. By the time you see an alert, the customer has already heard back from someone.</p>
 
 <div class="callout">
-<div class="callout-label">The safe reply</div>
-<p>Acknowledge. Confirm you've seen it. Tell them someone is aware. Don't make promises you haven't already lined up.</p>
+<div class="callout-label">What this means in practice</div>
+<p>If 20 customers text in on a busy Saturday, Hotline handles 20 responses automatically. You might get one alert. Maybe none. The rest is handled.</p>
 </div>
 
-<h2>Build a short routine around it</h2>
+<h2>When you do get an alert, speed matters</h2>
 
-<p>Hotline alerts are designed to be low volume. You're not triaging a support queue. Most days you'll get nothing. When something comes in, it's real.</p>
+<p>The alerts that reach you are real. Equipment down, no staff on the floor, a safety issue. These need a human response, and fast.</p>
 
-<p>A simple routine keeps it from becoming a source of anxiety:</p>
+<p>The customer has already received an automated acknowledgment from Hotline. Your job now is to actually fix the thing or get someone who can.</p>
 
 <ul>
-<li>When you get a Tier 2 alert, read it and reply within 5 minutes</li>
-<li>If you can't fix it yourself, text whoever can. Forward the summary.</li>
-<li>Reply OK to Hotline once it's handled. That closes the loop.</li>
-<li>Check LIST at the end of the day to make sure nothing slipped through</li>
+<li>Read the alert and decide: can you handle it, or do you need to call someone?</li>
+<li>If you can act, act. Then text OK to Hotline to close the alert.</li>
+<li>If you need to delegate, forward the summary to whoever is on the floor.</li>
+<li>Use REPLY if the customer needs to hear directly from you.</li>
 </ul>
 
-<p>That's it. The whole system lives in your text messages. No app to open, no dashboard to check.</p>
+<p>You don't need to be in front of a computer. The whole loop happens in your text messages.</p>
 
-<h2>When alerts stack up</h2>
+<h2>Don't overpromise in your replies</h2>
 
-<p>If you're getting a lot of alerts, that's information. It means something is consistently broken. Three alerts in a week about the same machine, the same shift, the same bathroom? That's not bad luck. That's a pattern worth fixing at the source.</p>
+<p>When you reply to a customer directly, keep it simple. Acknowledge that you've seen it, confirm someone is on it. That's enough.</p>
 
-<p>Use Hotline's LIST command to review recent alerts together. The pattern is usually obvious once you see them side by side.</p>
+<p>"We're looking into it" is clean. "We'll comp your next visit" said in a moment of stress is a commitment you now have to track and honor. Keep replies short and factual until you know what you're dealing with.</p>
+
+<div class="callout">
+<div class="callout-label">Safe reply template</div>
+<p>Acknowledge. Confirm you've seen it. Tell them someone is on it. Stop there.</p>
+</div>
+
+<h2>Use the pattern to fix the root cause</h2>
+
+<p>If the same issue keeps coming through, Hotline is telling you something. Three alerts about the same machine, the same bathroom, the same shift gap? That's not noise. That's a pattern.</p>
+
+<p>Text LIST to see recent flagged alerts together. The fix usually becomes obvious when you see them grouped.</p>
 
 <h2>Protect your own time</h2>
 
-<p>If you need a break, use QUIET or PAUSE. Hotline will hold non-emergency alerts until you're back. Emergencies still come through regardless.</p>
+<p>Text QUIET 2H to silence non-emergency alerts for a set window. Text PAUSE to stop them until you're ready. Tier 1 emergencies always get through regardless of your settings.</p>
 
-<p>The point of Hotline is to keep you informed without keeping you on edge. If it starts to feel like the latter, adjust your settings. You're in control of what reaches you.</p>
+<p>Hotline is built to stay out of your way. The AI runs constantly in the background so you don't have to. When it needs you, it will find you.</p>
 
 """ + _ARTICLE_CTA + """
 <a href="/resources" class="back-link">&larr; Back to resources</a>
