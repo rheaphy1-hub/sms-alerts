@@ -789,7 +789,7 @@ def handle_owner_command(text, business, sender_phone=""):
     # Words that should be interpreted as commands even when we're in reply mode
     # (so the owner can't accidentally text "STATUS" to the customer).
     RESERVED = {
-        "CANCEL","NEVERMIND","END","DONE","CLOSE",
+        "NEVERMIND","CANCEL","CLOSE","DONE","WRAP","FINISH","END",
         "MENU","HELP","?",
         "STATUS","ALERTS","TIER2","TIER3","ALERTS CRITICAL","ALERTS ALL",
         "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","REPLY",
@@ -798,10 +798,10 @@ def handle_owner_command(text, business, sender_phone=""):
     # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
     reply_mid = get_reply_mode(bid)
     if reply_mid:
-        if cmd in {"CANCEL","NEVERMIND"}:
+        if cmd in {"NEVERMIND","CANCEL"}:
             clear_reply_mode(bid)
             return "Reply cancelled."
-        if cmd in {"END","DONE","CLOSE"}:
+        if cmd in {"CLOSE","DONE","WRAP","FINISH","END"}:
             msg = get_message_by_id(reply_mid)
             clear_reply_mode(bid)
             if msg: end_conversation(bid, msg["from_number"])
@@ -817,8 +817,11 @@ def handle_owner_command(text, business, sender_phone=""):
             if msg:
                 send_sms(msg["from_number"], raw)
                 mark_owner_replied(bid, msg["from_number"])
+                # Ensure customer's next reply routes back to this business even
+                # if their session had expired.
+                _set_customer_session(msg["from_number"], bid)
                 logger.info(f"[OWNER REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
-                return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType END when done, or just let it time out."
+                return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType CLOSE when done, or just let it time out."
             return "Could not find the original message."
 
     if cmd == "BILLING":
@@ -839,7 +842,7 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd in ("MENU", "?", "HELP"):
         return ("Commands:\n"
                 "REPLY \u2014 Reply to last customer\n"
-                "END \u2014 Close active conversation\n"
+                "CLOSE \u2014 End active conversation\n"
                 "STATUS \u2014 Alert status + level\n"
                 "ALERTS \u2014 Change alert level\n"
                 "TIER2 \u2014 Critical only\n"
@@ -855,8 +858,8 @@ def handle_owner_command(text, business, sender_phone=""):
         set_reply_mode(bid, msg["id"])
         logger.info(f"[REPLY MODE] biz={bid} target_msg_id={msg['id']} text={msg['message_text'][:40]!r}")
         return (f"Replying to: \"{msg['message_text'][:60]}\"\n"
-                f"Type your reply now, or CANCEL.\n"
-                f"Type END when finished to close the line with customer.")
+                f"Type your reply now, or NEVERMIND.\n"
+                f"Type CLOSE when finished to close the line with customer.")
 
     if cmd == "STATUS":
         name = business.get("name") or bid
@@ -1855,25 +1858,48 @@ def qr_png(business_code: str):
 
 
 # ── Customer session cache ────────────────────────────────────────────────────
-# Maps customer phone → (business_id, expiry_timestamp)
-# Allows follow-up messages without a BC#### code to route correctly
-_customer_sessions: dict = {}
+# Routes follow-up customer messages (no BC code) back to the right business.
+# Persisted in the DB so it survives serverless cold starts.
 SESSION_TTL_MINUTES = 30
 
+def _ensure_session_table():
+    s = "SERIAL" if USE_POSTGRES else "INTEGER"
+    pk = "PRIMARY KEY" if USE_POSTGRES else "PRIMARY KEY AUTOINCREMENT"
+    try:
+        with get_db() as c:
+            _execute(c, f"""CREATE TABLE IF NOT EXISTS customer_sessions (
+                id {s} {pk}, customer_phone TEXT NOT NULL, business_id TEXT NOT NULL,
+                expires_at TEXT NOT NULL)""")
+            _execute(c, "CREATE INDEX IF NOT EXISTS idx_sess_phone ON customer_sessions(customer_phone)")
+    except Exception as e:
+        logger.warning(f"customer_sessions init skipped: {e}")
+
 def _set_customer_session(phone: str, business_id: str):
-    expiry = datetime.now(timezone.utc) + timedelta(minutes=SESSION_TTL_MINUTES)
-    _customer_sessions[phone] = (business_id, expiry)
+    _ensure_session_table()
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=SESSION_TTL_MINUTES)).isoformat()
+    cust = _normalize_phone(phone)
+    with get_db() as c:
+        # Upsert: delete then insert, simpler than dialect-specific ON CONFLICT
+        _execute(c, _q("DELETE FROM customer_sessions WHERE customer_phone=?"), (cust,))
+        _execute(c, _q("INSERT INTO customer_sessions (customer_phone,business_id,expires_at) VALUES (?,?,?)"), (cust, business_id, expires))
 
 def _get_customer_session(phone: str):
     """Return business_id if session exists and hasn't expired, else None."""
-    entry = _customer_sessions.get(phone)
-    if not entry:
+    _ensure_session_table()
+    cust = _normalize_phone(phone)
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT business_id, expires_at FROM customer_sessions WHERE customer_phone=?"), (cust,))
+    if not row: return None
+    try:
+        exp = datetime.fromisoformat(row["expires_at"])
+        if exp.tzinfo is None: exp = exp.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > exp:
+            with get_db() as c:
+                _execute(c, _q("DELETE FROM customer_sessions WHERE customer_phone=?"), (cust,))
+            return None
+        return row["business_id"]
+    except Exception:
         return None
-    business_id, expiry = entry
-    if datetime.now(timezone.utc) > expiry:
-        del _customer_sessions[phone]
-        return None
-    return business_id
 
 def _parse_business_code_from_body(body: str):
     """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
@@ -2027,7 +2053,8 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
         with get_db() as conn:
             biz = _fetchone(conn, _q("SELECT * FROM businesses WHERE id=?"), (session_biz_id,))
         if biz:
-            logger.info(f"[SESSION] {sender} follow-up → {session_biz_id}")
+            logger.info(f"[SESSION] {sender} follow-up \u2192 {session_biz_id}")
+            _set_customer_session(sender, session_biz_id)  # refresh TTL
             auto_reply = _process_customer_message(biz, sender, body)
             return _twiml(auto_reply)
 
