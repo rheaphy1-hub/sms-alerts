@@ -94,13 +94,9 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS conversation_state (
             id {s} {pk}, business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
             last_owner_reply_at TEXT NOT NULL)""",
-        f"""CREATE TABLE IF NOT EXISTS customer_phones (
-            customer_phone TEXT PRIMARY KEY, business_id TEXT NOT NULL,
-            updated_at TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
-        "CREATE INDEX IF NOT EXISTS idx_cust_phone ON customer_phones(customer_phone)",
     ]
     for stmt in statements:
         try:
@@ -832,9 +828,6 @@ def handle_owner_command(text, business, sender_phone=""):
             if msg:
                 send_sms(msg["from_number"], raw)
                 mark_owner_replied(bid, msg["from_number"])
-                # Ensure customer's next reply routes back to this business even
-                # if their session had expired.
-                _set_customer_biz(msg["from_number"], bid)
                 logger.info(f"[OWNER REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
                 return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType CLOSE when done, or just let it time out."
             return "Could not find the original message."
@@ -1873,37 +1866,6 @@ def qr_png(business_code: str):
 
 
 # ── Customer phone → business mapping (permanent) ────────────────────────────
-# When a customer texts a BC code, we record their phone → business permanently.
-# Follow-up messages with no BC code route via this table. No expiry, no TTL,
-# no in-memory state — survives serverless cold starts and container recycling.
-
-def _set_customer_biz(phone: str, business_id: str):
-    cust = _normalize_phone(phone)
-    now = datetime.now(timezone.utc).isoformat()
-    try:
-        with get_db() as c:
-            if USE_POSTGRES:
-                _execute(c, "INSERT INTO customer_phones (customer_phone,business_id,updated_at) VALUES (%s,%s,%s) ON CONFLICT (customer_phone) DO UPDATE SET business_id=EXCLUDED.business_id, updated_at=EXCLUDED.updated_at", (cust, business_id, now))
-            else:
-                _execute(c, "INSERT OR REPLACE INTO customer_phones (customer_phone,business_id,updated_at) VALUES (?,?,?)", (cust, business_id, now))
-        logger.info(f"[CUST PHONE] ...{cust[-4:]} → {business_id}")
-    except Exception as e:
-        logger.error(f"[CUST PHONE SET] {e}")
-
-def _get_customer_biz(phone: str):
-    cust = _normalize_phone(phone)
-    try:
-        with get_db() as c:
-            row = _fetchone(c, _q("SELECT business_id FROM customer_phones WHERE customer_phone=?"), (cust,))
-        if row:
-            logger.info(f"[CUST PHONE] lookup ...{cust[-4:]} → {row['business_id']}")
-            return row["business_id"]
-        logger.info(f"[CUST PHONE] no record for ...{cust[-4:]}")
-        return None
-    except Exception as e:
-        logger.error(f"[CUST PHONE GET] {e}")
-        return None
-
 def _parse_business_code_from_body(body: str):
     """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
     m = re.search(r"\bBC\d{4}\b", body.upper())
@@ -2032,10 +1994,8 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
         if biz:
             clean_body = _scrub_hotline_header(body)
             if not clean_body:
-                _set_customer_biz(sender, biz["id"])
-                logger.info(f"[BLANK MSG] {sender} \u2192 {biz['id']} \u2014 session set, awaiting message")
+                logger.info(f"[BLANK MSG] {sender} \u2192 {biz['id']} \u2014 awaiting message")
                 return _twiml("Got it! Now just describe what's wrong and send it to us.")
-            _set_customer_biz(sender, biz["id"])
             auto_reply = _process_customer_message(biz, sender, clean_body)
             return _twiml(auto_reply)
         else:
@@ -2050,20 +2010,9 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
         if not resp: return _twiml("")
         return _twiml(resp)
 
-    # 2. No BC#### code — check permanent customer→business mapping
-    session_biz_id = _get_customer_biz(sender)
-    if session_biz_id:
-        with get_db() as conn:
-            biz = _fetchone(conn, _q("SELECT * FROM businesses WHERE id=?"), (session_biz_id,))
-        if biz:
-            logger.info(f"[SESSION] {sender} follow-up \u2192 {session_biz_id}")
-            _set_customer_biz(sender, session_biz_id)
-            auto_reply = _process_customer_message(biz, sender, body)
-            return _twiml(auto_reply)
-
-    # 3. No code, no session — generic fallback
-    logger.info(f"[NO CODE] No BC code or session found for {sender}")
-    return _twiml("Thanks for reaching out. To contact a business, please scan their QR code.")
+    # 2. No BC code and not an owner — unknown sender
+    logger.info(f"[NO CODE] no BC code from {sender}")
+    return _twiml("")
 
 def _twiml(msg):
     if not msg:
