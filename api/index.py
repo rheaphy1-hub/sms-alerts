@@ -3241,7 +3241,7 @@ async function signup(){
   if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
   if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
   if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
-  if(!zip||!/^\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
+  if(!zip||!/^\\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip})});const d=await r.json();
   if(d.success){
