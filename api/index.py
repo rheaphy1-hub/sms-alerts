@@ -265,7 +265,9 @@ def get_recent_flagged(bid, limit=5):
     with get_db() as c: return _fetchall(c, _q("SELECT * FROM messages WHERE business_id=? AND tier IN (1,2) ORDER BY created_at DESC LIMIT ?"), (bid, limit))
 
 def get_recent_all(bid, limit=5):
-    with get_db() as c: return _fetchall(c, _q("SELECT * FROM messages WHERE business_id=? ORDER BY created_at DESC LIMIT ?"), (bid, limit))
+    # Order by id (monotonic insertion order) rather than created_at (text
+    # column — vulnerable to format mismatches across legacy rows).
+    with get_db() as c: return _fetchall(c, _q("SELECT * FROM messages WHERE business_id=? ORDER BY id DESC LIMIT ?"), (bid, limit))
 
 def get_recent_alert_count(bid, minutes=10):
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
@@ -882,7 +884,7 @@ def handle_owner_command(text, business, sender_phone=""):
         recent = get_recent_all(bid, 3)
         lines = [f"biz_id: {bid}", f"name: {business.get('name','')}", f"code: {business.get('business_code','')}", f"messages: {len(recent)}"]
         for m in recent:
-            lines.append(f"#{m['id']} tier={m['tier']} from={m['from_number'][-4:]} \"{m['message_text'][:30]}\" ({_fmt_ts(m['created_at'], business)})")
+            lines.append(f"#{m['id']} tier={m['tier']} from={m['from_number'][-4:]} \"{m['message_text'][:25]}\" raw={m['created_at'][:19]}")
         return "\n".join(lines)
 
     if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED","LIKED","LOVED","THUMBED UP"]): return ""
