@@ -1758,7 +1758,7 @@ NAV_CSS = """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
-<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><a href="/industries">Who We Support</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><a href="/industries">Who We Support</a><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
 
 # --- Demo page (homepage) ---
@@ -2124,6 +2124,213 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 @app.get("/industries")
 def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, media_type="text/html")
+
+
+# --- Resources pages ---
+RESOURCES_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resources \u2014 Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.hero{text-align:center;padding:40px 24px 32px;max-width:600px;margin:0 auto}
+h1{font-size:clamp(24px,4vw,36px);font-weight:700;margin-bottom:12px}
+.sub{font-size:16px;color:#888;margin-bottom:0}
+.grid{max-width:760px;margin:0 auto;padding:24px 24px 60px;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+.card{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:24px;box-shadow:0 1px 4px rgba(0,0,0,0.04);display:flex;flex-direction:column;gap:12px;transition:box-shadow 0.2s}
+.card:hover{box-shadow:0 4px 16px rgba(0,0,0,0.08)}
+.card-meta{display:flex;justify-content:space-between;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#aaa}
+.card h2{font-size:18px;font-weight:700;line-height:1.3;color:#1a1a1a}
+.card p{font-size:13px;color:#888;line-height:1.5;flex:1}
+.card a.read-link{font-size:13px;font-weight:600;color:#ea580c}
+.card.soon{opacity:0.55;cursor:default}
+.card.soon h2,.card.soon p{pointer-events:none}
+.soon-label{font-size:11px;font-weight:600;background:#f0f0ec;color:#aaa;padding:3px 8px;border-radius:4px;align-self:flex-start;text-transform:uppercase;letter-spacing:0.06em}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="hero">
+<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.12em;color:#aaa;margin-bottom:14px">Resources / Field guide</div>
+<h1>Run a better hotline.</h1>
+<p class="sub">Short reads for owners. How to set yours up, where to put it, what to do when messages start coming in.</p>
+</div>
+<div class="grid">
+<div class="card">
+<div class="card-meta"><span>01 &mdash; Strategy</span><span>4 min read</span></div>
+<h2>Why your business needs a hotline (and where to put it)</h2>
+<p>You can't fix what you don't see. Staff misses things. Systems fail quietly. Here's the failsafe layer underneath all of it.</p>
+<a href="/resources/why-a-hotline" class="read-link">Read &rarr;</a>
+</div>
+<div class="card soon">
+<div class="card-meta"><span>02 &mdash; Operations</span><span>&nbsp;</span></div>
+<h2>How to respond to alerts without burning out</h2>
+<p>The two-rule system for handling incoming messages fast, without overpromising.</p>
+<span class="soon-label">Coming soon</span>
+</div>
+<div class="card soon">
+<div class="card-meta"><span>03 &mdash; Patterns</span><span>&nbsp;</span></div>
+<h2>What repeat complaints are telling you</h2>
+<p>Reading the patterns in your alerts: what they reveal about staff, systems, and shifts.</p>
+<span class="soon-label">Coming soon</span>
+</div>
+<div class="card soon">
+<div class="card-meta"><span>04 &mdash; Team</span><span>&nbsp;</span></div>
+<h2>Training staff to act on hotline alerts</h2>
+<p>Turning an incoming text into a fix on the floor in under 10 minutes.</p>
+<span class="soon-label">Coming soon</span>
+</div>
+</div>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+</body></html>"""
+
+RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Why your business needs a hotline \u2014 Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.wrap{max-width:680px;margin:0 auto;padding:32px 24px 80px}
+.breadcrumb{font-size:12px;color:#aaa;margin-bottom:28px}<br>.breadcrumb a{color:#aaa}.breadcrumb a:hover{color:#ea580c}
+header.ah{margin-bottom:40px;padding-bottom:28px;border-bottom:1px solid #e0e0dc}
+header.ah h1{font-size:clamp(26px,4vw,40px);font-weight:700;line-height:1.15;margin-bottom:16px;letter-spacing:-0.02em}
+.meta{display:flex;gap:20px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#aaa}
+article h2{font-size:22px;font-weight:700;margin-top:40px;margin-bottom:14px;line-height:1.2}
+article p{font-size:16px;line-height:1.7;margin-bottom:16px;color:#333}
+article p.lead{font-size:18px;font-weight:500;color:#1a1a1a}
+article strong{font-weight:700;color:#1a1a1a}
+article ul{list-style:none;padding:0;margin:12px 0 20px}
+article ul li{font-size:15px;line-height:1.6;padding-left:20px;margin-bottom:8px;position:relative;color:#333}
+article ul li::before{content:'\u2014';position:absolute;left:0;color:#ea580c;font-weight:700}
+.pullquote{font-size:24px;font-weight:700;line-height:1.2;padding:20px 0 20px 20px;margin:28px 0;border-left:3px solid #ea580c;color:#1a1a1a}
+.callout{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:20px 22px;margin:20px 0}
+.callout-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#ea580c;margin-bottom:8px}
+.callout p{font-size:15px;margin-bottom:0}
+.placement-block{border-top:1px solid #e0e0dc;padding:20px 0}
+.placement-block:first-child{border-top:none;padding-top:0}
+.placement-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;margin-bottom:6px}
+.placement-title{font-size:17px;font-weight:700;margin-bottom:10px}
+.sample{background:#1a1a1a;color:#f8f8f6;padding:14px 18px;border-radius:8px;margin:10px 0;font-size:15px;font-style:italic;line-height:1.4}
+.brand-block{background:#1a1a1a;color:#f8f8f6;padding:28px 28px;border-radius:12px;margin:40px 0}
+.brand-block h2{color:#fff;margin-top:0;font-size:20px;margin-bottom:12px}
+.brand-block p{color:rgba(248,248,246,0.8);font-size:15px;margin-bottom:0}
+.article-cta{margin-top:60px;padding-top:36px;border-top:1px solid #e0e0dc;text-align:center}
+.article-cta h3{font-size:24px;font-weight:700;margin-bottom:20px}
+.cta-btn{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px;transition:background 0.2s}
+.cta-btn:hover{background:#dc2626;color:#fff}
+.back-link{display:inline-block;margin-top:48px;font-size:13px;color:#aaa;font-weight:500}
+.back-link:hover{color:#ea580c}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="wrap">
+<div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/&nbsp; 01 &mdash; Strategy</div>
+<header class="ah">
+<h1>Why your business needs a hotline (and where to put it)</h1>
+<div class="meta"><span>Strategy</span><span>4 min read</span></div>
+</header>
+<article>
+
+<h2>You are the last to know</h2>
+<p class="lead">Ask any owner what's broken in their business right now and they'll guess. Ask their customers and you'll get the real answer.</p>
+<p>The gap between those two is where businesses lose money.</p>
+<p>Your staff won't always tell you the soap dispenser has been empty for three days. Your manager won't flag that the line cook walked out at 7pm Saturday. Your cleaning crew won't mention they skipped the bathroom. Not because they're bad &mdash; because they're human. They forget, they're busy, or they don't want to be the one who brought it up.</p>
+<p>A hotline is the channel that goes around all of that. Straight from the customer, straight to you.</p>
+
+<h2>What a hotline actually is</h2>
+<div class="pullquote">It's a failsafe.</div>
+<p>Every business runs on systems: staff, schedules, checklists, cameras, software. Those systems fail constantly in small ways. Most of the time you never find out. The customer just leaves and doesn't come back.</p>
+<p>A hotline is the layer underneath all of that. When the schedule fails and no one shows up, the customer tells you. When the checklist gets skipped and the bathroom is filthy, the customer tells you. When the machine breaks and the staff didn't notice, the customer tells you.</p>
+<p>You're not replacing your systems. You're catching what they miss.</p>
+
+<h2>What you find out</h2>
+<p>Owners who run a hotline for the first time are usually surprised by two things:</p>
+<p><strong>It's quieter than they expected.</strong> Most days there's nothing. The fear of &ldquo;I'll get spammed with complaints&rdquo; almost never happens.</p>
+<p><strong>The signal is sharper than they expected.</strong> When something does come in, it's almost always real and almost always actionable. &ldquo;No one is at the front desk.&rdquo; &ldquo;The bathroom hasn't been cleaned since this morning.&rdquo; &ldquo;Your card reader is down.&rdquo; These are things you'd want to know inside of five minutes &mdash; and otherwise wouldn't know until tomorrow, if ever.</p>
+
+<h2>The review angle (secondary)</h2>
+<p>Most unhappy customers don't complain. They leave and write a review later, or they don't, and they just stop coming.</p>
+<p>A hotline intercepts both. It gives the customer a place to vent before they reach for the review app, and it gives you a shot at fixing the problem while they're still in the building. That's a nice side effect. It's not the main point.</p>
+<p>The main point is you finally know what's happening in your own business.</p>
+
+<h2>The risk if you do it wrong</h2>
+<p>A hotline nobody answers is worse than no hotline. Silence confirms the customer's suspicion that you don't care.</p>
+<div class="callout"><div class="callout-label">Rule 01</div><p><strong>Respond fast, even if you can't fix it fast.</strong> &ldquo;Got it, sending someone now&rdquo; buys you hours. Silence buys you a review.</p></div>
+<div class="callout"><div class="callout-label">Rule 02</div><p><strong>Don't overpromise.</strong> &ldquo;We'll look into it&rdquo; is fine. &ldquo;Free meal on us&rdquo; said in panic creates new problems.</p></div>
+
+<div class="brand-block">
+<h2>Why Hotline</h2>
+<p>Setting up a hotline used to mean a phone line, someone to answer it, and a way to track what came in. Hotline does all three over SMS. Customers text. AI filters the noise. You hear about it only when it matters.</p>
+</div>
+
+<h2>Where to put it</h2>
+<p>The number or QR code should live wherever the customer already is when something goes wrong &mdash; and wherever they are when they're deciding whether to write a review.</p>
+
+<div class="placement-block">
+<div class="placement-label">Physical spots</div>
+<div class="placement-title">In the moment, at the problem</div>
+<ul>
+<li>Inside bathroom stalls and on mirrors</li>
+<li>On equipment that tends to break</li>
+<li>Tables, tent cards, menus</li>
+<li>Near self-serve stations</li>
+<li>Fitting rooms</li>
+<li>Inside hotel rooms and rentals</li>
+</ul>
+</div>
+
+<div class="placement-block">
+<div class="placement-label">Digital spots &mdash; often skipped, often the best</div>
+<div class="placement-title">Intercept the review before it's written</div>
+<ul>
+<li>Wi-Fi login / captive portal page</li>
+<li>Order confirmation emails and SMS</li>
+<li>Digital receipts</li>
+<li>Website footer</li>
+<li>Booking confirmation pages</li>
+<li>Auto-reply on your main business number</li>
+<li>Google Business profile description</li>
+<li>Instagram bio link</li>
+<li>Loyalty program welcome message</li>
+</ul>
+</div>
+
+<div class="placement-block">
+<div class="placement-label">Print spots</div>
+<div class="placement-title">On everything that leaves your hands</div>
+<ul>
+<li>Paper receipts</li>
+<li>To-go bags and packaging</li>
+<li>Business cards</li>
+<li>Loyalty cards</li>
+</ul>
+</div>
+
+<h2>What to say next to it</h2>
+<p>One line. Tell them what it does.</p>
+<div class="sample">&ldquo;Something wrong? Text us. Owner sees every message.&rdquo;</div>
+<div class="sample">&ldquo;Issue with your visit? Tell us before you leave.&rdquo;</div>
+<div class="sample">&ldquo;Staff not around? Something broken? Text us.&rdquo;</div>
+<p>Skip &ldquo;feedback survey.&rdquo; Skip &ldquo;rate your experience.&rdquo; Nobody scans those.</p>
+
+<h2>Bottom line</h2>
+<p>You can't fix what you don't see. Staff misses things. Systems fail quietly. A hotline is the one channel that bypasses all of it and tells you the truth &mdash; in real time, from the only person who actually knows: the customer standing in your business right now.</p>
+
+<div class="article-cta">
+<h3>Ready to set yours up?</h3>
+<a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up &rarr;</a>
+</div>
+
+<a href="/resources" class="back-link">&larr; Back to resources</a>
+</article>
+</div>
+<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+</body></html>"""
+
+@app.get("/resources")
+def resources_page(): _ensure_init(); return Response(content=RESOURCES_HTML, media_type="text/html")
+
+@app.get("/resources/why-a-hotline")
+def resources_article_1(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_1_HTML, media_type="text/html")
 
 
 # --- Signup page ---
