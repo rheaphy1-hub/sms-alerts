@@ -827,12 +827,10 @@ def handle_owner_command(text, business, sender_phone=""):
         return f"Replying to customer re: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
 
     if cmd == "DETAILS":
-        ctx_id = get_context(bid)
-        msg = get_message_by_id(ctx_id) if ctx_id else None
-        if not msg: msg = get_latest_unacked(bid)
-        if not msg:
-            recent = get_recent_flagged(bid, 1)
-            msg = recent[0] if recent else None
+        # Always return the newest flagged message. Ignore any stored context
+        # so DETAILS can't get stuck on an old alert.
+        recent = get_recent_flagged(bid, 1)
+        msg = recent[0] if recent else None
         if not msg: return "No alerts on record."
         set_context(bid, msg["id"])
         ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
