@@ -875,6 +875,16 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd == "DIGEST DAILY": set_digest_freq(bid, "daily"); return "\U0001f4e7 Digest set to daily."
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
 
+    if cmd == "DEBUG":
+        # Diagnostic: show which biz the owner is tied to and the last 3 messages
+        # stored under that biz_id. Lets us see when a customer message is being
+        # routed to a different business row than the owner expects.
+        recent = get_recent_all(bid, 3)
+        lines = [f"biz_id: {bid}", f"name: {business.get('name','')}", f"code: {business.get('business_code','')}", f"messages: {len(recent)}"]
+        for m in recent:
+            lines.append(f"#{m['id']} tier={m['tier']} from={m['from_number'][-4:]} \"{m['message_text'][:30]}\" ({_fmt_ts(m['created_at'], business)})")
+        return "\n".join(lines)
+
     if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED","LIKED","LOVED","THUMBED UP"]): return ""
     return f"Unknown: \"{raw[:20]}\"\nReply MENU for commands."
 
