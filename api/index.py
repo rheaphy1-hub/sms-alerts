@@ -2283,9 +2283,9 @@ function ownerCmd(raw){
     addB(mo,'resp','','Commands:\nREPLY \u2014 Reply to last customer\nCLOSE \u2014 End conversation\nSTATUS \u2014 Alert status + level\nALERTS \u2014 Change alert level\nTIER2 \u2014 Critical only\nTIER3 \u2014 Add reputation alerts\nPAUSE / RESUME\nBILLING \u2014 Subscription\nMENU \u2014 This message');
     return;
   }
-  if(cmd==='STATUS'){addB(mo,'resp','','\uD83D\uDD14 Alerts ON.\nAlert level: Tier 2 critical only\nReply ALERTS to change.');return}
-  if(cmd==='PAUSE'){addB(mo,'resp','','\uD83D\uDCF4 Alerts PAUSED. Reply RESUME to turn back on.');return}
-  if(cmd==='RESUME'){addB(mo,'resp','','\uD83D\uDD14 Alerts resumed.');return}
+  if(cmd==='STATUS'){addB(mo,'resp','','&#128276; Alerts ON.\nAlert level: Tier 2 critical only\nReply ALERTS to change.');return}
+  if(cmd==='PAUSE'){addB(mo,'resp','','&#128244; Alerts PAUSED. Reply RESUME to turn back on.');return}
+  if(cmd==='RESUME'){addB(mo,'resp','','&#128276; Alerts resumed.');return}
   addB(mo,'resp','','Unknown command. Reply MENU for commands.');
 }
 
@@ -2317,7 +2317,7 @@ async function sendDemo(){
       const alert='💬 Feedback ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply;
       addB(mo,'feedback','',alert,3);showOwnerInput();
     } else {
-      addB(mo,'info','','\uD83D\uDCAC '+d.summary,4);showOwnerInput();
+      addB(mo,'info','','&#128172; '+d.summary,4);showOwnerInput();
     }
   }catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}
   btn.disabled=false;inp.focus();
