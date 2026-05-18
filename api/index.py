@@ -2172,18 +2172,24 @@ RESOURCES_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name=
 <title>Resources \u2014 Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}
 """ + NAV_CSS + """
 .hero{text-align:center;padding:40px 24px 28px;max-width:600px;margin:0 auto}
 h1{font-size:clamp(24px,4vw,36px);font-weight:700;margin-bottom:12px}
 .sub{font-size:16px;color:#888}
 .grid{max-width:760px;margin:0 auto;padding:24px 24px 60px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
-.card{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:24px;box-shadow:0 1px 4px rgba(0,0,0,0.04);display:flex;flex-direction:column;gap:12px;transition:box-shadow 0.2s}
-.card:hover{box-shadow:0 4px 16px rgba(0,0,0,0.08)}
+.card{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:24px;box-shadow:0 1px 4px rgba(0,0,0,0.04);display:flex;flex-direction:column;gap:12px;transition:box-shadow 0.2s,border-color 0.2s;cursor:pointer}
+.card:hover{box-shadow:0 6px 20px rgba(0,0,0,0.09);border-color:#ea580c}
 .card-meta{display:flex;justify-content:space-between;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#aaa}
 .card h2{font-size:17px;font-weight:700;line-height:1.3;color:#1a1a1a}
 .card p{font-size:13px;color:#888;line-height:1.5;flex:1}
-.card a.read-link{font-size:13px;font-weight:600;color:#ea580c}
+.card .arrow{font-size:13px;font-weight:700;color:#ea580c;align-self:flex-end}
+.faq-card{grid-column:1/-1;background:#1a1a1a;border-color:#1a1a1a;color:#f8f8f6}
+.faq-card:hover{border-color:#ea580c}
+.faq-card .card-meta{color:rgba(248,248,246,0.4)}
+.faq-card h2{color:#f8f8f6;font-size:20px}
+.faq-card p{color:rgba(248,248,246,0.7)}
+.faq-card .arrow{color:#ea580c}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 </style></head><body>
 """ + NAV_HTML + """
@@ -2193,27 +2199,272 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">Short reads on getting the most out of Hotline.</p>
 </div>
 <div class="grid">
-<div class="card">
+<a href="/resources/faq" class="card faq-card">
+<div class="card-meta"><span>FAQ</span><span>Common questions</span></div>
+<h2>Everything you want to know before you sign up</h2>
+<p>How Hotline works, what customers see, what owners see, pricing, privacy, and more. Start here.</p>
+<span class="arrow">Read &rarr;</span>
+</a>
+<a href="/resources/why-you-need-a-hotline" class="card">
 <div class="card-meta"><span>01 &mdash; Strategy</span><span>3 min read</span></div>
 <h2>Why you need a hotline (and why Hotline is the easiest way to run one)</h2>
 <p>Your staff won't always tell you what's wrong. Your customers will, if you give them a way to reach you.</p>
-<a href="/resources/why-you-need-a-hotline" class="read-link">Read &rarr;</a>
-</div>
-<div class="card">
+<span class="arrow">Read &rarr;</span>
+</a>
+<a href="/resources/where-to-put-your-qr" class="card">
 <div class="card-meta"><span>02 &mdash; Setup</span><span>3 min read</span></div>
 <h2>Where to put your QR code so customers actually use it</h2>
 <p>Physical signs are just the start. The best placements are often digital, and most owners skip them entirely.</p>
-<a href="/resources/where-to-put-your-qr" class="read-link">Read &rarr;</a>
-</div>
-<div class="card">
+<span class="arrow">Read &rarr;</span>
+</a>
+<a href="/resources/responding-to-alerts" class="card">
 <div class="card-meta"><span>03 &mdash; Operations</span><span>3 min read</span></div>
 <h2>How to respond to alerts without burning out</h2>
 <p>Getting the alert is step one. Here's how to handle it fast without creating new problems for yourself.</p>
-<a href="/resources/responding-to-alerts" class="read-link">Read &rarr;</a>
-</div>
+<span class="arrow">Read &rarr;</span>
+</a>
 </div>
 """ + _ARTICLE_FOOT + """
 </body></html>"""
+
+
+RESOURCES_FAQ_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FAQ \u2014 Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.wrap{max-width:700px;margin:0 auto;padding:32px 24px 80px}
+.breadcrumb{font-size:12px;color:#aaa;margin-bottom:28px}
+.breadcrumb a{color:#aaa}.breadcrumb a:hover{color:#ea580c}
+header.ah{margin-bottom:40px;padding-bottom:24px;border-bottom:1px solid #e0e0dc}
+header.ah h1{font-size:clamp(24px,4vw,38px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em}
+header.ah p{font-size:16px;color:#888;line-height:1.6}
+.section{margin-bottom:48px}
+.section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.14em;color:#ea580c;margin-bottom:20px;padding-bottom:10px;border-bottom:2px solid #ea580c;display:inline-block}
+.faq-item{border-bottom:1px solid #e0e0dc;padding:0}
+.faq-q{width:100%;background:none;border:none;text-align:left;padding:18px 0;font-family:inherit;font-size:16px;font-weight:600;color:#1a1a1a;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:16px;line-height:1.3}
+.faq-q:hover{color:#ea580c}
+.faq-icon{font-size:18px;color:#aaa;flex-shrink:0;transition:transform 0.2s;font-weight:400}
+.faq-item.open .faq-icon{transform:rotate(45deg);color:#ea580c}
+.faq-a{display:none;padding:0 0 18px;font-size:15px;line-height:1.7;color:#555}
+.faq-item.open .faq-a{display:block}
+.faq-a strong{color:#1a1a1a;font-weight:600}
+.faq-a ul{list-style:none;padding:0;margin:10px 0}
+.faq-a ul li{padding-left:16px;position:relative;margin-bottom:6px}
+.faq-a ul li::before{content:'*';position:absolute;left:0;color:#ea580c;font-weight:700}
+.privacy-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:4px}
+.privacy-block{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px}
+.privacy-block-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;margin-bottom:10px}
+.privacy-block p,.privacy-block li{font-size:14px;color:#555;line-height:1.6}
+.privacy-block ul{list-style:none;padding:0;margin:0}
+.privacy-block ul li{padding-left:14px;position:relative;margin-bottom:5px}
+.privacy-block ul li::before{content:'*';position:absolute;left:0;color:#ea580c;font-weight:700}
+@media(max-width:560px){.privacy-split{grid-template-columns:1fr}}
+.article-cta{margin-top:56px;padding-top:32px;border-top:1px solid #e0e0dc;text-align:center}
+.article-cta h3{font-size:22px;font-weight:700;margin-bottom:18px}
+.cta-btn{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px;transition:background 0.2s}
+.cta-btn:hover{background:#dc2626;color:#fff}
+.back-link{display:inline-block;margin-top:44px;font-size:13px;color:#aaa;font-weight:500}
+.back-link:hover{color:#ea580c}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="wrap">
+<div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ FAQ</div>
+<header class="ah">
+<h1>Frequently asked questions</h1>
+<p>How Hotline works, what customers and owners see, pricing, and privacy. If something isn't covered here, email us at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
+</header>
+
+<div class="section">
+<div class="section-label">Getting started</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What is Hotline? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Hotline is an SMS-based alert system for small business owners. Customers text a number or scan a QR code to report issues. Hotline reads each message, classifies it by urgency, and sends you a text alert when something actually needs your attention. You manage everything by text. No app, no dashboard.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">How does setup work? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Sign up at hotlinetxt.com/signup. You'll get a print-ready sign PDF and a plain QR image texted to you within minutes. Post your sign, and Hotline starts working. The whole process takes under five minutes.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Do I need an app? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>No. Everything runs through SMS. Customers text in, Hotline processes the message, you get a text alert. You reply by text. Nothing to install on your end or theirs.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What phone number do customers text? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Customers text a dedicated Hotline number. Your QR code and sign include that number pre-formatted, so customers just scan and send. The number is shared infrastructure, not your personal cell.</p></div>
+</div>
+</div>
+
+<div class="section">
+<div class="section-label">How it works</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">How does Hotline decide what to alert me about? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Every incoming message is classified by an AI into one of four tiers based on urgency. You only get alerted for Tier 1 (emergencies) and Tier 2 (operational issues). Lower-tier messages are logged but don't interrupt you unless you've turned on broader alerts.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What are the tiers? <span class="faq-icon">+</span></button>
+<div class="faq-a">
+<ul>
+<li><strong>Tier 1 - Emergency:</strong> Fire, flooding, injury, safety hazard. Always gets through immediately.</li>
+<li><strong>Tier 2 - Operational:</strong> Broken equipment, no staff on floor, card reader down, bathroom issues. Alerted if confidence is high.</li>
+<li><strong>Tier 3 - Reputation:</strong> Unhappy customer, rude staff complaint, general frustration. Logged. Alerted only if you've opted into broader alerts.</li>
+<li><strong>Tier 4 - Routine:</strong> Compliments, questions, neutral messages. Logged silently.</li>
+</ul>
+</div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Will I get spammed with complaints? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Owners who use Hotline are usually surprised by how quiet it is. Most days you'll get nothing. When something comes in, it's almost always real and actionable. Hotline also has built-in rate limiting so a single frustrated customer can't flood you with alerts.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What does the customer see when they text in? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>They get an automatic reply confirming their message was received. The tone varies by tier. An emergency gets a response telling them to call 911. A complaint gets an empathetic acknowledgment. A compliment gets a warm thank you. Customers never see your personal number or any of your internal alert traffic.</p></div>
+</div>
+</div>
+
+<div class="section">
+<div class="section-label">Managing alerts</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What commands can I text back? <span class="faq-icon">+</span></button>
+<div class="faq-a">
+<ul>
+<li><strong>OK</strong> - Acknowledge and close an alert</li>
+<li><strong>DETAILS</strong> - Get the full customer message and timestamp</li>
+<li><strong>REPLY</strong> - Send a private reply directly to the customer</li>
+<li><strong>LIST</strong> - See the last 5 flagged issues</li>
+<li><strong>SNOOZE</strong> - Remind yourself about an alert in 1 hour</li>
+<li><strong>QUIET 2H</strong> - Silence non-emergency alerts for a set time</li>
+<li><strong>PAUSE / RESUME</strong> - Stop or restart all non-emergency alerts</li>
+<li><strong>STATUS</strong> - See your current alert settings</li>
+<li><strong>HELP</strong> - Full command list</li>
+</ul>
+</div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Can I add a second phone number for a manager or partner? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. You can add a second alert number during signup or ask us to add one after. Both numbers get the same alerts and can use the same commands.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Can I pause alerts when I'm off the clock? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. Text QUIET 2H (or any number of hours) to silence non-emergency alerts for that window. Text PAUSE to stop them indefinitely until you text RESUME. Tier 1 emergencies always come through regardless.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Can I reply directly to a customer? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. Text REPLY after receiving an alert, type your message, and Hotline sends it to the customer as if it came from the Hotline number. The customer does not see your personal cell number. You can have a back-and-forth if needed.</p></div>
+</div>
+</div>
+
+<div class="section">
+<div class="section-label">Pricing and trial</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">How much does Hotline cost? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>$19.99 per month after your free trial. No setup fees, no contracts, cancel anytime by texting or emailing us.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Is there a free trial? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes, 14 days. No credit card required to start. You get full access to everything during the trial.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What happens when my trial ends? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>You'll get a text reminder the day before it expires. If you don't subscribe, alerts pause. Customer messages still come in and are logged, but you stop receiving notifications until you reactivate. Nothing is deleted.</p></div>
+</div>
+</div>
+
+<div class="section">
+<div class="section-label">Technical</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Does Hotline work for multiple locations? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Each location needs its own Hotline account and QR code so messages route to the right place. Contact us at Connect@HotlineTXT.com if you're setting up multiple locations and we'll get you sorted.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What if a customer texts without scanning the QR? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>If a customer texts the Hotline number directly without a QR code scan, the message includes a business code that routes it correctly. If there's no code and no recent session, they'll get a prompt to scan the QR. Messages without a valid business code aren't forwarded to any owner.</p></div>
+</div>
+</div>
+
+<div class="section">
+<div class="section-label">Privacy</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Will the business know it was me who texted? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>The business owner sees that a message came in, what it said, and roughly when. They do not see your name. Whether they can identify you from your phone number depends on whether they already have it saved. Hotline does not provide any additional identifying information beyond what the message itself contains.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Can the business see my personal phone number? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Not through Hotline's interface. Owners see the message content and timestamp. Phone numbers are stored in the system for routing and logging purposes but are not displayed in owner alerts or the owner command interface.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Does the business owner have my contact info after I text? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>No contact details are handed over to the business. If the owner replies to your message using the REPLY command, it comes back to your number via the Hotline system, but your number is not shared with them directly.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Who else can see my message besides the owner? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Any phone numbers the owner has added as alert recipients (a manager or business partner, for example) will receive the same alert. Messages are stored in Hotline's system for logging. They are not shared with third parties or used for marketing.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Do customers ever see my personal cell number? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>No. All messages to customers go out from the Hotline number, not your personal cell. When you reply to a customer using the REPLY command, they see the Hotline number as the sender. Your personal number is never exposed.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">What number do my alerts come from? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Your alerts come from the Hotline system number. It's worth saving it in your contacts as "Hotline Alerts" so you recognize it when something comes in.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Can customers reply back to me directly? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>If a customer replies to the auto-response they received, that message comes back into Hotline and gets routed to you as a follow-up. It does not open a direct line between the customer and your personal number. Everything stays within the Hotline system.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Is my business data shared with anyone? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>No. Your business name, phone number, and incoming message data are used only to operate the service. Hotline does not sell or share owner data with advertisers or third parties.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">How do I delete my account? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Email Connect@HotlineTXT.com and we'll delete your account and associated data. You can also just stop using the service and let your trial or subscription lapse. Nothing is retained after deletion.</p></div>
+</div>
+
+</div>
+
+<div class="article-cta"><h3>Ready to get started?</h3><a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up free &rarr;</a></div>
+<a href="/resources" class="back-link">&larr; Back to resources</a>
+</div>
+""" + _ARTICLE_FOOT + """
+</body>
+<script>
+function toggle(btn){
+  var item=btn.parentElement;
+  var isOpen=item.classList.contains('open');
+  document.querySelectorAll('.faq-item.open').forEach(function(el){el.classList.remove('open')});
+  if(!isOpen)item.classList.add('open');
+}
+</script>
+</html>"""
 
 
 RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2436,6 +2687,9 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 @app.get("/resources")
 def resources_page(): _ensure_init(); return Response(content=RESOURCES_HTML, media_type="text/html")
+
+@app.get("/resources/faq")
+def resources_faq(): _ensure_init(); return Response(content=RESOURCES_FAQ_HTML, media_type="text/html")
 
 @app.get("/resources/why-you-need-a-hotline")
 def resources_article_1(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_1_HTML, media_type="text/html")
