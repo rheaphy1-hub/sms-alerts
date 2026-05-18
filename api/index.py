@@ -2012,25 +2012,18 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     sender, body = From.strip(), Body.strip()
     logger.info(f"[INCOMING] From={sender} Body={body[:80]!r}")
 
-    # 1. Check if sender is a registered owner/alert-phone
-    owner_biz = get_business_by_owner(sender)
-    if owner_biz:
-        logger.info(f"[OWNER CMD] biz={owner_biz['id']} cmd={body!r}")
-        resp = handle_owner_command(body, owner_biz, sender_phone=sender)
-        if not resp: return _twiml("")
-        return _twiml(resp)
-
-    # 2. Try to parse a BC#### code from the message body
+    # If the message body contains a BC#### code, treat it as a customer
+    # message even when the sender is a registered owner. This lets owners
+    # test their own hotline from their personal phone without their texts
+    # getting captured by the owner-command handler.
     code = _parse_business_code_from_body(body)
     if code:
         biz = get_business_by_code(code)
         if biz:
             clean_body = _scrub_hotline_header(body)
             if not clean_body:
-                # Customer scanned and hit send without typing — prompt them
-                # Still set the session so their follow-up routes correctly
                 _set_customer_session(sender, biz["id"])
-                logger.info(f"[BLANK MSG] {sender} → {biz['id']} — session set, awaiting message")
+                logger.info(f"[BLANK MSG] {sender} \u2192 {biz['id']} \u2014 session set, awaiting message")
                 return _twiml("Got it! Now just describe what's wrong and send it to us.")
             _set_customer_session(sender, biz["id"])
             auto_reply = _process_customer_message(biz, sender, clean_body)
@@ -2039,7 +2032,15 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
             logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
             return _twiml("Thanks for reaching out. We couldn't find that business code.")
 
-    # 3. No BC#### code — check if sender has an active session from a recent scan
+    # 1. Check if sender is a registered owner/alert-phone
+    owner_biz = get_business_by_owner(sender)
+    if owner_biz:
+        logger.info(f"[OWNER CMD] biz={owner_biz['id']} cmd={body!r}")
+        resp = handle_owner_command(body, owner_biz, sender_phone=sender)
+        if not resp: return _twiml("")
+        return _twiml(resp)
+
+    # 2. No BC#### code \u2014 check if sender has an active session from a recent scan
     session_biz_id = _get_customer_session(sender)
     if session_biz_id:
         with get_db() as conn:
@@ -2049,7 +2050,7 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
             auto_reply = _process_customer_message(biz, sender, body)
             return _twiml(auto_reply)
 
-    # 4. No code, no session — generic fallback
+    # 3. No code, no session — generic fallback
     logger.info(f"[NO CODE] No BC code or session found for {sender}")
     return _twiml("Thanks for reaching out. To contact a business, please scan their QR code.")
 
