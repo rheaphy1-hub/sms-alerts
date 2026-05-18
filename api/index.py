@@ -915,7 +915,7 @@ def build_digest_html(name, stats, period="week"):
 <div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
 {"<p style='color:#c0392b;font-size:14px'>\u26a0\ufe0f "+str(u)+" unacknowledged</p>" if u>0 else ""}
 {"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
-<p style="font-size:13px;color:#aaa;margin-top:24px">Reply HELP to your Hotline number for commands.</p></div>"""
+<p style="font-size:13px;color:#aaa;margin-top:24px">Reply MENU to your Hotline number for commands.</p></div>"""
 
 def send_all_digests(force_freq=None):
     sent = 0
@@ -1010,16 +1010,14 @@ def _ensure_init():
 WELCOME_MSG = """Welcome to {name} on Hotline! \U0001f4f2
 
 Your sign + QR code links are on the way in a separate text.
-Customers scan the QR to send you private feedback.
+Customers scan the QR to send you private feedback. You get a text alert when something needs attention \u2014 including the customer's exact message and our auto-reply.
 
 Quick commands:
-OK \u2014 Close an alert
 REPLY \u2014 Respond to a customer
-SNOOZE \u2014 Revisit in 1 hour
-QUIET 2H \u2014 Silence alerts
-DETAILS \u2014 Full alert info
+CLOSE \u2014 End a conversation
 STATUS \u2014 Your current settings
-HELP \u2014 Full command list
+PAUSE / RESUME \u2014 Stop or restart alerts
+MENU \u2014 Full command list
 
 Emergencies always get through."""
 
@@ -2222,10 +2220,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;color:#aaa;gap:6px"><span style="font-weight:600;color:#888;white-space:nowrap">Alert level:</span><div style="display:flex;gap:4px"><button class="filter-btn active" id="filt-crit" onclick="setFilter('critical')" style="font-size:10px;padding:3px 10px;border-radius:4px">🔴 Critical only</button><button class="filter-btn" id="filt-all" onclick="setFilter('all')" style="font-size:10px;padding:3px 10px;border-radius:4px">📋 All messages</button></div></div>
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
-<div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
-<div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
-<div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
 <div class="cmd-btn" onclick="ownerCmd('REPLY')">REPLY</div>
+<div class="cmd-btn" onclick="ownerCmd('CLOSE')">CLOSE</div>
+<div class="cmd-btn" onclick="ownerCmd('MENU')">MENU</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
@@ -2239,37 +2236,92 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>
 <script>
-let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
-function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
+function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text.replace(/\n/g,'<br>');d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
-function resetDemo(){history=[];lastData=null;acked=false;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Owner alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('owner-inp').value='';hideOwnerInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
+function resetDemo(){history=[];lastData=null;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Owner alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('owner-inp').value='';hideOwnerInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
 function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
+function fmtTime(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
 
-(function(){document.getElementById('filt-crit').classList.add('active')})();function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
-if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to the customer.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
-addB(mo,'cmd','',raw.trim());
-if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nMessage: "'+d.original_message+'"\\nReply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.');return}
-if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to say to the customer? Type your reply now.');inp.placeholder='Type your reply...';inp.focus();return}
-if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
-addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
-async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
-if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
-inp.value='';btn.disabled=true;demoCount++;acked=false;replyMode=false;
-addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
-try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
-history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
-await new Promise(r=>setTimeout(r,300));addB(mc,'in','Auto-reply',d.auto_reply);await new Promise(r=>setTimeout(r,400));
-const tierCls='t'+d.tier;const tags='<div class="meta"><span class="tag '+tierCls+'">'+d.tier_label+'</span><span class="tag '+tierCls+'">'+d.category.replace('_',' ')+'</span></div>';
-if(d.tier===1){addB(mo,'alert-red','Emergency','\\ud83d\\udea8 URGENT: '+d.summary+'\\nReply: DETAILS',1);showOwnerInput()}
-else if(d.tier===2){addB(mo,'alert','Alert','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge',2);showOwnerInput()}
-else if(d.tier===3){addB(mo,'feedback','Feedback','\\ud83d\\ude14 '+d.summary+tags,3);showOwnerInput()}
-else{addB(mo,'info','Message','\\ud83d\\udcac '+d.summary+tags,4);showOwnerInput()}}
-catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
+(function(){document.getElementById('filt-crit').classList.add('active')})();
+
+function ownerCmd(raw){
+  const cmd=(raw||'').trim().toUpperCase();
+  const inp=document.getElementById('owner-inp');
+  inp.value='';
+  if(!cmd)return;
+
+  // In reply mode: any non-command text goes to customer
+  if(replyMode){
+    if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','','Reply cancelled.');inp.placeholder='Type a command...';return}
+    if(cmd==='CLOSE'){replyMode=false;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
+    replyMode=false;
+    addB(mo,'cmd','',raw.trim());
+    addB(mo,'resp','','Reply sent. AI quiet for 15min.\nType CLOSE when done, or just let it time out.');
+    addB(mc,'in','Owner reply',raw.trim());
+    inp.placeholder='Type a command...';
+    return;
+  }
+
+  addB(mo,'cmd','',raw.trim());
+  if(!lastData&&cmd!=='MENU'){addB(mo,'resp','','No active alerts.');return}
+
+  if(cmd==='REPLY'){
+    if(!lastData){addB(mo,'resp','','No messages to reply to.');return}
+    replyMode=true;
+    addB(mo,'resp','','Replying to: "'+lastData.original_message.slice(0,60)+'"\nType your reply now, or NEVERMIND.\nType CLOSE when finished to close the line with customer.');
+    inp.placeholder='Type your reply...';
+    inp.focus();
+    return;
+  }
+  if(cmd==='CLOSE'){addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
+  if(cmd==='MENU'||cmd==='?'){
+    addB(mo,'resp','','Commands:\nREPLY \u2014 Reply to last customer\nCLOSE \u2014 End conversation\nSTATUS \u2014 Alert status + level\nALERTS \u2014 Change alert level\nTIER2 \u2014 Critical only\nTIER3 \u2014 Add reputation alerts\nPAUSE / RESUME\nBILLING \u2014 Subscription\nMENU \u2014 This message');
+    return;
+  }
+  if(cmd==='STATUS'){addB(mo,'resp','','\uD83D\uDD14 Alerts ON.\nAlert level: Tier 2 critical only\nReply ALERTS to change.');return}
+  if(cmd==='PAUSE'){addB(mo,'resp','','\uD83D\uDCF4 Alerts PAUSED. Reply RESUME to turn back on.');return}
+  if(cmd==='RESUME'){addB(mo,'resp','','\uD83D\uDD14 Alerts resumed.');return}
+  addB(mo,'resp','','Unknown command. Reply MENU for commands.');
+}
+
+async function sendDemo(){
+  const inp=document.getElementById('cust-input');
+  const btn=document.getElementById('cust-btn');
+  const text=inp.value.trim();
+  if(!text)return;
+  if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
+  inp.value='';btn.disabled=true;demoCount++;replyMode=false;
+  addB(mc,'out-blue','',text);
+  addB(mo,'system','','<span class="spinner"></span> Processing...');
+  try{
+    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});
+    const d=await r.json();d.original_message=text;lastData=d;
+    mo.lastChild.remove();
+    history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
+    await new Promise(r=>setTimeout(r,300));
+    addB(mc,'in','Auto-reply',d.auto_reply);
+    await new Promise(r=>setTimeout(r,400));
+    const when=fmtTime();
+    if(d.tier===1){
+      const alert='🚨 URGENT ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply+'\n\nReply REPLY to message customer back.';
+      addB(mo,'alert-red','',alert,1);showOwnerInput();
+    } else if(d.tier===2){
+      const alert='⚠️ Issue ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply+'\n\nReply REPLY to message customer back.';
+      addB(mo,'alert','',alert,2);showOwnerInput();
+    } else if(d.tier===3){
+      const alert='💬 Feedback ('+when+')\nCategory: '+d.category.replace('_',' ')+'\nCustomer:\n'+text+'\n\nWe replied:\n'+d.auto_reply;
+      addB(mo,'feedback','',alert,3);showOwnerInput();
+    } else {
+      addB(mo,'info','','\uD83D\uDCAC '+d.summary,4);showOwnerInput();
+    }
+  }catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}
+  btn.disabled=false;inp.focus();
+}
 </script></body></html>"""
 
 @app.get("/demo")
@@ -2332,7 +2384,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="steps">
 <div class="step"><div class="step-num">1</div><div><strong>Get your hotline.</strong><p>Sign up and instantly receive your unique QR code plus a print-ready sign \u2014 delivered digitally, ready to use right away. Yours forever.</p></div></div>
 <div class="step"><div class="step-num">2</div><div><strong>Put it anywhere customers look.</strong><p>The QR is yours to use anywhere. Bathroom mirror. Menu. Receipt. Front door. Wherever they might need you.</p></div></div>
-<div class="step"><div class="step-num">3</div><div><strong>You get a text \u2014 only when it matters.</strong><p>AI filters every message. Emergencies and broken stuff reach you in seconds. Noise gets quietly logged. Reply OK or DETAILS by text.</p></div></div>
+<div class="step"><div class="step-num">3</div><div><strong>You get a text \u2014 only when it matters.</strong><p>AI filters every message. Emergencies and critical issues reach you in seconds with the customer's exact words and our auto-reply. Reply REPLY to talk directly to the customer.</p></div></div>
 </div>
 </section>
 
@@ -2384,10 +2436,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>Manage everything by text.</h2>
 <p class="section-sub">No app. No dashboard. No login. Your phone is the dashboard.</p>
 <div class="commands">
-<div class="cmd"><code>DETAILS</code><span>See the full customer message and category</span></div>
-<div class="cmd"><code>OK</code><span>Mark the issue handled — or just react 👍</span></div>
-<div class="cmd"><code>LIST</code><span>See the last 5 flagged issues</span></div>
-<div class="cmd"><code>HELP</code><span>See all commands</span></div>
+<div class="cmd"><code>REPLY</code><span>Open a direct line to the last customer</span></div>
+<div class="cmd"><code>CLOSE</code><span>End the conversation, AI auto-replies resume</span></div>
+<div class="cmd"><code>STATUS</code><span>See your current alert settings</span></div>
+<div class="cmd"><code>PAUSE / RESUME</code><span>Stop or restart alerts</span></div>
+<div class="cmd"><code>TIER2 / TIER3</code><span>Switch between critical-only or all alerts</span></div>
+<div class="cmd"><code>MENU</code><span>See all commands</span></div>
 </div>
 </section>
 
@@ -2396,7 +2450,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="faq">
 <div class="q"><strong>Will I get spammed?</strong><p>No. AI filters every message. Most never reach you. You only hear about things that need you.</p></div>
 <div class="q"><strong>Do customers need an app?</strong><p>No. They scan or text. Works on any phone. No download, no account.</p></div>
-<div class="q"><strong>What if the AI gets it wrong?</strong><p>Reply DETAILS to any alert to see the exact words the customer sent. You stay in control.</p></div>
+<div class="q"><strong>What if the AI gets it wrong?</strong><p>Every alert includes the customer's exact words verbatim. You always see what they actually said, not a summary. You stay in control.</p></div>
 <div class="q"><strong>How long does setup take?</strong><p>2 minutes. Sign up, print your sign, you're live.</p></div>
 </div>
 </section>
@@ -2724,15 +2778,16 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <button class="faq-q" onclick="toggle(this)">What commands can I text back? <span class="faq-icon">+</span></button>
 <div class="faq-a">
 <ul>
-<li><strong>OK</strong> - Acknowledge and close an alert</li>
-<li><strong>DETAILS</strong> - Get the full customer message and timestamp</li>
-<li><strong>REPLY</strong> - Send a private reply directly to the customer</li>
-<li><strong>LIST</strong> - See the last 5 flagged issues</li>
-<li><strong>SNOOZE</strong> - Remind yourself about an alert in 1 hour</li>
-<li><strong>QUIET 2H</strong> - Silence non-emergency alerts for a set time</li>
-<li><strong>PAUSE / RESUME</strong> - Stop or restart all non-emergency alerts</li>
+<li><strong>REPLY</strong> - Open a direct line to the last customer</li>
+<li><strong>CLOSE</strong> - End the conversation, AI auto-replies resume</li>
+<li><strong>NEVERMIND</strong> - Cancel reply mode without sending</li>
 <li><strong>STATUS</strong> - See your current alert settings</li>
-<li><strong>HELP</strong> - Full command list</li>
+<li><strong>ALERTS</strong> - View or change your alert level</li>
+<li><strong>TIER2</strong> - Critical issues only (emergencies + operations)</li>
+<li><strong>TIER3</strong> - Also get reputation and feedback alerts</li>
+<li><strong>PAUSE / RESUME</strong> - Stop or restart all non-emergency alerts</li>
+<li><strong>MENU</strong> - Full command list</li>
+<li><strong>BILLING</strong> - Check subscription status</li>
 </ul>
 </div>
 </div>
@@ -2744,12 +2799,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I pause alerts when I'm off the clock? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. Text QUIET 2H (or any number of hours) to silence non-emergency alerts for that window. Text PAUSE to stop them indefinitely until you text RESUME. Tier 1 emergencies always come through regardless.</p></div>
+<div class="faq-a"><p>Yes. Text PAUSE to stop all non-emergency alerts until you're ready. Text RESUME to turn them back on. Tier 1 emergencies always come through regardless.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I reply directly to a customer? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. Text REPLY after receiving an alert, type your message, and your reply goes to the customer from the Hotline number. The customer does not see your personal cell number. You can have a back-and-forth if needed.</p></div>
+<div class="faq-a"><p>Yes. Text REPLY after receiving an alert. The system enters reply mode — type your message and it goes to the customer from the Hotline number. They never see your personal cell. Text CLOSE when you're done or let it time out after 15 minutes.</p></div>
 </div>
 </div>
 
@@ -3052,11 +3107,11 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>If the same issue keeps coming through, the pattern is telling you something. Three alerts about the same machine, the same bathroom, the same shift gap? That's not noise. That's a pattern.</p>
 
-<p>Text LIST to see recent flagged alerts together. The fix usually becomes obvious when you see them grouped.</p>
+<p>If the same issue keeps coming through, the pattern is telling you something. Three alerts about the same machine, the same bathroom, the same shift gap? That's not noise. That's a pattern worth fixing.</p>
 
 <h2>Protect your own time</h2>
 
-<p>Text QUIET 2H to silence non-emergency alerts for a set window. Text PAUSE to stop them until you're ready. Tier 1 emergencies always get through regardless of your settings.</p>
+<p>Text PAUSE to stop non-emergency alerts until you're ready. Text RESUME to turn them back on. Tier 1 emergencies always get through regardless of your settings.</p>
 
 <p>The whole system is built to stay out of your way. The AI runs constantly in the background so you don't have to. When it needs you, it will find you.</p>
 
