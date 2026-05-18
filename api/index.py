@@ -107,6 +107,11 @@ def init_db():
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
+    # messages table additive columns
+    for col, default in [("auto_reply","\'\'")]:
+        try:
+            with get_db() as c: _execute(c, f"ALTER TABLE messages ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+        except: pass
 
 
 def _gen_business_code():
@@ -202,6 +207,9 @@ def store_message(bid, fn, mt, cl):
 
 def log_alert(mid, bid, at):
     with get_db() as c: _execute(c, _q("INSERT INTO alert_log (message_id,business_id,alert_type,sent_at) VALUES (?,?,?,?)"), (mid,bid,at,datetime.now(timezone.utc).isoformat()))
+
+def update_auto_reply(mid, text):
+    with get_db() as c: _execute(c, _q("UPDATE messages SET auto_reply=? WHERE id=?"), (text or "", mid))
 
 def mark_acknowledged(mid):
     with get_db() as c: _execute(c, _q("UPDATE messages SET acknowledged=1 WHERE id=?"), (mid,))
@@ -748,48 +756,8 @@ def handle_owner_command(text, business, sender_phone=""):
         msg = get_message_by_id(reply_mid)
         if msg:
             send_sms(msg["from_number"], raw)
-            return f"Reply sent to customer."
+            return "Reply sent to customer."
         return "Could not find the original message."
-
-    # ── OK #N — acknowledge a specific alert by ID ────────────────────────────
-    is_ok_n = re.match(r"^OK\s+#?(\d+)$", cmd)
-    if is_ok_n:
-        target_id = int(is_ok_n.group(1))
-        msg = get_message_by_id(target_id)
-        if not msg or msg["business_id"] != bid: return f"Alert #{target_id} not found."
-        if msg["acknowledged"]: return f"\u2705 Alert #{target_id} already acknowledged."
-        mark_acknowledged(target_id)
-        set_context(bid, target_id)
-        others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
-        short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
-        for p in others: send_sms(p, f"\u2705 Alert #{target_id} acknowledged by {short}.")
-        return f"\u2705 Alert #{target_id} acknowledged.\n\"{msg['message_text'][:80]}\""
-
-    # ── OK / ACK — with multi-alert disambiguation ────────────────────────────
-    ack_words = {"OK","GOT IT","DONE","ON IT","ACK","YES"}
-    is_thumbs = "\U0001f44d" in raw
-    is_reaction_ack = any(cmd.startswith(w) for w in ["LIKED","LOVED","THUMBED UP"])
-    if cmd in ack_words or is_thumbs or is_reaction_ack:
-        all_flagged = get_recent_flagged(bid, 20)
-        unacked = [m for m in all_flagged if not m["acknowledged"]]
-
-        if not unacked: return "No unacknowledged alerts."
-
-        if len(unacked) > 1:
-            lines = [f"{len(unacked)} open alerts. Reply OK #N to acknowledge one:\n"]
-            for m in unacked[:5]:
-                lines.append(f"  #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'], business)})")
-            lines.append("\nExample: OK 2")
-            return "\n".join(lines)
-
-        # Exactly one — ack it and echo back what it was
-        msg = unacked[0]
-        mark_acknowledged(msg["id"])
-        set_context(bid, msg["id"])
-        others = [p for p in get_alert_phones(business) if _normalize_phone(p)[-10:] != _normalize_phone(sender_phone)[-10:]]
-        short = _fmt_phone_short(sender_phone) if sender_phone else "someone"
-        for p in others: send_sms(p, f"\u2705 Alert #{msg['id']} acknowledged by {short}.")
-        return f"\u2705 Alert #{msg['id']} acknowledged.\n\"{msg['message_text'][:80]}\""
 
     if cmd == "BILLING":
         status = business.get("sub_status") or "trialing"
@@ -805,79 +773,29 @@ def handle_owner_command(text, business, sender_phone=""):
             return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
 
     if cmd == "HELP":
-        return ("Commands:\nDETAILS \u2014 View latest alert\nOK \u2014 Close/acknowledge alert\n"
-                "OK 2 \u2014 Acknowledge specific alert\nREPLY \u2014 Reply to customer (privately)\n"
-                "SNOOZE \u2014 Revisit latest alert in 1hr\nSNOOZE 2H \u2014 Revisit in X hours\n"
-                "LIST \u2014 Flagged issues\nLIST ALL \u2014 All messages\n"
-                "STATUS \u2014 Alert status + preference\n"
-                "ALERTS \u2014 View/change alert level\n"
-                "TIER2 \u2014 Critical issues only\nTIER3 \u2014 Add reputation alerts\n"
-                "QUIET 2H \u2014 Silence alerts for X hours\nPAUSE / RESUME\n"
-                "DIGEST DAILY / WEEKLY\nBILLING \u2014 Subscription status\nHELP \u2014 This message")
+        return ("Commands:\n"
+                "REPLY \u2014 Reply to last customer\n"
+                "STATUS \u2014 Alert status + level\n"
+                "ALERTS \u2014 Change alert level\n"
+                "TIER2 \u2014 Critical only\n"
+                "TIER3 \u2014 Add reputation alerts\n"
+                "PAUSE / RESUME\n"
+                "BILLING \u2014 Subscription\n"
+                "HELP \u2014 This message")
 
     if cmd == "REPLY":
-        ctx_id = get_context(bid)
-        msg = get_message_by_id(ctx_id) if ctx_id else None
-        if not msg: msg = get_latest_unacked(bid)
-        if not msg:
-            recent = get_recent_flagged(bid, 1)
-            msg = recent[0] if recent else None
-        if not msg: return "No messages to reply to."
-        set_reply_mode(bid, msg["id"])
-        return f"Replying to customer re: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
-
-    if cmd == "DETAILS":
-        # Return the newest customer message regardless of tier. Showing tier
-        # in the output makes it obvious when classification is wrong.
+        # Newest customer message wins. No context state.
         recent = get_recent_all(bid, 1)
         msg = recent[0] if recent else None
-        if not msg: return "No messages on record."
-        set_context(bid, msg["id"])
-        ack = "\u2705 Acknowledged" if msg["acknowledged"] else "\u23f3 Pending"
-        tier = msg.get("tier") or 0
-        tier_label = {1:"1 (URGENT)",2:"2 (Issue)",3:"3 (Feedback)",4:"4 (Routine)"}.get(tier, str(tier))
-        return (f"Alert #{msg['id']} \u2014 {ack}\nTime: {_fmt_ts(msg['created_at'], business)}\n"
-                f"Tier: {tier_label}\n"
-                f"Category: {msg['category']}\n"
-                f"Message:\n{msg['message_text']}\n\n"
-                f"Reply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.")
-
-    if cmd == "LIST ALL":
-        msgs = get_recent_all(bid, 5)
-        if not msgs: return "No messages yet."
-        icons = {1:"\U0001f6a8",2:"\u26a0\ufe0f",3:"\U0001f614",4:"\U0001f4ac"}
-        lines = ["Last 5 messages:\n"]
-        for m in msgs:
-            ack_mark = " \u2705" if m["acknowledged"] else ""
-            lines.append(f"{icons.get(m['tier'],chr(0x1f4ac))} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'], business)}){ack_mark}")
-        return "\n".join(lines)
-
-    if cmd == "LIST":
-        msgs = get_recent_flagged(bid, 5)
-        if not msgs: return "No flagged issues."
-        lines = ["Last 5 flagged:\n"]
-        for m in msgs:
-            icon = "\u2705" if m["acknowledged"] else "\u26a0\ufe0f"
-            lines.append(f"{icon} #{m['id']} \u2014 {m['summary']} ({_fmt_ts(m['created_at'], business)})")
-        lines.append("\nReply OK #N to acknowledge. DETAILS for full message.")
-        return "\n".join(lines)
+        if not msg: return "No messages to reply to."
+        set_reply_mode(bid, msg["id"])
+        return f"Replying to: \"{msg['message_text'][:60]}\"\nType your reply now, or CANCEL."
 
     if cmd == "STATUS":
         name = business.get("name") or bid
         if business.get("paused"): return f"\U0001f4f4 Alerts PAUSED for {name}.\nReply RESUME to turn back on."
-        mu = business.get("muted_until")
-        if mu:
-            try:
-                until = datetime.fromisoformat(mu)
-                if until > datetime.now(timezone.utc):
-                    mins = int((until - datetime.now(timezone.utc)).total_seconds()/60)
-                    return f"\U0001f507 Muted for {mins//60}h {mins%60}m.\nReply RESUME to unmute."
-            except: pass
-        unacked = sum(1 for m in get_recent_flagged(bid, 20) if not m["acknowledged"])
-        t3 = "on" if business.get("alert_tier3") else "off"
-        unacked_str = f"\n{unacked} unacknowledged alert(s) \u2014 reply LIST" if unacked else ""
         t3_label = "Tier 2 + Tier 3 (all)" if business.get("alert_tier3") else "Tier 2 critical only"
-        return f"\U0001f514 Alerts ON for {name}.\nAlert level: {t3_label}{unacked_str}\nReply ALERTS to change."
+        return f"\U0001f514 Alerts ON for {name}.\nAlert level: {t3_label}\nReply ALERTS to change."
 
     if cmd == "ALERTS":
         t3 = "on (Tier 2 + Tier 3)" if business.get("alert_tier3") else "off (Tier 2 critical only)"
@@ -888,41 +806,11 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd in ("TIER3", "ALERTS ALL"): set_alert_tier3(bid, True); return "\U0001f7e1 All alerts on. You'll now also get Tier 3 reputation/feedback messages.\nReply TIER2 to go back to critical only."
 
     if cmd == "PAUSE": set_paused(bid, True); return "\U0001f4f4 Alerts PAUSED. Reply RESUME to turn back on."
-    if cmd == "RESUME": set_paused(bid, False); set_muted_until(bid, None); return "\U0001f514 Alerts resumed."
+    if cmd == "RESUME": set_paused(bid, False); return "\U0001f514 Alerts resumed."
     if cmd == "DIGEST DAILY": set_digest_freq(bid, "daily"); return "\U0001f4e7 Digest set to daily."
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
 
-    if cmd.startswith("SNOOZE"):
-        ctx_id = get_context(bid)
-        msg = get_message_by_id(ctx_id) if ctx_id else None
-        if not msg: msg = get_latest_unacked(bid)
-        if not msg: return "No active alert to snooze."
-        m = re.match(r"SNOOZE\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
-        if m:
-            amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
-            if unit == "M": delta = timedelta(minutes=max(1,min(1440,amt))); label = f"{amt}m"
-            else: delta = timedelta(hours=max(1,min(72,amt))); label = f"{amt}h"
-        else:
-            delta = timedelta(hours=1); label = "1hr"
-        snooze_until = datetime.now(timezone.utc) + delta
-        set_context(bid, msg["id"])
-        return f"\u23f0 Snoozed. Alert #{msg['id']} will remind you in {label}.\n\"{msg['message_text'][:60]}\""
-
-    if cmd.startswith("QUIET"):
-        m = re.match(r"QUIET\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
-        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 Quiet for 1hr. Reply RESUME to unmute."
-        amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
-        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Quiet for {amt}m. Reply RESUME to unmute."
-        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Quiet for {amt}h. Reply RESUME to unmute."
-
-    if cmd.startswith("MUTE"):
-        m = re.match(r"MUTE\s+(\d+)\s*(H|HR|HRS|HOUR|HOURS|M|MIN|MINS|MINUTE|MINUTES)?", cmd)
-        if not m: set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=1)); return "\U0001f507 Quiet for 1hr. Reply RESUME to unmute. (Tip: use QUIET 2H to set duration)"
-        amt = int(m.group(1)); unit = (m.group(2) or "H")[0]
-        if unit=="M": amt=max(1,min(1440,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(minutes=amt)); return f"\U0001f507 Quiet for {amt}m. Reply RESUME to unmute."
-        else: amt=max(1,min(72,amt)); set_muted_until(bid, datetime.now(timezone.utc)+timedelta(hours=amt)); return f"\U0001f507 Quiet for {amt}h. Reply RESUME to unmute."
-
-    if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED"]): return ""
+    if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED","LIKED","LOVED","THUMBED UP"]): return ""
     return f"Unknown: \"{raw[:20]}\"\nReply HELP for commands."
 
 
@@ -1966,23 +1854,20 @@ def _scrub_hotline_header(body: str) -> str:
     return "\n".join(cleaned).strip()
 
 def _process_customer_message(biz, sender, body):
-    """Classify + alert for a customer message. Returns TwiML auto-reply."""
+    """Classify + alert for a customer message. Returns the auto-reply text."""
     website_info = biz.get("website_info", "")
     c = classify_message(body, website_info=website_info)
     msg_id = store_message(biz["id"], sender, body, c)
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
     cat = c.get("category", "other")
 
-    # Always point DETAILS at the newest flagged message, even if the alert SMS
-    # gets suppressed (rate limit, muted, trial expired). Owner texting DETAILS
-    # should see what just came in, not a stale alert from days ago.
-    if tier in (1, 2, 3):
-        set_context(biz["id"], msg_id)
+    auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
+    update_auto_reply(msg_id, auto_reply)
 
     alert_phones = get_alert_phones(biz)
     should_alert_t3 = biz.get("alert_tier3") and tier == 3 and conf > 0.5
     should_alert = tier == 1 or (tier == 2 and conf > 0.7) or should_alert_t3
-    silenced = is_alerts_silenced(biz)
+    paused = bool(biz.get("paused"))
     recent_count = get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW)
 
     logger.info(f"[CLASSIFY] biz={biz['id']} tier={tier} conf={conf:.2f} cat={cat} summary={summary!r}")
@@ -1990,23 +1875,31 @@ def _process_customer_message(biz, sender, body):
     _trial_ok = can_send_alerts(biz)
     if not _trial_ok and tier != 1:
         logger.info(f"[TRIAL BLOCKED] Alert suppressed for {biz['id']} — trial expired or unpaid")
-    elif alert_phones and should_alert and not (silenced and tier != 1):
+    elif alert_phones and should_alert and not (paused and tier != 1):
         if recent_count < RATE_LIMIT_MAX:
+            # Self-contained alert: everything the owner needs in one message.
             if tier == 1:
-                alert = "\U0001f6a8 URGENT: Possible emergency reported\nReply DETAILS for full message."
+                header = "\U0001f6a8 URGENT"
             elif cat == "inquiry":
-                alert = f"\u2753 Customer question: {summary}\nReply REPLY to respond or OK to close."
+                header = "\u2753 Customer question"
+            elif tier == 2:
+                header = "\u26a0\ufe0f Issue"
             else:
-                tier_label = "⚠️ Issue" if tier == 2 else "💬 Feedback"
-                alert = f"{tier_label}: {summary}\nReply OK to close · REPLY to respond · SNOOZE to revisit in 1hr"
+                header = "\U0001f4ac Feedback"
+            when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
+            alert = (f"{header} ({when})\n"
+                     f"Category: {cat}\n"
+                     f"Customer:\n{body}\n\n"
+                     f"We replied:\n{auto_reply}\n\n"
+                     f"Reply REPLY to message customer back.")
             for p in alert_phones:
-                ok = send_sms(p, alert)   # uses shared number via _twilio_from
-                logger.info(f"[ALERT SENT] to={p} ok={ok} msg={alert!r}")
+                ok = send_sms(p, alert)
+                logger.info(f"[ALERT SENT] to={p} ok={ok}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
         else:
             logger.warning(f"[RATE LIMITED] {biz['id']} hit {recent_count} alerts in {RATE_LIMIT_WINDOW}min window")
 
-    return c.get("auto_reply") or "Thanks for reaching out. We've received your message."
+    return auto_reply
 
 
 @app.post("/sms/incoming")
