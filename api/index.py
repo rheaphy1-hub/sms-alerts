@@ -222,30 +222,41 @@ def mark_owner_replied(bid, customer_phone):
     """Record that the owner just replied to this customer. Suppresses AI auto-replies for CONVERSATION_WINDOW_MIN minutes."""
     now = datetime.now(timezone.utc).isoformat()
     cust = _normalize_phone(customer_phone)
-    with get_db() as c:
-        row = _fetchone(c, _q("SELECT id FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
-        if row:
-            _execute(c, _q("UPDATE conversation_state SET last_owner_reply_at=? WHERE id=?"), (now, row["id"]))
-        else:
-            _execute(c, _q("INSERT INTO conversation_state (business_id,customer_phone,last_owner_reply_at) VALUES (?,?,?)"), (bid, cust, now))
+    try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT id FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+            if row:
+                _execute(c, _q("UPDATE conversation_state SET last_owner_reply_at=? WHERE id=?"), (now, row["id"]))
+            else:
+                _execute(c, _q("INSERT INTO conversation_state (business_id,customer_phone,last_owner_reply_at) VALUES (?,?,?)"), (bid, cust, now))
+        logger.info(f"[CONVO MARK] bid={bid} cust=...{cust[-4:]}")
+    except Exception as e:
+        logger.error(f"[CONVO MARK] {e}")
 
 def end_conversation(bid, customer_phone):
     """Clear the active window so AI resumes immediately."""
     cust = _normalize_phone(customer_phone)
-    with get_db() as c:
-        _execute(c, _q("DELETE FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+    try:
+        with get_db() as c:
+            _execute(c, _q("DELETE FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+        logger.info(f"[CONVO END] bid={bid} cust=...{cust[-4:]}")
+    except Exception as e:
+        logger.error(f"[CONVO END] {e}")
 
 def is_conversation_active(bid, customer_phone):
     """True if owner replied to this customer in the last CONVERSATION_WINDOW_MIN minutes."""
     cust = _normalize_phone(customer_phone)
-    with get_db() as c:
-        row = _fetchone(c, _q("SELECT last_owner_reply_at FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
-    if not row: return False
     try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT last_owner_reply_at FROM conversation_state WHERE business_id=? AND customer_phone=?"), (bid, cust))
+        if not row: return False
         last = datetime.fromisoformat(row["last_owner_reply_at"])
         if last.tzinfo is None: last = last.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - last) < timedelta(minutes=CONVERSATION_WINDOW_MIN)
-    except Exception:
+        active = (datetime.now(timezone.utc) - last) < timedelta(minutes=CONVERSATION_WINDOW_MIN)
+        logger.info(f"[CONVO CHECK] bid={bid} cust=...{cust[-4:]} active={active}")
+        return active
+    except Exception as e:
+        logger.error(f"[CONVO CHECK] {e}")
         return False
 
 
@@ -789,7 +800,7 @@ def handle_owner_command(text, business, sender_phone=""):
     # Words that should be interpreted as commands even when we're in reply mode
     # (so the owner can't accidentally text "STATUS" to the customer).
     RESERVED = {
-        "CANCEL","NEVERMIND","END","DONE","CLOSE",
+        "NEVERMIND","CANCEL","CLOSE","DONE","WRAP","FINISH","END",
         "MENU","HELP","?",
         "STATUS","ALERTS","TIER2","TIER3","ALERTS CRITICAL","ALERTS ALL",
         "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","REPLY",
@@ -798,10 +809,10 @@ def handle_owner_command(text, business, sender_phone=""):
     # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
     reply_mid = get_reply_mode(bid)
     if reply_mid:
-        if cmd in {"CANCEL","NEVERMIND"}:
+        if cmd in {"NEVERMIND","CANCEL"}:
             clear_reply_mode(bid)
             return "Reply cancelled."
-        if cmd in {"END","DONE","CLOSE"}:
+        if cmd in {"CLOSE","DONE","WRAP","FINISH","END"}:
             msg = get_message_by_id(reply_mid)
             clear_reply_mode(bid)
             if msg: end_conversation(bid, msg["from_number"])
@@ -818,7 +829,7 @@ def handle_owner_command(text, business, sender_phone=""):
                 send_sms(msg["from_number"], raw)
                 mark_owner_replied(bid, msg["from_number"])
                 logger.info(f"[OWNER REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
-                return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType END when done, or just let it time out."
+                return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType CLOSE when done, or just let it time out."
             return "Could not find the original message."
 
     if cmd == "BILLING":
@@ -839,7 +850,7 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd in ("MENU", "?", "HELP"):
         return ("Commands:\n"
                 "REPLY \u2014 Reply to last customer\n"
-                "END \u2014 Close active conversation\n"
+                "CLOSE \u2014 End active conversation\n"
                 "STATUS \u2014 Alert status + level\n"
                 "ALERTS \u2014 Change alert level\n"
                 "TIER2 \u2014 Critical only\n"
@@ -855,8 +866,8 @@ def handle_owner_command(text, business, sender_phone=""):
         set_reply_mode(bid, msg["id"])
         logger.info(f"[REPLY MODE] biz={bid} target_msg_id={msg['id']} text={msg['message_text'][:40]!r}")
         return (f"Replying to: \"{msg['message_text'][:60]}\"\n"
-                f"Type your reply now, or CANCEL.\n"
-                f"Type END when finished to close the line with customer.")
+                f"Type your reply now, or NEVERMIND.\n"
+                f"Type CLOSE when finished to close the line with customer.")
 
     if cmd == "STATUS":
         name = business.get("name") or bid
@@ -904,7 +915,7 @@ def build_digest_html(name, stats, period="week"):
 <div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
 {"<p style='color:#c0392b;font-size:14px'>\u26a0\ufe0f "+str(u)+" unacknowledged</p>" if u>0 else ""}
 {"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
-<p style="font-size:13px;color:#aaa;margin-top:24px">Reply HELP to your Hotline number for commands.</p></div>"""
+<p style="font-size:13px;color:#aaa;margin-top:24px">Reply MENU to your Hotline number for commands.</p></div>"""
 
 def send_all_digests(force_freq=None):
     sent = 0
@@ -999,16 +1010,14 @@ def _ensure_init():
 WELCOME_MSG = """Welcome to {name} on Hotline! \U0001f4f2
 
 Your sign + QR code links are on the way in a separate text.
-Customers scan the QR to send you private feedback.
+Customers scan the QR to send you private feedback. You get a text alert when something needs attention \u2014 including the customer's exact message and our auto-reply.
 
 Quick commands:
-OK \u2014 Close an alert
 REPLY \u2014 Respond to a customer
-SNOOZE \u2014 Revisit in 1 hour
-QUIET 2H \u2014 Silence alerts
-DETAILS \u2014 Full alert info
+CLOSE \u2014 End a conversation
 STATUS \u2014 Your current settings
-HELP \u2014 Full command list
+PAUSE / RESUME \u2014 Stop or restart alerts
+MENU \u2014 Full command list
 
 Emergencies always get through."""
 
@@ -1854,27 +1863,7 @@ def qr_png(business_code: str):
         return Response(content="QR generation error", status_code=500)
 
 
-# ── Customer session cache ────────────────────────────────────────────────────
-# Maps customer phone → (business_id, expiry_timestamp)
-# Allows follow-up messages without a BC#### code to route correctly
-_customer_sessions: dict = {}
-SESSION_TTL_MINUTES = 30
-
-def _set_customer_session(phone: str, business_id: str):
-    expiry = datetime.now(timezone.utc) + timedelta(minutes=SESSION_TTL_MINUTES)
-    _customer_sessions[phone] = (business_id, expiry)
-
-def _get_customer_session(phone: str):
-    """Return business_id if session exists and hasn't expired, else None."""
-    entry = _customer_sessions.get(phone)
-    if not entry:
-        return None
-    business_id, expiry = entry
-    if datetime.now(timezone.utc) > expiry:
-        del _customer_sessions[phone]
-        return None
-    return business_id
-
+# ── Customer phone → business mapping (permanent) ────────────────────────────
 def _parse_business_code_from_body(body: str):
     """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
     m = re.search(r"\bBC\d{4}\b", body.upper())
@@ -2003,10 +1992,8 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
         if biz:
             clean_body = _scrub_hotline_header(body)
             if not clean_body:
-                _set_customer_session(sender, biz["id"])
-                logger.info(f"[BLANK MSG] {sender} \u2192 {biz['id']} \u2014 session set, awaiting message")
+                logger.info(f"[BLANK MSG] {sender} \u2192 {biz['id']} \u2014 awaiting message")
                 return _twiml("Got it! Now just describe what's wrong and send it to us.")
-            _set_customer_session(sender, biz["id"])
             auto_reply = _process_customer_message(biz, sender, clean_body)
             return _twiml(auto_reply)
         else:
@@ -2021,19 +2008,9 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
         if not resp: return _twiml("")
         return _twiml(resp)
 
-    # 2. No BC#### code \u2014 check if sender has an active session from a recent scan
-    session_biz_id = _get_customer_session(sender)
-    if session_biz_id:
-        with get_db() as conn:
-            biz = _fetchone(conn, _q("SELECT * FROM businesses WHERE id=?"), (session_biz_id,))
-        if biz:
-            logger.info(f"[SESSION] {sender} follow-up → {session_biz_id}")
-            auto_reply = _process_customer_message(biz, sender, body)
-            return _twiml(auto_reply)
-
-    # 3. No code, no session — generic fallback
-    logger.info(f"[NO CODE] No BC code or session found for {sender}")
-    return _twiml("Thanks for reaching out. To contact a business, please scan their QR code.")
+    # 2. No BC code and not an owner — unknown sender
+    logger.info(f"[NO CODE] no BC code from {sender}")
+    return _twiml("")
 
 def _twiml(msg):
     if not msg:
@@ -2243,10 +2220,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;color:#aaa;gap:6px"><span style="font-weight:600;color:#888;white-space:nowrap">Alert level:</span><div style="display:flex;gap:4px"><button class="filter-btn active" id="filt-crit" onclick="setFilter('critical')" style="font-size:10px;padding:3px 10px;border-radius:4px">🔴 Critical only</button><button class="filter-btn" id="filt-all" onclick="setFilter('all')" style="font-size:10px;padding:3px 10px;border-radius:4px">📋 All messages</button></div></div>
 <div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
 <div class="owner-cmds" id="owner-cmds">
-<div class="cmd-btn" onclick="ownerCmd('DETAILS')">DETAILS</div>
-<div class="cmd-btn" onclick="ownerCmd('THUMBSUP')">&#128077;</div>
-<div class="cmd-btn" onclick="ownerCmd('OK')">OK</div>
 <div class="cmd-btn" onclick="ownerCmd('REPLY')">REPLY</div>
+<div class="cmd-btn" onclick="ownerCmd('CLOSE')">CLOSE</div>
+<div class="cmd-btn" onclick="ownerCmd('MENU')">MENU</div>
 </div>
 <div class="input-area owner-input" id="owner-input"><div class="input-row">
 <input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
@@ -2260,37 +2236,92 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa">Instagram</a></footer>
 <script>
-let lastData=null,acked=false,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
-function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text;d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
+function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text.replace(/\\n/g,'<br>');d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
 function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
-function resetDemo(){history=[];lastData=null;acked=false;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Owner alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('owner-inp').value='';hideOwnerInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
+function resetDemo(){history=[];lastData=null;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Owner alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('owner-inp').value='';hideOwnerInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
 function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
+function fmtTime(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
 
-(function(){document.getElementById('filt-crit').classList.add('active')})();function ownerCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('owner-inp');inp.value='';if(!cmd)return;
-if(replyMode){replyMode=false;addB(mo,'cmd','',raw.trim());addB(mo,'resp','','Reply sent to the customer.');addB(mc,'in','Reply from owner',raw.trim());inp.placeholder='Type a command...';return}
-addB(mo,'cmd','',raw.trim());
-if(!lastData){addB(mo,'resp','','No active alerts.');return}
-if(cmd==='DETAILS'){const d=lastData;const now=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});const ackLabel=acked?'\\u2705 Acknowledged':'\\u23f3 Pending';addB(mo,'resp','','Alert \\u2014 '+ackLabel+'\\nTime: '+now+'\\nCategory: '+d.category.replace('_',' ')+'\\nMessage: "'+d.original_message+'"\\nReply OK to close, REPLY to respond, SNOOZE to revisit in 1hr.');return}
-if(cmd==='REPLY'){replyMode=true;addB(mo,'resp','','What would you like to say to the customer? Type your reply now.');inp.placeholder='Type your reply...';inp.focus();return}
-if(['OK','GOT IT','DONE','ON IT','ACK','THUMBSUP'].includes(cmd)){if(acked){addB(mo,'resp','','Already acknowledged.')}else{acked=true;addB(mo,'resp','','\\u2705 Alert acknowledged.')}return}
-addB(mo,'resp','','Try DETAILS, OK, or REPLY.')}
-async function sendDemo(){const inp=document.getElementById('cust-input');const btn=document.getElementById('cust-btn');const text=inp.value.trim();if(!text)return;
-if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
-inp.value='';btn.disabled=true;demoCount++;acked=false;replyMode=false;
-addB(mc,'out-blue','',text);addB(mo,'system','','<span class="spinner"></span> Processing...');
-try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});const d=await r.json();d.original_message=text;lastData=d;mo.lastChild.remove();
-history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
-await new Promise(r=>setTimeout(r,300));addB(mc,'in','Auto-reply',d.auto_reply);await new Promise(r=>setTimeout(r,400));
-const tierCls='t'+d.tier;const tags='<div class="meta"><span class="tag '+tierCls+'">'+d.tier_label+'</span><span class="tag '+tierCls+'">'+d.category.replace('_',' ')+'</span></div>';
-if(d.tier===1){addB(mo,'alert-red','Emergency','\\ud83d\\udea8 URGENT: '+d.summary+'\\nReply: DETAILS',1);showOwnerInput()}
-else if(d.tier===2){addB(mo,'alert','Alert','\\u26a0\\ufe0f Issue reported: '+d.summary+'\\nReply OK to acknowledge',2);showOwnerInput()}
-else if(d.tier===3){addB(mo,'feedback','Feedback','\\ud83d\\ude14 '+d.summary+tags,3);showOwnerInput()}
-else{addB(mo,'info','Message','\\ud83d\\udcac '+d.summary+tags,4);showOwnerInput()}}
-catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}btn.disabled=false;inp.focus()}
+(function(){document.getElementById('filt-crit').classList.add('active')})();
+
+function ownerCmd(raw){
+  const cmd=(raw||'').trim().toUpperCase();
+  const inp=document.getElementById('owner-inp');
+  inp.value='';
+  if(!cmd)return;
+
+  // In reply mode: any non-command text goes to customer
+  if(replyMode){
+    if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','','Reply cancelled.');inp.placeholder='Type a command...';return}
+    if(cmd==='CLOSE'){replyMode=false;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
+    replyMode=false;
+    addB(mo,'cmd','',raw.trim());
+    addB(mo,'resp','','Reply sent. AI quiet for 15min.\\nType CLOSE when done, or just let it time out.');
+    addB(mc,'in','Owner reply',raw.trim());
+    inp.placeholder='Type a command...';
+    return;
+  }
+
+  addB(mo,'cmd','',raw.trim());
+  if(!lastData&&cmd!=='MENU'){addB(mo,'resp','','No active alerts.');return}
+
+  if(cmd==='REPLY'){
+    if(!lastData){addB(mo,'resp','','No messages to reply to.');return}
+    replyMode=true;
+    addB(mo,'resp','','Replying to: "'+lastData.original_message.slice(0,60)+'"\\nType your reply now, or NEVERMIND.\\nType CLOSE when finished to close the line with customer.');
+    inp.placeholder='Type your reply...';
+    inp.focus();
+    return;
+  }
+  if(cmd==='CLOSE'){addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
+  if(cmd==='MENU'||cmd==='?'){
+    addB(mo,'resp','','Commands:\\nREPLY \u2014 Reply to last customer\\nCLOSE \u2014 End conversation\\nSTATUS \u2014 Alert status + level\\nALERTS \u2014 Change alert level\\nTIER2 \u2014 Critical only\\nTIER3 \u2014 Add reputation alerts\\nPAUSE / RESUME\\nBILLING \u2014 Subscription\\nMENU \u2014 This message');
+    return;
+  }
+  if(cmd==='STATUS'){addB(mo,'resp','','&#128276; Alerts ON.\\nAlert level: Tier 2 critical only\\nReply ALERTS to change.');return}
+  if(cmd==='PAUSE'){addB(mo,'resp','','&#128244; Alerts PAUSED. Reply RESUME to turn back on.');return}
+  if(cmd==='RESUME'){addB(mo,'resp','','&#128276; Alerts resumed.');return}
+  addB(mo,'resp','','Unknown command. Reply MENU for commands.');
+}
+
+async function sendDemo(){
+  const inp=document.getElementById('cust-input');
+  const btn=document.getElementById('cust-btn');
+  const text=inp.value.trim();
+  if(!text)return;
+  if(demoCount>=maxDemo){addB(mc,'system','','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up</a> to get started!');return}
+  inp.value='';btn.disabled=true;demoCount++;replyMode=false;
+  addB(mc,'out-blue','',text);
+  addB(mo,'system','','<span class="spinner"></span> Processing...');
+  try{
+    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});
+    const d=await r.json();d.original_message=text;lastData=d;
+    mo.lastChild.remove();
+    history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
+    await new Promise(r=>setTimeout(r,300));
+    addB(mc,'in','Auto-reply',d.auto_reply);
+    await new Promise(r=>setTimeout(r,400));
+    const when=fmtTime();
+    if(d.tier===1){
+      const alert='🚨 URGENT ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
+      addB(mo,'alert-red','',alert,1);showOwnerInput();
+    } else if(d.tier===2){
+      const alert='⚠️ Issue ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
+      addB(mo,'alert','',alert,2);showOwnerInput();
+    } else if(d.tier===3){
+      const alert='💬 Feedback ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply;
+      addB(mo,'feedback','',alert,3);showOwnerInput();
+    } else {
+      addB(mo,'info','','&#128172; '+d.summary,4);showOwnerInput();
+    }
+  }catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}
+  btn.disabled=false;inp.focus();
+}
 </script></body></html>"""
 
 @app.get("/demo")
@@ -2353,7 +2384,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="steps">
 <div class="step"><div class="step-num">1</div><div><strong>Get your hotline.</strong><p>Sign up and instantly receive your unique QR code plus a print-ready sign \u2014 delivered digitally, ready to use right away. Yours forever.</p></div></div>
 <div class="step"><div class="step-num">2</div><div><strong>Put it anywhere customers look.</strong><p>The QR is yours to use anywhere. Bathroom mirror. Menu. Receipt. Front door. Wherever they might need you.</p></div></div>
-<div class="step"><div class="step-num">3</div><div><strong>You get a text \u2014 only when it matters.</strong><p>AI filters every message. Emergencies and broken stuff reach you in seconds. Noise gets quietly logged. Reply OK or DETAILS by text.</p></div></div>
+<div class="step"><div class="step-num">3</div><div><strong>You get a text \u2014 only when it matters.</strong><p>AI filters every message. Emergencies and critical issues reach you in seconds with the customer's exact words and our auto-reply. Reply REPLY to talk directly to the customer.</p></div></div>
 </div>
 </section>
 
@@ -2405,10 +2436,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2>Manage everything by text.</h2>
 <p class="section-sub">No app. No dashboard. No login. Your phone is the dashboard.</p>
 <div class="commands">
-<div class="cmd"><code>DETAILS</code><span>See the full customer message and category</span></div>
-<div class="cmd"><code>OK</code><span>Mark the issue handled — or just react 👍</span></div>
-<div class="cmd"><code>LIST</code><span>See the last 5 flagged issues</span></div>
-<div class="cmd"><code>HELP</code><span>See all commands</span></div>
+<div class="cmd"><code>REPLY</code><span>Open a direct line to the last customer</span></div>
+<div class="cmd"><code>CLOSE</code><span>End the conversation, AI auto-replies resume</span></div>
+<div class="cmd"><code>STATUS</code><span>See your current alert settings</span></div>
+<div class="cmd"><code>PAUSE / RESUME</code><span>Stop or restart alerts</span></div>
+<div class="cmd"><code>TIER2 / TIER3</code><span>Switch between critical-only or all alerts</span></div>
+<div class="cmd"><code>MENU</code><span>See all commands</span></div>
 </div>
 </section>
 
@@ -2417,7 +2450,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="faq">
 <div class="q"><strong>Will I get spammed?</strong><p>No. AI filters every message. Most never reach you. You only hear about things that need you.</p></div>
 <div class="q"><strong>Do customers need an app?</strong><p>No. They scan or text. Works on any phone. No download, no account.</p></div>
-<div class="q"><strong>What if the AI gets it wrong?</strong><p>Reply DETAILS to any alert to see the exact words the customer sent. You stay in control.</p></div>
+<div class="q"><strong>What if the AI gets it wrong?</strong><p>Every alert includes the customer's exact words verbatim. You always see what they actually said, not a summary. You stay in control.</p></div>
 <div class="q"><strong>How long does setup take?</strong><p>2 minutes. Sign up, print your sign, you're live.</p></div>
 </div>
 </section>
@@ -2745,15 +2778,16 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <button class="faq-q" onclick="toggle(this)">What commands can I text back? <span class="faq-icon">+</span></button>
 <div class="faq-a">
 <ul>
-<li><strong>OK</strong> - Acknowledge and close an alert</li>
-<li><strong>DETAILS</strong> - Get the full customer message and timestamp</li>
-<li><strong>REPLY</strong> - Send a private reply directly to the customer</li>
-<li><strong>LIST</strong> - See the last 5 flagged issues</li>
-<li><strong>SNOOZE</strong> - Remind yourself about an alert in 1 hour</li>
-<li><strong>QUIET 2H</strong> - Silence non-emergency alerts for a set time</li>
-<li><strong>PAUSE / RESUME</strong> - Stop or restart all non-emergency alerts</li>
+<li><strong>REPLY</strong> - Open a direct line to the last customer</li>
+<li><strong>CLOSE</strong> - End the conversation, AI auto-replies resume</li>
+<li><strong>NEVERMIND</strong> - Cancel reply mode without sending</li>
 <li><strong>STATUS</strong> - See your current alert settings</li>
-<li><strong>HELP</strong> - Full command list</li>
+<li><strong>ALERTS</strong> - View or change your alert level</li>
+<li><strong>TIER2</strong> - Critical issues only (emergencies + operations)</li>
+<li><strong>TIER3</strong> - Also get reputation and feedback alerts</li>
+<li><strong>PAUSE / RESUME</strong> - Stop or restart all non-emergency alerts</li>
+<li><strong>MENU</strong> - Full command list</li>
+<li><strong>BILLING</strong> - Check subscription status</li>
 </ul>
 </div>
 </div>
@@ -2765,12 +2799,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I pause alerts when I'm off the clock? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. Text QUIET 2H (or any number of hours) to silence non-emergency alerts for that window. Text PAUSE to stop them indefinitely until you text RESUME. Tier 1 emergencies always come through regardless.</p></div>
+<div class="faq-a"><p>Yes. Text PAUSE to stop all non-emergency alerts until you're ready. Text RESUME to turn them back on. Tier 1 emergencies always come through regardless.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I reply directly to a customer? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. Text REPLY after receiving an alert, type your message, and your reply goes to the customer from the Hotline number. The customer does not see your personal cell number. You can have a back-and-forth if needed.</p></div>
+<div class="faq-a"><p>Yes. Text REPLY after receiving an alert. The system enters reply mode — type your message and it goes to the customer from the Hotline number. They never see your personal cell. Text CLOSE when you're done or let it time out after 15 minutes.</p></div>
 </div>
 </div>
 
@@ -3073,11 +3107,11 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>If the same issue keeps coming through, the pattern is telling you something. Three alerts about the same machine, the same bathroom, the same shift gap? That's not noise. That's a pattern.</p>
 
-<p>Text LIST to see recent flagged alerts together. The fix usually becomes obvious when you see them grouped.</p>
+<p>If the same issue keeps coming through, the pattern is telling you something. Three alerts about the same machine, the same bathroom, the same shift gap? That's not noise. That's a pattern worth fixing.</p>
 
 <h2>Protect your own time</h2>
 
-<p>Text QUIET 2H to silence non-emergency alerts for a set window. Text PAUSE to stop them until you're ready. Tier 1 emergencies always get through regardless of your settings.</p>
+<p>Text PAUSE to stop non-emergency alerts until you're ready. Text RESUME to turn them back on. Tier 1 emergencies always get through regardless of your settings.</p>
 
 <p>The whole system is built to stay out of your way. The AI runs constantly in the background so you don't have to. When it needs you, it will find you.</p>
 
@@ -3207,7 +3241,7 @@ async function signup(){
   if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
   if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
   if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
-  if(!zip||!/^\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
+  if(!zip||!/^\\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip})});const d=await r.json();
   if(d.success){
