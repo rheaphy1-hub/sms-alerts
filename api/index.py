@@ -1236,6 +1236,72 @@ def admin_ui(request: Request):
         )
     if not rows: rows = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
+    # --- Metrics ---
+    now_utc = datetime.now(timezone.utc)
+    cutoff_30 = (now_utc - timedelta(days=30)).isoformat()
+    cutoff_7  = (now_utc - timedelta(days=7)).isoformat()
+    all_biz   = businesses  # already fetched above
+
+    total_biz      = len(all_biz)
+    active_count   = sum(1 for b in all_biz if (b.get("sub_status") or "trialing") == "active")
+    trialing_count = sum(1 for b in all_biz if (b.get("sub_status") or "trialing") == "trialing")
+    churned_count  = sum(1 for b in all_biz if (b.get("sub_status") or "") in ("canceled", "expired"))
+    mrr            = round(active_count * 19.99, 2)
+
+    # Signups in last 30d
+    new_30d = sum(1 for b in all_biz if (b.get("created_at") or "") >= cutoff_30)
+
+    # Churn rate: churned / (churned + active) — simple ratio
+    churn_denom = active_count + churned_count
+    churn_rate  = f"{round(churned_count / churn_denom * 100)}%" if churn_denom else "—"
+
+    # Trial conversion: active / total signups that are past trial start
+    conv_denom = active_count + churned_count + trialing_count
+    conv_rate  = f"{round(active_count / conv_denom * 100)}%" if conv_denom else "—"
+
+    # Message volume last 7d
+    with get_db() as c:
+        msg_7d = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE created_at>?"), (cutoff_7,))["cnt"]
+        tier1_7d = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier=1 AND created_at>?"), (cutoff_7,))["cnt"]
+        # Top category last 30d
+        top_cat_row = _fetchone(c, _q("SELECT category, COUNT(*) as cnt FROM messages WHERE created_at>? AND tier IN (1,2) GROUP BY category ORDER BY cnt DESC LIMIT 1"), (cutoff_30,))
+        top_cat = top_cat_row["category"].replace("_"," ").title() if top_cat_row else "—"
+        # Geographic breakdown — top 5 states
+        state_rows = _fetchall(c, "SELECT state, COUNT(*) as cnt FROM businesses WHERE state != '' GROUP BY state ORDER BY cnt DESC LIMIT 5")
+        # Engagement: ack rate last 30d
+        flagged_30d = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier IN (1,2) AND created_at>?"), (cutoff_30,))["cnt"]
+        acked_30d   = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE tier IN (1,2) AND acknowledged=1 AND created_at>?"), (cutoff_30,))["cnt"]
+
+    ack_rate  = f"{round(acked_30d / flagged_30d * 100)}%" if flagged_30d else "—"
+    geo_pills = " ".join(f'<span style="display:inline-block;background:#f5f5f0;border-radius:99px;padding:3px 10px;font-size:12px;margin:2px">{r["state"]} <strong>{r["cnt"]}</strong></span>' for r in state_rows) or "<span style='color:#aaa;font-size:13px'>No data yet</span>"
+
+    def stat_card(label, value, sub="", color="#1a1a1a"):
+        sub_html = f'<div style="font-size:11px;color:#aaa;margin-top:4px">{sub}</div>' if sub else ""
+        return (f'<div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 20px;min-width:120px;flex:1">'
+                f'<div style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em;margin-bottom:6px">{label}</div>'
+                f'<div style="font-size:26px;font-weight:700;color:{color};line-height:1">{value}</div>'
+                f'{sub_html}'
+                f'</div>')
+
+    metrics_html = f'''
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Metrics</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px">
+    {stat_card("MRR", f"${mrr:,.2f}", f"{active_count} active subs", "#166534")}
+    {stat_card("Total Businesses", total_biz, f"{new_30d} new last 30d")}
+    {stat_card("Trialing", trialing_count, "free trial")}
+    {stat_card("Churned", churned_count, f"churn rate {churn_rate}", "#991b1b" if churned_count else "#1a1a1a")}
+    {stat_card("Trial → Paid", conv_rate, "conversion rate", "#ea580c")}
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px">
+    {stat_card("Messages (7d)", msg_7d, f"{tier1_7d} emergencies")}
+    {stat_card("Ack Rate (30d)", ack_rate, f"{acked_30d}/{flagged_30d} flagged")}
+    {stat_card("Top Issue (30d)", top_cat)}
+    <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 20px;flex:2;min-width:200px">
+      <div style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em;margin-bottom:8px">Top States</div>
+      <div>{geo_pills}</div>
+    </div>
+  </div>'''
+
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
 <body style="font-family:system-ui;margin:0;padding:24px;background:#f8f8f6">
 <div style="max-width:960px;margin:0 auto">
@@ -1245,6 +1311,8 @@ def admin_ui(request: Request):
   </div>
 
   <div id="toast" style="display:none;background:#166534;color:#fff;font-size:13px;padding:8px 14px;border-radius:6px;margin-bottom:16px"></div>
+
+  {metrics_html}
 
   <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Active Businesses</h2>
   <div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;overflow-x:auto">
@@ -2199,7 +2267,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Partner or manager phone (optional)</label><input type="tel" id="f-phone2" placeholder="(727) 555-5678">
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
-<label>Business zip code (optional)</label><input type="text" id="f-zip" placeholder="78745" maxlength="5" pattern="[0-9]{5}" inputmode="numeric">
+<label>Business zip code</label><input type="text" id="f-zip" placeholder="78745" maxlength="5" pattern="[0-9]{5}" inputmode="numeric" required>
 
 
 <!-- ============================================================
@@ -2248,6 +2316,7 @@ async function signup(){
   if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
   if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
   if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
+  if(!zip||!/^\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip})});const d=await r.json();
   if(d.success){
