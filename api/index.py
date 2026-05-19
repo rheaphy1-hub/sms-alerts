@@ -3245,11 +3245,10 @@ async function signup(){
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip})});const d=await r.json();
   if(d.success){
-    if(d.waitlisted){res.className='result ok';res.innerHTML="<strong>You're on the list!</strong><br><br>We'll text you as soon as your account is ready.";}
-    else{res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your texts for your sign PDF and QR code image.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign →</a>';}
+    res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your texts for your sign PDF and QR code image.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign &rarr;</a>';
     res.style.display='block';btn.textContent='Done!'}
-  else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}}
-  catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my number &rarr;'}
+  else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my QR code &rarr;'}}
+  catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my QR code &rarr;'}
 }
 </script></body></html>"""
 
@@ -3523,32 +3522,37 @@ async def signup_create(request_data:dict=None):
 
     base = os.getenv("BASE_URL", "https://hotlinetxt.com")
 
-    # Build business ID
-    biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
-    with get_db() as c:
-        if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
-            biz_id = biz_id[:25]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")
-
+    # Build business ID — retry with increasingly unique suffixes if collision
     extra = phone2 if phone2 and phone2.startswith("+") else ""
-    business_code = create_business(biz_id, name, phone, "", extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
+    business_code = None
+    for attempt in range(3):
+        biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
+        with get_db() as c:
+            if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
+                biz_id = biz_id[:22]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")+"-"+"".join(__import__("random").choices("0123456789",k=3))
+        business_code = create_business(biz_id, name, phone, "", extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
+        if business_code:
+            break
+        logger.warning(f"create_business attempt {attempt+1} failed for {name} ({phone})")
+
     if not business_code:
-        # Possibly duplicate — save to waitlist
-        logger.warning(f"create_business failed for {name} ({phone}) — saving to waitlist")
-        save_pending_signup(name, phone, phone2, email, website_url)
+        logger.error(f"Signup FAILED after 3 attempts for {name} ({phone})")
         ts = datetime.now(timezone.utc).strftime("%b %d, %Y at %I:%M %p UTC")
         email_html = f"""<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px">
-          <h2 style="color:#ea580c;margin:0 0 16px">New Waitlist Signup</h2>
+          <h2 style="color:#dc2626;margin:0 0 16px">&#9888; Signup Failed</h2>
+          <p style="font-size:14px;color:#333;margin-bottom:16px">Business creation failed after 3 attempts. Manual follow-up needed.</p>
           <table style="width:100%;border-collapse:collapse;font-size:14px">
             <tr><td style="padding:8px 0;color:#888;width:120px">Name</td><td style="padding:8px 0;font-weight:600">{name}</td></tr>
             <tr><td style="padding:8px 0;color:#888">Phone</td><td style="padding:8px 0;font-family:monospace">{phone}</td></tr>
+            <tr><td style="padding:8px 0;color:#888">Partner</td><td style="padding:8px 0;font-family:monospace">{phone2 or "—"}</td></tr>
             <tr><td style="padding:8px 0;color:#888">Email</td><td style="padding:8px 0">{email or "—"}</td></tr>
             <tr><td style="padding:8px 0;color:#888">Website</td><td style="padding:8px 0">{website_url or "—"}</td></tr>
             <tr><td style="padding:8px 0;color:#888">Time</td><td style="padding:8px 0">{ts}</td></tr>
           </table>
-          <p style="margin:24px 0 0;font-size:13px;color:#aaa">View at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a></p>
+          <p style="margin:24px 0 0;font-size:13px;color:#aaa">Add manually at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a></p>
         </div>"""
-        send_email("Connect@HotlineTXT.com", f"New waitlist signup: {name}", email_html)
-        return {"success":True,"waitlisted":True,"name":name,"owner_phone":phone}
+        send_email("Connect@HotlineTXT.com", f"SIGNUP FAILED: {name} ({phone})", email_html)
+        return {"success":False,"error":"Setup failed \u2014 please try again in a moment, or contact Connect@HotlineTXT.com for help."}
 
     # Send welcome + asset links
     welcome = WELCOME_MSG.format(name=name)
