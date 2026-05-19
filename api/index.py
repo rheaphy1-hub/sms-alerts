@@ -173,7 +173,9 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
             _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
                      (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, now))
         return business_code
-    except: return None
+    except Exception as e:
+        logger.error(f"create_business failed for {biz_id}: {e}")
+        return None
 
 def get_alert_phones(biz):
     phones = [p.strip() for p in (biz.get("alert_phones") or biz.get("owner_phone") or "").split(",") if p.strip()]
@@ -3525,15 +3527,16 @@ async def signup_create(request_data:dict=None):
     # Build business ID — retry with increasingly unique suffixes if collision
     extra = phone2 if phone2 and phone2.startswith("+") else ""
     business_code = None
+    base_biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
     for attempt in range(3):
-        biz_id = re.sub(r"[^a-z0-9\-]","",name.lower().replace(" ","-").replace("'",""))[:30]
+        biz_id = base_biz_id
         with get_db() as c:
             if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
-                biz_id = biz_id[:22]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")+"-"+"".join(__import__("random").choices("0123456789",k=3))
+                biz_id = base_biz_id[:20]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")+"-"+"".join(__import__("random").choices("0123456789",k=4))
         business_code = create_business(biz_id, name, phone, "", extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
         if business_code:
             break
-        logger.warning(f"create_business attempt {attempt+1} failed for {name} ({phone})")
+        logger.warning(f"create_business attempt {attempt+1} failed for {name} ({phone}) biz_id={biz_id}")
 
     if not business_code:
         logger.error(f"Signup FAILED after 3 attempts for {name} ({phone})")
