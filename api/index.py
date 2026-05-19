@@ -168,14 +168,25 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         business_code = _gen_business_code()
     trial_end = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
     city, state = _lookup_zip(zip_code) if zip_code else ("", "")
-    try:
-        with get_db() as c:
-            _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-                     (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, now))
-        return business_code
-    except Exception as e:
-        logger.error(f"create_business failed for {biz_id}: {e}")
-        return None
+    # Try full INSERT with zip/city/state; fall back without if columns don't exist yet
+    for use_zip_cols in (True, False):
+        try:
+            with get_db() as c:
+                if use_zip_cols:
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, now))
+                else:
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
+            return business_code
+        except Exception as e:
+            err_msg = str(e).lower()
+            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "column" in err_msg):
+                logger.warning(f"create_business: zip/city/state columns missing, retrying without — {e}")
+                continue
+            logger.error(f"create_business failed for {biz_id}: {e}")
+            return None
+    return None
 
 def get_alert_phones(biz):
     phones = [p.strip() for p in (biz.get("alert_phones") or biz.get("owner_phone") or "").split(",") if p.strip()]
