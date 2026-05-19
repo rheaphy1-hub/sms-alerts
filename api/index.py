@@ -116,6 +116,16 @@ def init_db():
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE messages ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
+    # Drop stale unique constraint on twilio_number (all businesses share one number)
+    if USE_POSTGRES:
+        for constraint in ("businesses_twilio_number_key",):
+            try:
+                with get_db() as c: _execute(c, f"ALTER TABLE businesses DROP CONSTRAINT IF EXISTS {constraint}")
+            except: pass
+        # Backfill any empty twilio_number to shared number
+        try:
+            with get_db() as c: _execute(c, "UPDATE businesses SET twilio_number=%s WHERE twilio_number='' OR twilio_number IS NULL", ("+18888235592",))
+        except: pass
 
 
 def _gen_business_code():
@@ -3544,7 +3554,7 @@ async def signup_create(request_data:dict=None):
         with get_db() as c:
             if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
                 biz_id = base_biz_id[:20]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")+"-"+"".join(__import__("random").choices("0123456789",k=4))
-        business_code = create_business(biz_id, name, phone, "", extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
+        business_code = create_business(biz_id, name, phone, SHARED_NUMBER, extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
         if business_code:
             break
         logger.warning(f"create_business attempt {attempt+1} failed for {name} ({phone}) biz_id={biz_id}")
