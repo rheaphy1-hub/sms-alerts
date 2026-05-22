@@ -11,27 +11,6 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query, Request
 from fastapi.responses import JSONResponse
 
-# Google Analytics tag — injected into every HTML response right after <head>
-_GA_TAG = """<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-6YYB2N0BSS"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-  gtag('config', 'G-6YYB2N0BSS');
-</script>"""
-
-def _html_response(html: str) -> Response:
-    """Return an HTML Response with the GA tag injected right after <head>."""
-    if isinstance(html, str) and _GA_TAG not in html:
-        if "<head>" in html:
-            html = html.replace("<head>", "<head>" + _GA_TAG, 1)
-        elif "<head " in html:
-            # handle <head attr=...>
-            import re as _re
-            html = _re.sub(r"(<head\b[^>]*>)", r"\1" + _GA_TAG, html, count=1)
-    return Response(content=html, media_type="text/html")
-
 # PDF + QR generation (required at top level for Vercel to bundle correctly)
 import urllib.request as _urllib_req
 try:
@@ -639,6 +618,13 @@ def _anthropic_http(system_prompt, user_msg, model="claude-haiku-4-5-20251001", 
 
 
 def classify_message(text, website_info=""):
+    # SAFETY FIRST: Check for emergency keywords BEFORE calling AI.
+    # The AI can misinterpret literal emergencies as figurative language.
+    # Regex-based detection is fast, reliable, and errs on the side of caution.
+    emergency_check = _check_emergency_keywords(text)
+    if emergency_check:
+        return emergency_check
+    
     ctx = f"Business website info (use ONLY for answering basic questions like hours/address): {website_info}" if website_info else "No business website info available. Do NOT guess answers to customer questions."
     prompt = CLASSIFICATION_PROMPT.replace("{website_context}", ctx)
     if _ai_client:
@@ -653,6 +639,48 @@ def classify_message(text, website_info=""):
             return r
         except Exception as e: logger.error(f"AI classify failed: {e}")
     return _classify_fallback(text)
+
+def _check_emergency_keywords(text):
+    """Fast regex-based emergency detection. Runs BEFORE AI to catch literal emergencies.
+    
+    Two-tier approach:
+    - ALWAYS_EMERGENCY: Words that are virtually never figurative. Skip AI entirely.
+    - MAYBE_EMERGENCY: Words that could be literal or figurative. Escalate to Tier 1
+      but let the AI generate a clarifying auto-reply.
+    """
+    import re as _re
+    t = text.lower()
+    t_clean = _re.sub(r"[^a-z0-9 ]", " ", t)
+    
+    # --- ALWAYS Tier 1: These words are almost never figurative ---
+    always_emergency = ["911","ambulance","seizure","stabbed","shot","overdose",
+                        "gas leak","not breathing","heart attack","collapsed",
+                        "unconscious","flooding","burst pipe","evacuate"]
+    if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in always_emergency):
+        return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
+                "summary":"Emergency reported",
+                "auto_reply":"Thank you for alerting us. Please call 911 immediately and evacuate the building if safe to do so."}
+    
+    # --- MAYBE Tier 1: Could be literal or figurative ---
+    # Check for "fire" that looks literal (not "fire her", "dumpster fire", etc.)
+    fire_figurative = ["fire her","fire him","fire them","fire that","fire the ","fire this",
+                       "dumpster fire","on fire with","on fire today","fired","crossfire",
+                       "campfire","open fire on","gunfire","you re fired","you are fired",
+                       "getting fired","got fired"]
+    fire_is_literal = "fire" in t_clean and not any(p in t_clean for p in fire_figurative)
+    
+    maybe_emergency = ["smoke","sparks","electrical","water leak","flood",
+                       "bleeding","weapon","gun","violence","injury","hurt"]
+    if fire_is_literal: maybe_emergency.append("fire")
+    
+    if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in maybe_emergency):
+        # Escalate to Tier 1 (safety first) but use a clarifying auto-reply
+        return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
+                "summary":"Possible emergency reported",
+                "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
+                "_maybe_emergency": True}
+    
+    return None
 
 def _classify_fallback(text):
     import re as _re
@@ -1112,7 +1140,7 @@ Emergencies always get through."""
 # --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init(); return _html_response(DEMO_HTML)
+    _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
@@ -1392,7 +1420,7 @@ async def admin_billing(request: Request):
 def admin_ui(request: Request):
     _ensure_init()
     if not _get_admin_session(request):
-        return _html_response(_LOGIN_PAGE)
+        return Response(content=_LOGIN_PAGE, media_type="text/html")
 
     # --- Pending signups table removed — product is live! ---
     # Previously showed pending_signups; no longer needed.
@@ -1684,7 +1712,7 @@ async function openDrawer(bizId, bizName){{
 document.getElementById("billing-modal").addEventListener("click",function(e){{if(e.target===this)closeBilling();}});
 </script>
 </body></html>'''
-    return _html_response(html)
+    return Response(content=html, media_type="text/html")
 
 
 @app.get("/admin/business/{biz_id}")
@@ -2156,18 +2184,18 @@ def _twiml(msg):
 # --- Shared nav + styles ---
 NAV_CSS = """
 .nav{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto}
-.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;position:absolute;left:50%;transform:translateX(-50%)}
-.nav .logo span{background:#ea580c;color:#fff;padding:2px 6px;border-radius:3px;margin-right:4px}
+.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center}
+.nav .logo svg{height:28px;width:auto}
 .nav-links{display:flex;gap:20px;align-items:center;margin-left:auto}
 .nav-links a{font-size:14px;color:#666;text-decoration:none;font-weight:500}
 .nav-links a:hover{color:#1a1a1a}
 .nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
 .hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
-@media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;font-size:11px;flex:0 0 auto}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
+@media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;flex:0 0 auto}.nav .logo svg{height:22px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
 """
 
-NAV_HTML = """<nav class="nav"><a href="/" class="logo"><span>H</span> HOTLINE</a>
+NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 70" font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif"><rect x="0" y="5" width="60" height="60" rx="9" fill="#ea580c"/><text x="30" y="52" font-size="48" font-weight="700" fill="#fff" text-anchor="middle">H</text><text x="78" y="50" font-size="40" font-weight="700" fill="#ea580c" letter-spacing="6">HOTLINE</text></svg></a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
 <div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><a href="/industries">Who We Support</a><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
@@ -2461,7 +2489,7 @@ async function sendDemo(){
 </script></body></html>"""
 
 @app.get("/demo")
-def demo_page(): _ensure_init(); return _html_response(DEMO_HTML)
+def demo_page(): _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
 
 
 # --- How It Works page ---
@@ -2602,7 +2630,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 @app.get("/how-it-works")
 def how_it_works_page():
     _ensure_init()
-    return _html_response(HOW_IT_WORKS_HTML)
+    return Response(content=HOW_IT_WORKS_HTML, media_type="text/html")
 
 
 # --- Industries page ---
@@ -2689,7 +2717,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </body></html>"""
 
 @app.get("/industries")
-def industries_page(): _ensure_init(); return _html_response(INDUSTRIES_HTML)
+def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, media_type="text/html")
 
 
 # --- Signup page ---
@@ -3268,19 +3296,19 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 
 @app.get("/resources")
-def resources_page(): _ensure_init(); return _html_response(RESOURCES_HTML)
+def resources_page(): _ensure_init(); return Response(content=RESOURCES_HTML, media_type="text/html")
 
 @app.get("/resources/faq")
-def resources_faq(): _ensure_init(); return _html_response(RESOURCES_FAQ_HTML)
+def resources_faq(): _ensure_init(); return Response(content=RESOURCES_FAQ_HTML, media_type="text/html")
 
 @app.get("/resources/why-you-need-a-hotline")
-def resources_article_1(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_1_HTML)
+def resources_article_1(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_1_HTML, media_type="text/html")
 
 @app.get("/resources/where-to-put-your-qr")
-def resources_article_2(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_2_HTML)
+def resources_article_2(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_2_HTML, media_type="text/html")
 
 @app.get("/resources/responding-to-alerts")
-def resources_article_3(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_3_HTML)
+def resources_article_3(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_3_HTML, media_type="text/html")
 
 RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Why your staff may be your biggest operational blind spot &mdash; Hotline</title>
@@ -3368,7 +3396,7 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </body></html>"""
 
 @app.get("/resources/why-staff-fail-you")
-def resources_article_4(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_4_HTML)
+def resources_article_4(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_4_HTML, media_type="text/html")
 
 
 # --- Signup page ---
@@ -3485,7 +3513,7 @@ async function signup(){
 </script></body></html>"""
 
 @app.get("/signup")
-def signup_page(): _ensure_init(); return _html_response(SIGNUP_HTML)
+def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
 
 
 # --- Privacy Policy page ---
@@ -3567,7 +3595,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/privacy")
-def privacy_page(): _ensure_init(); return _html_response(PRIVACY_HTML)
+def privacy_page(): _ensure_init(); return Response(content=PRIVACY_HTML, media_type="text/html")
 
 
 # --- Terms of Service page ---
@@ -3653,7 +3681,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/terms")
-def terms_page(): _ensure_init(); return _html_response(TERMS_HTML)
+def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
 
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
