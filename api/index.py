@@ -2063,12 +2063,11 @@ def _process_customer_message(biz, sender, body, image_url=""):
 
 
 @app.post("/sms/incoming")
-async def incoming_sms(request: Request, From:str=Form(...), Body:str=Form(...), To:str=Form("")):
+async def incoming_sms(request: Request):
     _ensure_init()
-    sender, body = From.strip(), Body.strip()
-    
-    # Extract MMS media URL from raw form data (not as a Form param — avoids 422)
     form_data = await request.form()
+    sender = (form_data.get("From") or "").strip()
+    body = (form_data.get("Body") or "").strip()
     media_url = (form_data.get("MediaUrl0") or "").strip()
     num_media = form_data.get("NumMedia", "0")
     
