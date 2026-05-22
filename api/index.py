@@ -488,10 +488,14 @@ def init_sms():
         from twilio.rest import Client; _twilio_client = Client(sid, token); logger.info("Twilio ready")
     else: logger.warning("Twilio not configured")
 
-def send_sms(to, body, from_number=""):
+def send_sms(to, body, from_number="", media_url=""):
     sender = from_number or _twilio_from
     if not _twilio_client: logger.info(f"[DRY-RUN] {sender} -> {to}: {body}"); return True
-    try: _twilio_client.messages.create(body=body, from_=sender, to=to); return True
+    try:
+        kwargs = dict(body=body, from_=sender, to=to)
+        if media_url:
+            kwargs["media_url"] = [media_url]
+        _twilio_client.messages.create(**kwargs); return True
     except Exception as e: logger.error(f"SMS failed to {to}: {e}"); return False
 
 # buy_twilio_number removed — single shared number model
@@ -2105,9 +2109,11 @@ def _process_customer_message(biz, sender, body, image_url=""):
                      f"{reply_block}"
                      f"Reply REPLY to message customer back.")
             if image_url and biz.get("alert_include_images"):
-                alert += f"\n📷 Photo: {image_url}"
+                alert += "\n📷 Photo attached"
             for p in alert_phones:
-                ok = send_sms(p, alert)
+                # Send alert as MMS if image is present (operator sees photo inline)
+                alert_media = image_url if (image_url and biz.get("alert_include_images")) else ""
+                ok = send_sms(p, alert, media_url=alert_media)
                 logger.info(f"[ALERT SENT] to={p} ok={ok}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
         else:
