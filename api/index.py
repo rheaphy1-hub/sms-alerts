@@ -2064,6 +2064,20 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), 
     _ensure_init()
     sender, body = From.strip(), Body.strip()
     media_url = MediaUrl0.strip() if MediaUrl0 else ""
+    
+    # Log FULL raw parameters for debugging
+    logger.info(f"[RAW BODY] {body!r}")
+    logger.info(f"[RAW MEDIAURL0] {MediaUrl0!r}")
+    
+    # Log ALL incoming parameters for debugging
+    logger.info(f"[INCOMING FULL] From={sender!r} Body={body!r} To={To!r} MediaUrl0={MediaUrl0!r}")
+    
+    # Check kwargs for BC code in case it's in a different parameter
+    for key in list(kwargs.keys())[:20]:  # Limit to avoid spam
+        val = kwargs[key]
+        if isinstance(val, str) and ('BC' in val.upper() or 'HOTLINE' in val.upper()):
+            logger.info(f"[FOUND BC IN PARAM] {key}={val!r}")
+    
     logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} MediaUrl0={MediaUrl0[:50] if MediaUrl0 else 'none'!r} Media={media_url[:50] if media_url else 'none'!r}")
 
     # If the message body contains a BC#### code, treat it as a customer
