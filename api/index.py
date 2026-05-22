@@ -94,6 +94,10 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS conversation_state (
             id {s} {pk}, business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
             last_owner_reply_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS media_files (
+            id TEXT PRIMARY KEY, business_id TEXT NOT NULL, message_id INTEGER,
+            content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+            data BYTEA NOT NULL, created_at TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
@@ -647,10 +651,10 @@ def classify_message(text, website_info=""):
 def _check_emergency_keywords(text):
     """Fast regex-based emergency detection. Runs BEFORE AI to catch literal emergencies.
     
-    Two-tier approach:
+    Three-tier approach:
     - ALWAYS_EMERGENCY: Words that are virtually never figurative. Skip AI entirely.
-    - MAYBE_EMERGENCY: Words that could be literal or figurative. Escalate to Tier 1
-      but let the AI generate a clarifying auto-reply.
+    - CONTEXTUAL_FIRE: "fire"/"burning" combined with location words = clearly literal.
+    - MAYBE_EMERGENCY: Ambiguous safety words. Escalate to Tier 1 but clarify.
     """
     import re as _re
     t = text.lower()
@@ -659,26 +663,36 @@ def _check_emergency_keywords(text):
     # --- ALWAYS Tier 1: These words are almost never figurative ---
     always_emergency = ["911","ambulance","seizure","stabbed","shot","overdose",
                         "gas leak","not breathing","heart attack","collapsed",
-                        "unconscious","flooding","burst pipe","evacuate"]
+                        "unconscious","flooding","burst pipe","evacuate",
+                        "burning down","on fire call"]
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in always_emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
                 "summary":"Emergency reported",
-                "auto_reply":"Thank you for alerting us. Please call 911 immediately and evacuate the building if safe to do so."}
+                "auto_reply":"Thank you for alerting us. Call 911 immediately. Evacuate the building if safe to do so."}
     
-    # --- MAYBE Tier 1: Could be literal or figurative ---
-    # Check for "fire" that looks literal (not "fire her", "dumpster fire", etc.)
+    # --- CONTEXTUAL FIRE: "fire"/"burning" + location/structure word = literal ---
     fire_figurative = ["fire her","fire him","fire them","fire that","fire the ","fire this",
                        "dumpster fire","on fire with","on fire today","fired","crossfire",
                        "campfire","open fire on","gunfire","you re fired","you are fired",
                        "getting fired","got fired"]
-    fire_is_literal = "fire" in t_clean and not any(p in t_clean for p in fire_figurative)
+    has_fire = ("fire" in t_clean or "burning" in t_clean) and not any(p in t_clean for p in fire_figurative)
     
+    if has_fire:
+        # If fire/burning appears with a location word, it's clearly literal → ALWAYS Tier 1
+        location_words = ["building","kitchen","store","office","room","bathroom","ceiling",
+                          "wall","floor","roof","basement","garage","warehouse","lobby",
+                          "house","apartment","unit","suite","hallway","restaurant","shop"]
+        if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in location_words):
+            return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
+                    "summary":"Fire/burning reported at location",
+                    "auto_reply":"Thank you for alerting us. Call 911 immediately. Evacuate the building if safe to do so."}
+    
+    # --- MAYBE Tier 1: Could be literal or figurative ---
     maybe_emergency = ["smoke","sparks","electrical","water leak","flood",
                        "bleeding","weapon","gun","violence","injury","hurt"]
-    if fire_is_literal: maybe_emergency.append("fire")
+    if has_fire: maybe_emergency.append("fire"); maybe_emergency.append("burning")
     
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in maybe_emergency):
-        # Escalate to Tier 1 (safety first) but use a clarifying auto-reply
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
                 "summary":"Possible emergency reported",
                 "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
@@ -1385,6 +1399,59 @@ def root():
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
+
+# --- Media storage (images from MMS) ---
+def _download_and_store_media(twilio_media_url, business_id, message_id=None):
+    """Download image from Twilio (authenticated) and store in Neon DB. Returns media ID or None."""
+    try:
+        import urllib.request, base64, uuid
+        twilio_sid = os.getenv("TWILIO_ACCOUNT_SID","")
+        twilio_auth = os.getenv("TWILIO_AUTH_TOKEN","")
+        if not twilio_sid or not twilio_auth:
+            logger.error("[MEDIA] Missing Twilio credentials for media download")
+            return None
+        req = urllib.request.Request(twilio_media_url)
+        credentials = base64.b64encode(f"{twilio_sid}:{twilio_auth}".encode()).decode()
+        req.add_header("Authorization", f"Basic {credentials}")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            image_data = resp.read()
+            content_type = resp.headers.get("Content-Type", "image/jpeg")
+        if len(image_data) > 5_000_000:
+            logger.warning(f"[MEDIA] Image too large ({len(image_data)} bytes), skipping")
+            return None
+        media_id = uuid.uuid4().hex[:16]
+        now = datetime.now(timezone.utc).isoformat()
+        with get_db() as c:
+            if USE_POSTGRES:
+                import psycopg2
+                _execute(c, "INSERT INTO media_files (id, business_id, message_id, content_type, data, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+                         (media_id, business_id, message_id, content_type, psycopg2.Binary(image_data), now))
+            else:
+                _execute(c, "INSERT INTO media_files (id, business_id, message_id, content_type, data, created_at) VALUES (?,?,?,?,?,?)",
+                         (media_id, business_id, message_id, content_type, image_data, now))
+        logger.info(f"[MEDIA] Stored {len(image_data)} bytes as {media_id} for biz={business_id}")
+        return media_id
+    except Exception as e:
+        logger.error(f"[MEDIA] Download/store failed: {e}")
+        return None
+
+def _get_public_media_url(media_id):
+    """Return the public URL for a stored media file."""
+    base = os.getenv("BASE_URL", "https://hotline-sms.vercel.app")
+    return f"{base}/media/{media_id}"
+
+@app.get("/media/{media_id}")
+def serve_media(media_id: str):
+    """Serve a stored media file publicly — no auth required."""
+    _ensure_init()
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT content_type, data FROM media_files WHERE id=?"), (media_id,))
+    if not row:
+        return Response(content="Not found", status_code=404)
+    data = row["data"]
+    if isinstance(data, memoryview): data = bytes(data)
+    return Response(content=data, media_type=row.get("content_type","image/jpeg"),
+                    headers={"Cache-Control":"public, max-age=86400"})
 
 @app.get("/debug/env")
 def debug_env():
@@ -2301,7 +2368,15 @@ def _process_customer_message(biz, sender, body, image_url=""):
     website_info = biz.get("website_info", "")
     c = classify_message(body, website_info=website_info)
     explanation = generate_explanation(c["tier"], c.get("category", "other"))
-    msg_id = store_message(biz["id"], sender, body, c, explanation=explanation, image_url=image_url)
+    
+    # If customer sent an image, download and store it for public access
+    public_media_url = ""
+    if image_url:
+        media_id = _download_and_store_media(image_url, biz["id"])
+        if media_id:
+            public_media_url = _get_public_media_url(media_id)
+    
+    msg_id = store_message(biz["id"], sender, body, c, explanation=explanation, image_url=public_media_url or image_url)
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
     cat = c.get("category", "other")
 
@@ -2345,12 +2420,10 @@ def _process_customer_message(biz, sender, body, image_url=""):
                      f"Customer:\n{body}\n\n"
                      f"{reply_block}"
                      f"Reply REPLY to message customer back.")
-            if image_url and biz.get("alert_include_images"):
+            if public_media_url and biz.get("alert_include_images"):
                 alert += "\n📷 Photo attached"
             for p in alert_phones:
-                # Send alert as MMS if image is present (operator sees photo inline)
-                alert_media = image_url if (image_url and biz.get("alert_include_images")) else ""
-                ok = send_sms(p, alert, media_url=alert_media)
+                ok = send_sms(p, alert, media_url=public_media_url if (public_media_url and biz.get("alert_include_images")) else "")
                 logger.info(f"[ALERT SENT] to={p} ok={ok}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
         else:
