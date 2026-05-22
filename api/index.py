@@ -77,12 +77,12 @@ def init_db():
             digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
             website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
             twilio_number TEXT NOT NULL DEFAULT \'\', muted_until TEXT, paused INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL)""",
+            alert_include_images INTEGER DEFAULT 1, created_at TEXT NOT NULL)""",
         f"""CREATE TABLE IF NOT EXISTS messages (
             id {s} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
             message_text TEXT NOT NULL, tier INTEGER, category TEXT, sentiment TEXT,
             confidence REAL, summary TEXT, acknowledged INTEGER DEFAULT 0,
-            alerted INTEGER DEFAULT 0, created_at TEXT NOT NULL)""",
+            alerted INTEGER DEFAULT 0, explanation TEXT, image_url TEXT, created_at TEXT NOT NULL)""",
         f"""CREATE TABLE IF NOT EXISTS alert_log (
             id {s} {pk}, message_id INTEGER NOT NULL, business_id TEXT NOT NULL,
             alert_type TEXT NOT NULL, sent_at TEXT NOT NULL)""",
@@ -224,11 +224,11 @@ def get_business_by_owner(owner_phone):
                 if p.strip() and _normalize_phone(p.strip())[-10:] == clean[-10:]: return r
     return None
 
-def store_message(bid, fn, mt, cl):
+def store_message(bid, fn, mt, cl, explanation="", image_url=""):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as c:
-        q = _q("INSERT INTO messages (business_id,from_number,message_text,tier,category,sentiment,confidence,summary,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
-        p = (bid,fn,mt,cl.get("tier"),cl.get("category"),cl.get("sentiment"),cl.get("confidence"),cl.get("summary",""),now)
+        q = _q("INSERT INTO messages (business_id,from_number,message_text,tier,category,sentiment,confidence,summary,explanation,image_url,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        p = (bid,fn,mt,cl.get("tier"),cl.get("category"),cl.get("sentiment"),cl.get("confidence"),cl.get("summary",""),explanation,image_url,now)
         if USE_POSTGRES: cur = _execute(c, q+" RETURNING id", p); return cur.fetchone()[0]
         else: return _execute(c, q, p).lastrowid
 
@@ -656,6 +656,27 @@ def _classify_fallback(text):
 
 # --- Owner commands ---
 # Context and reply-mode are stored in DB so they survive server restarts (Vercel serverless)
+
+
+# --- Generate explanation for owner ---
+def generate_explanation(tier, category):
+    """Generate concise owner-facing explanation of concern and required action."""
+    explanations = {
+        (1, "safety"): "Active safety emergency. Immediate life/property risk. Call 911 if not already done. Evacuate if necessary.",
+        (2, "equipment"): "Equipment down. Risk: lost revenue, customer abandonment, negative review. Diagnose or call repair service.",
+        (2, "staffing"): "Staffing gap detected. Risk: customer frustration, service delays, negative review. Check coverage immediately.",
+        (2, "access"): "Access failure. Risk: locked-out customer, liability, complaint escalation. Check locks/codes immediately.",
+        (2, "supply"): "Supply depleted. Risk: service interruption, customer frustration. Reorder immediately or notify staff.",
+        (2, "cleanliness"): "Sanitation failure. Risk: health code violation, customer disgust, review damage. Clean immediately.",
+        (2, "wait_time"): "Long wait reported. Risk: customer abandonment, negative review. Review staffing/capacity immediately.",
+        (3, "other"): "Customer concern noted. Risk: online review, customer loss, brand damage. Follow up promptly.",
+        (4, "inquiry"): "Customer question. No immediate action required; respond when able.",
+        (4, "other"): "Feedback received. No action required.",
+    }
+    key = (tier, category)
+    if key in explanations: return explanations[key]
+    tier_fallbacks = {1: "Safety emergency detected. Immediate action required.",2: "Operational issue detected. Investigate and respond within 1 hour.",3: "Customer concern noted. Follow up to preserve relationship.",4: "Message received. No immediate action required."}
+    return tier_fallbacks.get(tier, "Alert received.")
 
 def set_context(bid, mid):
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_context=? WHERE id=?"), (str(mid), bid))
@@ -1942,11 +1963,12 @@ def _scrub_hotline_header(body: str) -> str:
 
     return "\n".join(cleaned).strip()
 
-def _process_customer_message(biz, sender, body):
+def _process_customer_message(biz, sender, body, image_url=""):
     """Classify + alert for a customer message. Returns the auto-reply text (or empty if suppressed)."""
     website_info = biz.get("website_info", "")
     c = classify_message(body, website_info=website_info)
-    msg_id = store_message(biz["id"], sender, body, c)
+    explanation = generate_explanation(c["tier"], c.get("category", "other"))
+    msg_id = store_message(biz["id"], sender, body, c, explanation=explanation, image_url=image_url)
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
     cat = c.get("category", "other")
 
@@ -1986,9 +2008,12 @@ def _process_customer_message(biz, sender, body):
             reply_block = f"We replied:\n{auto_reply}\n\n" if auto_reply else "(AI silent \u2014 conversation active)\n\n"
             alert = (f"{header} ({when})\n"
                      f"Category: {cat}\n"
+                     f"Concern: {explanation}\n\n"
                      f"Customer:\n{body}\n\n"
                      f"{reply_block}"
                      f"Reply REPLY to message customer back.")
+            if image_url and biz.get("alert_include_images"):
+                alert += f"\n📷 Photo: {image_url}"
             for p in alert_phones:
                 ok = send_sms(p, alert)
                 logger.info(f"[ALERT SENT] to={p} ok={ok}")
@@ -2142,8 +2167,9 @@ async def demo_classify(request_data:dict=None):
             for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks so much for reaching out!")]: c.setdefault(k,v)
         except Exception as e: logger.error(f"Demo: {e}"); c = _classify_fallback(text)
     else: c = _classify_fallback(text)
+    explanation = generate_explanation(c["tier"], c.get("category", "other"))
     return {"tier":c["tier"],"category":c["category"],"sentiment":c["sentiment"],"confidence":c["confidence"],
-            "summary":c["summary"],"auto_reply":c["auto_reply"],
+            "summary":c["summary"],"auto_reply":c["auto_reply"],"explanation":explanation,
             "tier_label":{1:"Emergency",2:"Business-Critical",3:"Reputation Risk",4:"Routine"}.get(c["tier"],"Unknown"),
             "would_alert":c["tier"]==1 or (c["tier"]==2 and c["confidence"]>0.7)}
 
@@ -2331,13 +2357,13 @@ async function sendDemo(){
     await new Promise(r=>setTimeout(r,400));
     const when=fmtTime();
     if(d.tier===1){
-      const alert='🚨 URGENT ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
+      const alert='🚨 URGENT ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nConcern: '+d.explanation+'\\n\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
       addB(mo,'alert-red','',alert,1);showOwnerInput();
     } else if(d.tier===2){
-      const alert='⚠️ Issue ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
+      const alert='⚠️ Issue ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nConcern: '+d.explanation+'\\n\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
       addB(mo,'alert','',alert,2);showOwnerInput();
     } else if(d.tier===3){
-      const alert='💬 Feedback ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply;
+      const alert='💬 Feedback ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nConcern: '+d.explanation+'\\n\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply;
       addB(mo,'feedback','',alert,3);showOwnerInput();
     } else {
       addB(mo,'info','','&#128172; '+d.summary,4);showOwnerInput();
