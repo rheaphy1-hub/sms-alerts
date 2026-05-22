@@ -112,9 +112,14 @@ def init_db():
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
     # messages table additive columns
-    for col, default in [("auto_reply","\'\'")]:
+    for col, default in [("auto_reply","\'\'"),("explanation","\'\'"),("image_url","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE messages ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+        except: pass
+    # businesses table additive columns (image preferences)
+    for col, default in [("alert_include_images","1")]:
+        try:
+            with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} INTEGER DEFAULT {default}")
         except: pass
     # Drop stale unique constraint on twilio_number (all businesses share one number)
     if USE_POSTGRES:
