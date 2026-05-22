@@ -154,6 +154,11 @@ def get_business_by_code(code):
     with get_db() as c:
         return _fetchone(c, _q("SELECT * FROM businesses WHERE business_code=?"), (clean,))
 
+def get_business_by_id(bid):
+    """Look up a business by its ID."""
+    with get_db() as c:
+        return _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
+
 def _lookup_zip(zip_code):
     """Return (city, state) from a US zip code using zippopotam.us. Returns ('','') on any failure."""
     if not zip_code or not re.match(r"^\d{5}$", zip_code.strip()):
@@ -238,11 +243,11 @@ def log_alert(mid, bid, at):
 def update_auto_reply(mid, text):
     with get_db() as c: _execute(c, _q("UPDATE messages SET auto_reply=? WHERE id=?"), (text or "", mid))
 
-# --- Live conversation state (15-min owner-takeover window) ---
+# --- Live conversation state (15-min operator-takeover window) ---
 CONVERSATION_WINDOW_MIN = 15
 
 def mark_owner_replied(bid, customer_phone):
-    """Record that the owner just replied to this customer. Suppresses AI auto-replies for CONVERSATION_WINDOW_MIN minutes."""
+    """Record that the operator just replied to this customer. Suppresses AI auto-replies for CONVERSATION_WINDOW_MIN minutes."""
     now = datetime.now(timezone.utc).isoformat()
     cust = _normalize_phone(customer_phone)
     try:
@@ -266,8 +271,20 @@ def end_conversation(bid, customer_phone):
     except Exception as e:
         logger.error(f"[CONVO END] {e}")
 
+def find_customer_business(customer_phone):
+    """Look up which business this customer has been talking to recently (via BC code or previous messages)."""
+    clean = _normalize_phone(customer_phone)
+    with get_db() as c:
+        # Find most recent message from this customer
+        row = _fetchone(c, _q("SELECT business_id FROM messages WHERE from_number=? ORDER BY created_at DESC LIMIT 1"), (clean,))
+        if row:
+            biz_id = row.get("business_id")
+            if biz_id:
+                return get_business_by_id(biz_id)
+    return None
+
 def is_conversation_active(bid, customer_phone):
-    """True if owner replied to this customer in the last CONVERSATION_WINDOW_MIN minutes."""
+    """True if operator replied to this customer in the last CONVERSATION_WINDOW_MIN minutes."""
     cust = _normalize_phone(customer_phone)
     try:
         with get_db() as c:
@@ -625,7 +642,7 @@ def _classify_fallback(text):
     # Use word-boundary matching on cleaned text so punctuation never blocks a match
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,"summary":"Possible emergency reported",
-                "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business owner."}
+                "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business operator."}
     question_words = ["what time","when do","where is","where are","do you have","is there","how do i","how much","can i","are you open"]
     if any(w in t for w in question_words) or t.endswith("?"):
         return {"tier":4,"category":"inquiry","sentiment":"neutral","confidence":0.7,"summary":"Customer inquiry",
@@ -1909,9 +1926,27 @@ def qr_png(business_code: str):
 
 # ── Customer phone → business mapping (permanent) ────────────────────────────
 def _parse_business_code_from_body(body: str):
-    """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'."""
+    """Extract BC#### from message body like 'HOTLINE BC4729 bathroom is dirty'.
+    Handles various formats and Twilio quirks."""
+    if not body:
+        return None
+    
+    # Primary: Look for BC#### as a whole word
     m = re.search(r"\bBC\d{4}\b", body.upper())
-    return m.group(0) if m else None
+    if m:
+        return m.group(0)
+    
+    # Secondary: Look for HOTLINE BC#### (even without word boundary)
+    m = re.search(r"HOTLINE\s+BC(\d{4})", body.upper(), re.IGNORECASE)
+    if m:
+        return f"BC{m.group(1)}"
+    
+    # Tertiary: Just BC#### anywhere (looser match for Twilio edge cases)
+    m = re.search(r"BC(\d{4})", body.upper())
+    if m:
+        return f"BC{m.group(1)}"
+    
+    return None
 
 
 def _scrub_hotline_header(body: str) -> str:
@@ -2029,15 +2064,17 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), 
     _ensure_init()
     sender, body = From.strip(), Body.strip()
     media_url = MediaUrl0.strip() if MediaUrl0 else ""
-    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r}")
+    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} MediaUrl0={MediaUrl0[:50] if MediaUrl0 else 'none'!r} Media={media_url[:50] if media_url else 'none'!r}")
 
     # If the message body contains a BC#### code, treat it as a customer
-    # message even when the sender is a registered owner. This lets owners
+    # message even when the sender is a registered operator. This lets owners
     # test their own hotline from their personal phone without their texts
     # getting captured by the owner-command handler.
     code = _parse_business_code_from_body(body)
+    logger.info(f"[DEBUG] BC code parse result: {code!r} from body: {body[:100]!r}")
     if code:
         biz = get_business_by_code(code)
+        logger.info(f"[DEBUG] Found business for code {code}: {biz['id'] if biz else 'NOT FOUND'}")
         if biz:
             clean_body = _scrub_hotline_header(body)
             has_meaningful_text = len(clean_body.strip()) > 5
@@ -2057,16 +2094,23 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), 
             logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
             return _twiml("Thanks for reaching out. We couldn't find that business code.")
 
-    # 1. Check if sender is a registered owner/alert-phone
+    # 1. Check if sender is a registered operator/alert-phone
     owner_biz = get_business_by_owner(sender)
     if owner_biz:
-        logger.info(f"[OWNER CMD] biz={owner_biz['id']} cmd={body!r}")
+        logger.info(f"[OPERATOR CMD] biz={owner_biz['id']} cmd={body!r}")
         resp = handle_owner_command(body, owner_biz, sender_phone=sender)
         if not resp: return _twiml("")
         return _twiml(resp)
 
-    # 2. No BC code and not an owner — unknown sender
-    logger.info(f"[NO CODE] no BC code from {sender}")
+    # 2. No BC code — check if customer has an active conversation
+    customer_biz = find_customer_business(sender)
+    if customer_biz:
+        logger.info(f"[CUSTOMER RETURN] {sender} → {customer_biz['id']} — conversation continues")
+        auto_reply = _process_customer_message(customer_biz, sender, body, image_url=media_url)
+        return _twiml(auto_reply)
+    
+    # 3. Unknown sender with no context
+    logger.info(f"[NO CONTEXT] no BC code or prior conversation from {sender}")
     return _twiml("")
 
 def _twiml(msg):
@@ -2787,7 +2831,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">What is Hotline? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Hotline is an SMS-based alert system for small business owners. Customers text a number or scan a QR code to report issues. Every message is read, classified by urgency, and you get a text alert when something actually needs your attention. You manage everything by text. No app, no dashboard.</p></div>
+<div class="faq-a"><p>Hotline is an SMS-based alert system for small business operators. Customers text a number or scan a QR code to report issues. Every message is read, classified by urgency, and you get a text alert when something actually needs your attention. You manage everything by text. No app, no dashboard.</p></div>
 </div>
 
 <div class="faq-item">
@@ -2912,7 +2956,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Will the business know it was me who texted? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No. Every message goes through the Hotline number, not your personal phone. The business owner sees the message content and when it came in. They do not see your phone number, your name, or any identifying information. As far as the owner knows, an anonymous customer sent a message through Hotline.</p></div>
+<div class="faq-a"><p>No. Every message goes through the Hotline number, not your personal phone. The business operator sees the message content and when it came in. They do not see your phone number, your name, or any identifying information. As far as the owner knows, an anonymous customer sent a message through Hotline.</p></div>
 </div>
 
 <div class="faq-item">
@@ -2921,7 +2965,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="faq-item">
-<button class="faq-q" onclick="toggle(this)">Does the business owner have my contact info after I text? <span class="faq-icon">+</span></button>
+<button class="faq-q" onclick="toggle(this)">Does the business operator have my contact info after I text? <span class="faq-icon">+</span></button>
 <div class="faq-a"><p>No. The owner has no way to contact you outside of Hotline unless you choose to share your information in the message itself. If the owner replies using the REPLY command, that message comes back to you through the Hotline number, keeping both sides anonymous throughout the conversation.</p></div>
 </div>
 
@@ -3219,7 +3263,7 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p class="lead">Your staff isn't trying to fail you. But they might be anyway &mdash; and the system you've built around their ability to escalate is likely more fragile than you think.</p>
 
-<p>When something goes wrong at your location, the assumption is usually the same: someone on staff will notice, someone will escalate, and someone will fix it. That assumption is costing operators real money. Most frontline employees aren't equipped, incentivized, or expected to surface operational problems. Building your visibility strategy around their judgment is one of the most common and costly mistakes physical business owners make.</p>
+<p>When something goes wrong at your location, the assumption is usually the same: someone on staff will notice, someone will escalate, and someone will fix it. That assumption is costing operators real money. Most frontline employees aren't equipped, incentivized, or expected to surface operational problems. Building your visibility strategy around their judgment is one of the most common and costly mistakes physical business operators make.</p>
 
 <p>Here's why.</p>
 
@@ -3434,7 +3478,7 @@ footer a{color:#aaa}
 <h1>Privacy Policy</h1>
 <p class="meta">Effective date: January 1, 2025 &nbsp;&middot;&nbsp; HotlineTXT.com</p>
 
-<div class="highlight"><p>&#128241; Hotline is an SMS-based customer feedback system. Customers text a business number and business owners receive alerts. This policy explains how we handle that data.</p></div>
+<div class="highlight"><p>&#128241; Hotline is an SMS-based customer feedback system. Customers text a business number and business operators receive alerts. This policy explains how we handle that data.</p></div>
 
 <h2>1. Who We Are</h2>
 <p>Hotline is operated by HotlineTXT.com (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;). We provide SMS-based customer alerting services to small businesses. For questions, contact us at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
@@ -3450,16 +3494,16 @@ footer a{color:#aaa}
 <h2>3. How We Use Your Information</h2>
 <p>We use collected information solely to operate the Hotline service:</p>
 <ul>
-<li>Classify and route customer messages to business owners via SMS</li>
-<li>Send alert notifications to registered business owner phone numbers</li>
-<li>Generate weekly digest summaries for business owners (if opted in)</li>
-<li>Maintain message logs accessible to the business owner via SMS commands</li>
+<li>Classify and route customer messages to business operators via SMS</li>
+<li>Send alert notifications to registered business operator phone numbers</li>
+<li>Generate weekly digest summaries for business operators (if opted in)</li>
+<li>Maintain message logs accessible to the business operator via SMS commands</li>
 </ul>
 <p>We do <strong>not</strong> sell, rent, or share your personal information with third parties for marketing purposes.</p>
 
 <h2>4. SMS Messaging and Opt-In</h2>
 <p><strong>Business owners:</strong> By signing up for Hotline, you consent to receive SMS alerts and notifications from your assigned Hotline number. You may opt out at any time by texting <strong>STOP</strong> to your Hotline number. Standard message and data rates from your carrier may apply.</p>
-<p><strong>Customers texting a business:</strong> When you text a Hotline-powered business number, your message and phone number are stored and forwarded to the business owner. You are not opted in to any marketing list. The business may reply to your message directly via SMS.</p>
+<p><strong>Customers texting a business:</strong> When you text a Hotline-powered business number, your message and phone number are stored and forwarded to the business operator. You are not opted in to any marketing list. The business may reply to your message directly via SMS.</p>
 
 <h2>5. Data Retention</h2>
 <p>Customer messages and associated data are stored for up to 90 days by default. Business owner accounts and associated message history are retained for the duration of the account. You may request deletion by contacting <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
@@ -3478,7 +3522,7 @@ footer a{color:#aaa}
 <p>Hotline is not directed at children under 13. We do not knowingly collect personal information from children under 13. If you believe a child has provided us with personal information, please contact us.</p>
 
 <h2>9. Changes to This Policy</h2>
-<p>We may update this Privacy Policy from time to time. We will notify registered business owners of material changes via SMS or email. Continued use of Hotline after changes constitutes acceptance of the updated policy.</p>
+<p>We may update this Privacy Policy from time to time. We will notify registered business operators of material changes via SMS or email. Continued use of Hotline after changes constitutes acceptance of the updated policy.</p>
 
 <h2>10. Contact</h2>
 <p>For privacy questions, data deletion requests, or to opt out of SMS communications, contact:</p>
@@ -3522,7 +3566,7 @@ footer a{color:#aaa}
 <p>By signing up for or using Hotline (&ldquo;the Service&rdquo;) operated by HotlineTXT.com, you agree to be bound by these Terms of Service. If you do not agree, do not use the Service.</p>
 
 <h2>2. Description of Service</h2>
-<p>Hotline is an SMS-based system that allows customers to send text messages to a business phone number. The Service uses AI to classify incoming messages and notifies registered business owners of important issues via SMS. Business owners interact with the Service entirely via SMS commands.</p>
+<p>Hotline is an SMS-based system that allows customers to send text messages to a business phone number. The Service uses AI to classify incoming messages and notifies registered business operators of important issues via SMS. Business owners interact with the Service entirely via SMS commands.</p>
 
 <h2>3. SMS Messaging &mdash; Opt-In and Opt-Out</h2>
 <p><strong>Business owners:</strong> By completing signup and providing your phone number, you expressly consent to receive SMS messages from Hotline, including:</p>
@@ -3533,7 +3577,7 @@ footer a{color:#aaa}
 </ul>
 <p>Message frequency varies based on customer activity. Standard message and data rates may apply.</p>
 <p>To opt out of SMS alerts at any time, text <strong>STOP</strong> to your assigned Hotline number. You will receive one confirmation message and no further messages will be sent. Text <strong>HELP</strong> for assistance or contact <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
-<p><strong>Customers:</strong> Customers who text a Hotline business number are not opting in to any marketing messages. Their messages are forwarded to the relevant business owner only.</p>
+<p><strong>Customers:</strong> Customers who text a Hotline business number are not opting in to any marketing messages. Their messages are forwarded to the relevant business operator only.</p>
 
 <h2>4. Permitted Use</h2>
 <p>You may use Hotline only for lawful business purposes. You agree not to:</p>
