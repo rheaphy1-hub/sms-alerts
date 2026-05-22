@@ -528,7 +528,7 @@ _ai_client = None  # Stores API key string; HTTP calls used directly
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, flooding, gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, water damage in progress (burst pipe, overflowing toilet/sink). Flooding IS always Tier 1 (slip hazards, electrical risk, property damage).
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency).
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
 - Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary).
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
@@ -587,7 +587,8 @@ OTHER EDGE CASES:
 - "Music is too loud" = Tier 3 (preference, not operational). Acknowledge, don't promise change.
 - "What time do you close?" = Tier 4, inquiry. Don't answer. Forward.
 - "You should fire her" = Tier 3, staffing. Employment complaint, NOT emergency.
-- "Bathroom is flooding!" = Tier 1, safety. Always emergency.
+- "Bathroom is flooding!" = Tier 2, cleanliness. Plumbing issue, not structural emergency.
+- "Basement is flooding!" = Tier 1, safety. Structural flooding = always emergency.
 - "Out of toilet paper" = Tier 2, supply.
 - "The dryer isn't heating" = Tier 2, equipment (revenue loss per unit).
 - "Coins are jammed in the machine" = Tier 2, payment (customer loses money, business loses revenue).
@@ -1440,7 +1441,7 @@ def _download_and_store_media(twilio_media_url, business_id, message_id=None):
         req.add_header("User-Agent", "Hotline/1.0")
         
         logger.info(f"[MEDIA] Downloading from {twilio_media_url[:80]}...")
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=25) as resp:
             image_data = resp.read()
             content_type = resp.headers.get("Content-Type", "image/jpeg")
         
@@ -2532,21 +2533,36 @@ async def incoming_sms(request: Request):
             # Has text — process with optional image
             # Check if there's a pending image from a previous image-only message
             pending_media_url = ""
-            if media_url:
-                # This message has an image attached directly
-                mid = _download_and_store_media(media_url, biz["id"])
-                if mid:
-                    pending_media_url = _get_public_media_url(mid)
-            else:
-                # Check for pending image from previous image-only message
-                pending_mid = _get_pending_media(biz["id"], sender)
-                if pending_mid:
-                    pending_media_url = _get_public_media_url(pending_mid)
-                    _clear_pending_media(biz["id"], sender)
-                    logger.info(f"[PENDING MEDIA] Attaching stored image {pending_mid} to follow-up from {sender}")
+            pending_mid = _get_pending_media(biz["id"], sender) if not media_url else None
+            if pending_mid:
+                pending_media_url = _get_public_media_url(pending_mid)
+                _clear_pending_media(biz["id"], sender)
+                logger.info(f"[PENDING MEDIA] Attaching stored image {pending_mid} to follow-up from {sender}")
             
+            # Process the message and send reply FIRST (don't block on image download)
             auto_reply = _process_customer_message(biz, sender, clean_body, image_url=pending_media_url)
-            return _twiml(auto_reply)
+            reply_response = _twiml(auto_reply)
+            
+            # AFTER reply is queued, try to download and store the image
+            # If this fails or times out, the customer still got their reply
+            if media_url and not pending_media_url:
+                try:
+                    mid = _download_and_store_media(media_url, biz["id"])
+                    if mid:
+                        public_url = _get_public_media_url(mid)
+                        # Update the stored message with the image URL
+                        with get_db() as conn:
+                            _execute(conn, _q("UPDATE messages SET image_url=? WHERE id=(SELECT id FROM messages WHERE business_id=? AND from_number=? ORDER BY created_at DESC LIMIT 1)"),
+                                     (public_url, biz["id"], _normalize_phone(sender)))
+                        # Send photo as separate MMS to operator if alert was sent
+                        if biz.get("alert_include_images"):
+                            alert_phones = get_alert_phones(biz)
+                            for p in alert_phones:
+                                send_sms(p, "📷 Photo from customer:", media_url=public_url)
+                except Exception as e:
+                    logger.error(f"[MEDIA POST-REPLY] Image download failed (reply was still sent): {e}")
+            
+            return reply_response
         else:
             logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
             return _twiml("Thanks for reaching out. We couldn't find that business code.")
@@ -2563,20 +2579,34 @@ async def incoming_sms(request: Request):
     customer_biz = find_customer_business(sender)
     if customer_biz:
         logger.info(f"[CUSTOMER RETURN] {sender} → {customer_biz['id']} — conversation continues")
-        # Check for pending image or new image
+        # Check for pending image from a previous image-only message
         pending_media_url = ""
-        if media_url:
-            mid = _download_and_store_media(media_url, customer_biz["id"])
-            if mid:
-                pending_media_url = _get_public_media_url(mid)
-        else:
-            pending_mid = _get_pending_media(customer_biz["id"], sender)
-            if pending_mid:
-                pending_media_url = _get_public_media_url(pending_mid)
-                _clear_pending_media(customer_biz["id"], sender)
-                logger.info(f"[PENDING MEDIA] Attaching stored image {pending_mid} to follow-up from {sender}")
+        pending_mid = _get_pending_media(customer_biz["id"], sender) if not media_url else None
+        if pending_mid:
+            pending_media_url = _get_public_media_url(pending_mid)
+            _clear_pending_media(customer_biz["id"], sender)
+            logger.info(f"[PENDING MEDIA] Attaching stored image {pending_mid} to follow-up from {sender}")
+        
+        # Process and reply FIRST
         auto_reply = _process_customer_message(customer_biz, sender, body, image_url=pending_media_url)
-        return _twiml(auto_reply)
+        reply_response = _twiml(auto_reply)
+        
+        # AFTER reply, try to download new image if present
+        if media_url and not pending_media_url:
+            try:
+                mid = _download_and_store_media(media_url, customer_biz["id"])
+                if mid:
+                    public_url = _get_public_media_url(mid)
+                    with get_db() as conn:
+                        _execute(conn, _q("UPDATE messages SET image_url=? WHERE id=(SELECT id FROM messages WHERE business_id=? AND from_number=? ORDER BY created_at DESC LIMIT 1)"),
+                                 (public_url, customer_biz["id"], _normalize_phone(sender)))
+                    if customer_biz.get("alert_include_images"):
+                        for p in get_alert_phones(customer_biz):
+                            send_sms(p, "📷 Photo from customer:", media_url=public_url)
+            except Exception as e:
+                logger.error(f"[MEDIA POST-REPLY] Image download failed: {e}")
+        
+        return reply_response
     
     # 3. Unknown sender with no context
     logger.info(f"[NO CONTEXT] no BC code or prior conversation from {sender}")
@@ -2611,7 +2641,7 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, flooding, gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, water damage in progress. Flooding IS always Tier 1 (slip hazards, electrical risk, property damage).
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
 - Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues.
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
@@ -2650,7 +2680,8 @@ CONTEXT AWARENESS:
 - Don't reclassify follow-ups from scratch. Read the thread.
 
 EDGE CASES:
-- "Your bathroom is flooding!" = Tier 1, safety. ALWAYS emergency.
+- "Your bathroom is flooding!" = Tier 2, cleanliness. Plumbing issue.
+- "Basement is flooding!" = Tier 1, safety. Structural flooding = emergency.
 - "Carwash bay won't take my card" = Tier 2, payment.
 - "Washer is leaking water" = Tier 2, equipment.
 - "Gas pump is showing an error" = Tier 2, payment/equipment.
