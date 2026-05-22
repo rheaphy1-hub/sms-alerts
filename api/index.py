@@ -98,6 +98,9 @@ def init_db():
             id TEXT PRIMARY KEY, business_id TEXT NOT NULL, message_id INTEGER,
             content_type TEXT NOT NULL DEFAULT 'image/jpeg',
             data BYTEA NOT NULL, created_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS media_pending (
+            business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
+            media_id TEXT NOT NULL, created_at TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
@@ -663,7 +666,7 @@ def _check_emergency_keywords(text):
     # --- ALWAYS Tier 1: These words are almost never figurative ---
     always_emergency = ["911","ambulance","seizure","stabbed","shot","overdose",
                         "gas leak","not breathing","heart attack","collapsed",
-                        "unconscious","flooding","burst pipe","evacuate",
+                        "unconscious","burst pipe","evacuate",
                         "burning down","on fire call"]
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in always_emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
@@ -686,6 +689,25 @@ def _check_emergency_keywords(text):
             return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
                     "summary":"Fire/burning reported at location",
                     "auto_reply":"Thank you for alerting us. Call 911 immediately. Evacuate the building if safe to do so."}
+    
+    # --- CONTEXTUAL FLOODING: structural flooding is Tier 1, toilet/sink flooding is Tier 2 ---
+    has_flooding = any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in ["flooding","flooded","flood"])
+    if has_flooding:
+        # Toilet/sink flooding is equipment failure, not structural emergency
+        plumbing_words = ["toilet","sink","faucet","drain","urinal","bidet"]
+        if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in plumbing_words):
+            return None  # Let AI classify as Tier 2 equipment
+        # Structural flooding (basement, building, etc.) is always Tier 1
+        structural_words = ["basement","building","floor","lobby","ceiling","electrical","room","office","warehouse","garage"]
+        if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in structural_words):
+            return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
+                    "summary":"Structural flooding reported",
+                    "auto_reply":"Thank you for alerting us. Call 911 immediately. Evacuate the building if safe to do so."}
+        # Generic "flooding" without context → maybe emergency (clarify)
+        return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
+                "summary":"Possible flooding reported",
+                "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
+                "_maybe_emergency": True}
     
     # --- MAYBE Tier 1: Could be literal or figurative ---
     maybe_emergency = ["smoke","sparks","electrical","water leak","flood",
@@ -1410,15 +1432,25 @@ def _download_and_store_media(twilio_media_url, business_id, message_id=None):
         if not twilio_sid or not twilio_auth:
             logger.error("[MEDIA] Missing Twilio credentials for media download")
             return None
+        
+        # Twilio media URLs need auth — use Basic auth with Account SID and Auth Token
         req = urllib.request.Request(twilio_media_url)
         credentials = base64.b64encode(f"{twilio_sid}:{twilio_auth}".encode()).decode()
         req.add_header("Authorization", f"Basic {credentials}")
+        req.add_header("User-Agent", "Hotline/1.0")
+        
+        logger.info(f"[MEDIA] Downloading from {twilio_media_url[:80]}...")
         with urllib.request.urlopen(req, timeout=15) as resp:
             image_data = resp.read()
             content_type = resp.headers.get("Content-Type", "image/jpeg")
+        
+        if not image_data or len(image_data) < 100:
+            logger.warning(f"[MEDIA] Download returned empty/tiny response ({len(image_data)} bytes)")
+            return None
         if len(image_data) > 5_000_000:
             logger.warning(f"[MEDIA] Image too large ({len(image_data)} bytes), skipping")
             return None
+        
         media_id = uuid.uuid4().hex[:16]
         now = datetime.now(timezone.utc).isoformat()
         with get_db() as c:
@@ -1429,7 +1461,7 @@ def _download_and_store_media(twilio_media_url, business_id, message_id=None):
             else:
                 _execute(c, "INSERT INTO media_files (id, business_id, message_id, content_type, data, created_at) VALUES (?,?,?,?,?,?)",
                          (media_id, business_id, message_id, content_type, image_data, now))
-        logger.info(f"[MEDIA] Stored {len(image_data)} bytes as {media_id} for biz={business_id}")
+        logger.info(f"[MEDIA] Stored {len(image_data)} bytes as {media_id} type={content_type} for biz={business_id}")
         return media_id
     except Exception as e:
         logger.error(f"[MEDIA] Download/store failed: {e}")
@@ -1439,6 +1471,28 @@ def _get_public_media_url(media_id):
     """Return the public URL for a stored media file."""
     base = os.getenv("BASE_URL", "https://hotline-sms.vercel.app")
     return f"{base}/media/{media_id}"
+
+def _store_pending_media(business_id, customer_phone, media_id):
+    """Store a pending media ID for a customer who sent an image without text."""
+    phone = _normalize_phone(customer_phone)
+    with get_db() as c:
+        # Upsert: replace any existing pending media for this customer+business
+        _execute(c, _q("DELETE FROM media_pending WHERE business_id=? AND customer_phone=?"), (business_id, phone))
+        _execute(c, _q("INSERT INTO media_pending (business_id, customer_phone, media_id, created_at) VALUES (?,?,?,?)"),
+                 (business_id, phone, media_id, datetime.now(timezone.utc).isoformat()))
+
+def _get_pending_media(business_id, customer_phone):
+    """Retrieve and return pending media ID for a customer, if any."""
+    phone = _normalize_phone(customer_phone)
+    with get_db() as c:
+        row = _fetchone(c, _q("SELECT media_id FROM media_pending WHERE business_id=? AND customer_phone=?"), (business_id, phone))
+    return row["media_id"] if row else None
+
+def _clear_pending_media(business_id, customer_phone):
+    """Clear pending media after it's been attached to a message."""
+    phone = _normalize_phone(customer_phone)
+    with get_db() as c:
+        _execute(c, _q("DELETE FROM media_pending WHERE business_id=? AND customer_phone=?"), (business_id, phone))
 
 @app.get("/media/{media_id}")
 def serve_media(media_id: str):
@@ -2442,7 +2496,11 @@ async def incoming_sms(request: Request):
     num_media = form_data.get("NumMedia", "0")
     
     logger.info(f"[RAW BODY] {body!r}")
-    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r} NumMedia={num_media!r}")
+    logger.info(f"[MEDIA CHECK] MediaUrl0={media_url!r} NumMedia={num_media!r}")
+    # Log all form keys that contain 'media' (case-insensitive) to find image params
+    media_keys = [k for k in form_data.keys() if 'media' in k.lower() or 'Media' in k]
+    if media_keys:
+        logger.info(f"[MEDIA KEYS] {media_keys}")
 
     # If the message body contains a BC#### code, treat it as a customer
     # message even when the sender is a registered operator. This lets operators
@@ -2458,15 +2516,36 @@ async def incoming_sms(request: Request):
             has_meaningful_text = len(clean_body.strip()) > 5
             
             if media_url and not has_meaningful_text:
-                # Image only without text — ask for description
-                logger.info(f"[MMS IMAGE ONLY] {sender} → {biz['id']} — image without description")
+                # Image only without text — download and store now, ask for description
+                media_id = _download_and_store_media(media_url, biz["id"])
+                if media_id:
+                    # Store pending media_id for this customer so we can attach it to their next message
+                    _store_pending_media(biz["id"], sender, media_id)
+                    logger.info(f"[MMS IMAGE ONLY] {sender} → {biz['id']} — image stored as {media_id}, awaiting description")
+                else:
+                    logger.info(f"[MMS IMAGE ONLY] {sender} → {biz['id']} — image download failed")
                 return _twiml("Photo received. Quick description: what's going on?")
             elif not clean_body:
                 logger.info(f"[BLANK MSG] {sender} → {biz['id']} — awaiting message")
                 return _twiml("Got it! Now just describe what's wrong and send it to us.")
             
             # Has text — process with optional image
-            auto_reply = _process_customer_message(biz, sender, clean_body, image_url=media_url)
+            # Check if there's a pending image from a previous image-only message
+            pending_media_url = ""
+            if media_url:
+                # This message has an image attached directly
+                mid = _download_and_store_media(media_url, biz["id"])
+                if mid:
+                    pending_media_url = _get_public_media_url(mid)
+            else:
+                # Check for pending image from previous image-only message
+                pending_mid = _get_pending_media(biz["id"], sender)
+                if pending_mid:
+                    pending_media_url = _get_public_media_url(pending_mid)
+                    _clear_pending_media(biz["id"], sender)
+                    logger.info(f"[PENDING MEDIA] Attaching stored image {pending_mid} to follow-up from {sender}")
+            
+            auto_reply = _process_customer_message(biz, sender, clean_body, image_url=pending_media_url)
             return _twiml(auto_reply)
         else:
             logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
@@ -2484,7 +2563,19 @@ async def incoming_sms(request: Request):
     customer_biz = find_customer_business(sender)
     if customer_biz:
         logger.info(f"[CUSTOMER RETURN] {sender} → {customer_biz['id']} — conversation continues")
-        auto_reply = _process_customer_message(customer_biz, sender, body, image_url=media_url)
+        # Check for pending image or new image
+        pending_media_url = ""
+        if media_url:
+            mid = _download_and_store_media(media_url, customer_biz["id"])
+            if mid:
+                pending_media_url = _get_public_media_url(mid)
+        else:
+            pending_mid = _get_pending_media(customer_biz["id"], sender)
+            if pending_mid:
+                pending_media_url = _get_public_media_url(pending_mid)
+                _clear_pending_media(customer_biz["id"], sender)
+                logger.info(f"[PENDING MEDIA] Attaching stored image {pending_mid} to follow-up from {sender}")
+        auto_reply = _process_customer_message(customer_biz, sender, body, image_url=pending_media_url)
         return _twiml(auto_reply)
     
     # 3. Unknown sender with no context
