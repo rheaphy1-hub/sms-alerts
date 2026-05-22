@@ -11,6 +11,27 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query, Request
 from fastapi.responses import JSONResponse
 
+# Google Analytics tag — injected into every HTML response right after <head>
+_GA_TAG = """<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-6YYB2N0BSS"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-6YYB2N0BSS');
+</script>"""
+
+def _html_response(html: str) -> Response:
+    """Return an HTML Response with the GA tag injected right after <head>."""
+    if isinstance(html, str) and _GA_TAG not in html:
+        if "<head>" in html:
+            html = html.replace("<head>", "<head>" + _GA_TAG, 1)
+        elif "<head " in html:
+            # handle <head attr=...>
+            import re as _re
+            html = _re.sub(r"(<head\b[^>]*>)", r"\1" + _GA_TAG, html, count=1)
+    return Response(content=html, media_type="text/html")
+
 # PDF + QR generation (required at top level for Vercel to bundle correctly)
 import urllib.request as _urllib_req
 try:
@@ -1091,7 +1112,7 @@ Emergencies always get through."""
 # --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
+    _ensure_init(); return _html_response(DEMO_HTML)
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
@@ -1371,7 +1392,7 @@ async def admin_billing(request: Request):
 def admin_ui(request: Request):
     _ensure_init()
     if not _get_admin_session(request):
-        return Response(content=_LOGIN_PAGE, media_type="text/html")
+        return _html_response(_LOGIN_PAGE)
 
     # --- Pending signups table removed — product is live! ---
     # Previously showed pending_signups; no longer needed.
@@ -1663,7 +1684,7 @@ async function openDrawer(bizId, bizName){{
 document.getElementById("billing-modal").addEventListener("click",function(e){{if(e.target===this)closeBilling();}});
 </script>
 </body></html>'''
-    return Response(content=html, media_type="text/html")
+    return _html_response(html)
 
 
 @app.get("/admin/business/{biz_id}")
@@ -2440,7 +2461,7 @@ async function sendDemo(){
 </script></body></html>"""
 
 @app.get("/demo")
-def demo_page(): _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
+def demo_page(): _ensure_init(); return _html_response(DEMO_HTML)
 
 
 # --- How It Works page ---
@@ -2581,7 +2602,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 @app.get("/how-it-works")
 def how_it_works_page():
     _ensure_init()
-    return Response(content=HOW_IT_WORKS_HTML, media_type="text/html")
+    return _html_response(HOW_IT_WORKS_HTML)
 
 
 # --- Industries page ---
@@ -2668,7 +2689,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </body></html>"""
 
 @app.get("/industries")
-def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, media_type="text/html")
+def industries_page(): _ensure_init(); return _html_response(INDUSTRIES_HTML)
 
 
 # --- Signup page ---
@@ -3247,19 +3268,19 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 
 @app.get("/resources")
-def resources_page(): _ensure_init(); return Response(content=RESOURCES_HTML, media_type="text/html")
+def resources_page(): _ensure_init(); return _html_response(RESOURCES_HTML)
 
 @app.get("/resources/faq")
-def resources_faq(): _ensure_init(); return Response(content=RESOURCES_FAQ_HTML, media_type="text/html")
+def resources_faq(): _ensure_init(); return _html_response(RESOURCES_FAQ_HTML)
 
 @app.get("/resources/why-you-need-a-hotline")
-def resources_article_1(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_1_HTML, media_type="text/html")
+def resources_article_1(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_1_HTML)
 
 @app.get("/resources/where-to-put-your-qr")
-def resources_article_2(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_2_HTML, media_type="text/html")
+def resources_article_2(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_2_HTML)
 
 @app.get("/resources/responding-to-alerts")
-def resources_article_3(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_3_HTML, media_type="text/html")
+def resources_article_3(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_3_HTML)
 
 RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Why your staff may be your biggest operational blind spot &mdash; Hotline</title>
@@ -3347,7 +3368,7 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </body></html>"""
 
 @app.get("/resources/why-staff-fail-you")
-def resources_article_4(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_4_HTML, media_type="text/html")
+def resources_article_4(): _ensure_init(); return _html_response(RESOURCES_ARTICLE_4_HTML)
 
 
 # --- Signup page ---
@@ -3464,7 +3485,7 @@ async function signup(){
 </script></body></html>"""
 
 @app.get("/signup")
-def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
+def signup_page(): _ensure_init(); return _html_response(SIGNUP_HTML)
 
 
 # --- Privacy Policy page ---
@@ -3546,7 +3567,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/privacy")
-def privacy_page(): _ensure_init(); return Response(content=PRIVACY_HTML, media_type="text/html")
+def privacy_page(): _ensure_init(); return _html_response(PRIVACY_HTML)
 
 
 # --- Terms of Service page ---
@@ -3632,7 +3653,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/terms")
-def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
+def terms_page(): _ensure_init(); return _html_response(TERMS_HTML)
 
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
