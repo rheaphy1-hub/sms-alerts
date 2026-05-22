@@ -1116,14 +1116,17 @@ def debug_sms(from_num:str=Query("+15550001111"), body:str=Query("Bathroom is di
     if not to_num:
         bizzes = get_all_businesses()
         to_num = bizzes[0]["twilio_number"] if bizzes else ""
-    import asyncio
-    result = asyncio.run(incoming_sms(From=from_num, Body=body, To=to_num))
-    # Parse TwiML response to show plain text
-    content = result.body.decode() if hasattr(result, "body") else str(result)
-    import re as _re
-    msg_match = _re.search(r"<Message>(.*?)</Message>", content, _re.DOTALL)
-    auto_reply = msg_match.group(1) if msg_match else content
-    return {"from": from_num, "to": to_num, "body": body, "auto_reply_sent": auto_reply, "twiml": content}
+    # Process directly instead of calling incoming_sms (which requires a Request object)
+    code = _parse_business_code_from_body(body)
+    if code:
+        biz = get_business_by_code(code)
+        if biz:
+            clean_body = _scrub_hotline_header(body)
+            if not clean_body:
+                return {"from": from_num, "to": to_num, "body": body, "auto_reply_sent": "Got it! Now just describe what's wrong and send it to us.", "twiml": "blank"}
+            auto_reply = _process_customer_message(biz, from_num, clean_body)
+            return {"from": from_num, "to": to_num, "body": body, "auto_reply_sent": auto_reply}
+    return {"from": from_num, "to": to_num, "body": body, "auto_reply_sent": "(no BC code found)", "twiml": "empty"}
 
 @app.get("/debug/db")
 def debug_db():
@@ -2060,15 +2063,17 @@ def _process_customer_message(biz, sender, body, image_url=""):
 
 
 @app.post("/sms/incoming")
-async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), MediaUrl0:str=Form(None), NumMedia:str=Form(None), **kwargs):
+async def incoming_sms(request: Request, From:str=Form(...), Body:str=Form(...), To:str=Form("")):
     _ensure_init()
     sender, body = From.strip(), Body.strip()
-    media_url = (MediaUrl0 or "").strip()
     
-    # Log raw parameters for debugging
+    # Extract MMS media URL from raw form data (not as a Form param — avoids 422)
+    form_data = await request.form()
+    media_url = (form_data.get("MediaUrl0") or "").strip()
+    num_media = form_data.get("NumMedia", "0")
+    
     logger.info(f"[RAW BODY] {body!r}")
-    logger.info(f"[RAW MEDIAURL0] {MediaUrl0!r} NumMedia={NumMedia!r}")
-    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r}")
+    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r} NumMedia={num_media!r}")
 
     # If the message body contains a BC#### code, treat it as a customer
     # message even when the sender is a registered operator. This lets owners
