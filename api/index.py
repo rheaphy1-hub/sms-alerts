@@ -2060,25 +2060,15 @@ def _process_customer_message(biz, sender, body, image_url=""):
 
 
 @app.post("/sms/incoming")
-async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), MediaUrl0:str=Form(""), **kwargs):
+async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), MediaUrl0:str=Form(None), NumMedia:str=Form(None), **kwargs):
     _ensure_init()
     sender, body = From.strip(), Body.strip()
-    media_url = MediaUrl0.strip() if MediaUrl0 else ""
+    media_url = (MediaUrl0 or "").strip()
     
-    # Log FULL raw parameters for debugging
+    # Log raw parameters for debugging
     logger.info(f"[RAW BODY] {body!r}")
-    logger.info(f"[RAW MEDIAURL0] {MediaUrl0!r}")
-    
-    # Log ALL incoming parameters for debugging
-    logger.info(f"[INCOMING FULL] From={sender!r} Body={body!r} To={To!r} MediaUrl0={MediaUrl0!r}")
-    
-    # Check kwargs for BC code in case it's in a different parameter
-    for key in list(kwargs.keys())[:20]:  # Limit to avoid spam
-        val = kwargs[key]
-        if isinstance(val, str) and ('BC' in val.upper() or 'HOTLINE' in val.upper()):
-            logger.info(f"[FOUND BC IN PARAM] {key}={val!r}")
-    
-    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} MediaUrl0={MediaUrl0[:50] if MediaUrl0 else 'none'!r} Media={media_url[:50] if media_url else 'none'!r}")
+    logger.info(f"[RAW MEDIAURL0] {MediaUrl0!r} NumMedia={NumMedia!r}")
+    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r}")
 
     # If the message body contains a BC#### code, treat it as a customer
     # message even when the sender is a registered operator. This lets owners
