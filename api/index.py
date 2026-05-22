@@ -357,9 +357,9 @@ def get_all_businesses():
 
 # --- Trial / Subscription helpers ---
 def can_send_alerts(biz):
-    """Allow alerts if trialing (within window) or active. Block if expired/canceled."""
+    """Allow alerts if trialing (within window), active, or comped. Block if expired/canceled."""
     status = biz.get("sub_status") or "trialing"
-    if status == "active":
+    if status in ("active", "comped"):
         return True
     trial_end = (biz.get("trial_ends_at") or "").strip()
     if trial_end:
@@ -676,13 +676,13 @@ def _classify_fallback(text):
             "auto_reply":"Thanks for reaching out. We've received your message."}
 
 
-# --- Owner commands ---
+# --- Operator commands ---
 # Context and reply-mode are stored in DB so they survive server restarts (Vercel serverless)
 
 
-# --- Generate explanation for owner ---
+# --- Generate explanation for operator ---
 def generate_explanation(tier, category):
-    """Generate concise owner-facing explanation of concern and required action."""
+    """Generate concise operator-facing explanation of concern and required action."""
     explanations = {
         (1, "safety"): "Active safety emergency. Immediate life/property risk. Call 911 if not already done. Evacuate if necessary.",
         (2, "equipment"): "Equipment down. Risk: lost revenue, customer abandonment, negative review. Diagnose or call repair service.",
@@ -723,7 +723,7 @@ def get_reply_mode(bid):
 
 # US area code -> IANA timezone (covers continental US + AK/HI; multi-tz states
 # default to the dominant zone for that area code). Used to display alert times
-# in the owner's local time without asking them to configure anything.
+# in the operator's local time without asking them to configure anything.
 _AREA_CODE_TZ = {
     # Eastern
     "201":"America/New_York","202":"America/New_York","203":"America/New_York","207":"America/New_York",
@@ -864,7 +864,7 @@ def handle_owner_command(text, business, sender_phone=""):
     cmd = raw.upper()
 
     # Words that should be interpreted as commands even when we're in reply mode
-    # (so the owner can't accidentally text "STATUS" to the customer).
+    # (so the operator can't accidentally text "STATUS" to the customer).
     RESERVED = {
         "NEVERMIND","CANCEL","CLOSE","DONE","WRAP","FINISH","END",
         "MENU","HELP","?",
@@ -883,7 +883,7 @@ def handle_owner_command(text, business, sender_phone=""):
             clear_reply_mode(bid)
             if msg: end_conversation(bid, msg["from_number"])
             return "Conversation closed. AI auto-replies resumed."
-        # If owner types another reserved command, fall through to handle it
+        # If operator types another reserved command, fall through to handle it
         # instead of texting that word to the customer.
         if cmd in RESERVED:
             clear_reply_mode(bid)
@@ -894,7 +894,7 @@ def handle_owner_command(text, business, sender_phone=""):
             if msg:
                 send_sms(msg["from_number"], raw)
                 mark_owner_replied(bid, msg["from_number"])
-                logger.info(f"[OWNER REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
+                logger.info(f"[OPERATOR REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
                 return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType CLOSE when done, or just let it time out."
             return "Could not find the original message."
 
@@ -955,9 +955,9 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
 
     if cmd == "DEBUG":
-        # Diagnostic: show which biz the owner is tied to and the last 3 messages
+        # Diagnostic: show which biz the operator is tied to and the last 3 messages
         # stored under that biz_id. Lets us see when a customer message is being
-        # routed to a different business row than the owner expects.
+        # routed to a different business row than the operator expects.
         recent = get_recent_all(bid, 3)
         lines = [f"biz_id: {bid}", f"name: {business.get('name','')}", f"code: {business.get('business_code','')}", f"messages: {len(recent)}"]
         for m in recent:
@@ -1539,7 +1539,7 @@ def admin_ui(request: Request):
       <p style="font-size:11px;color:#aaa;margin:6px 0 0">1 month = 30 days added to trial window.</p>
     </div>
     <div style="border-top:1px solid #f0f0ec;padding-top:16px">
-      <button onclick="doSendBillingSms()" style="width:100%;padding:8px;background:#f5f5f0;color:#333;border:1px solid #e0e0dc;border-radius:6px;font-size:13px;cursor:pointer">📱 Send Billing SMS to Owner</button>
+      <button onclick="doSendBillingSms()" style="width:100%;padding:8px;background:#f5f5f0;color:#333;border:1px solid #e0e0dc;border-radius:6px;font-size:13px;cursor:pointer">📱 Send Billing SMS to Operator</button>
     </div>
   </div>
 </div>
@@ -2015,12 +2015,12 @@ def _process_customer_message(biz, sender, body, image_url=""):
     tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
     cat = c.get("category", "other")
 
-    # If the owner has recently replied to this customer, the human is on the
+    # If the operator has recently replied to this customer, the human is on the
     # line. Don't step on them with an AI message. Alerts still fire.
     convo_active = is_conversation_active(biz["id"], sender)
     if convo_active:
         auto_reply = ""
-        logger.info(f"[CONVO ACTIVE] Suppressing auto-reply for {sender} \u2192 {biz['id']} (owner active)")
+        logger.info(f"[CONVO ACTIVE] Suppressing auto-reply for {sender} \u2192 {biz['id']} (operator active)")
     else:
         auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
     update_auto_reply(msg_id, auto_reply)
@@ -2038,7 +2038,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
         logger.info(f"[TRIAL BLOCKED] Alert suppressed for {biz['id']} — trial expired or unpaid")
     elif alert_phones and should_alert and not (paused and tier != 1):
         if recent_count < RATE_LIMIT_MAX:
-            # Self-contained alert: everything the owner needs in one message.
+            # Self-contained alert: everything the operator needs in one message.
             if tier == 1:
                 header = "\U0001f6a8 URGENT"
             elif cat == "inquiry":
@@ -2080,9 +2080,9 @@ async def incoming_sms(request: Request):
     logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r} NumMedia={num_media!r}")
 
     # If the message body contains a BC#### code, treat it as a customer
-    # message even when the sender is a registered operator. This lets owners
+    # message even when the sender is a registered operator. This lets operators
     # test their own hotline from their personal phone without their texts
-    # getting captured by the owner-command handler.
+    # getting captured by the operator-command handler.
     code = _parse_business_code_from_body(body)
     logger.info(f"[DEBUG] BC code parse result: {code!r} from body: {body[:100]!r}")
     if code:
@@ -2174,7 +2174,7 @@ AUTO-REPLY TONE:
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer business questions. If vague, ask follow-up. Forward to management.
 
 FOLLOW-UP QUESTIONS (when to ask):
-- Tier 3 (reputation): Ask for more detail to help owner respond.
+- Tier 3 (reputation): Ask for more detail to help operator respond.
 - Tier 4 inquiry: Ask for clarification if vague.
 - DON'T ask Tier 1 or clear Tier 2 (just acknowledge and forward).
 - Examples: "Which machine/location?", "Can you tell us more?", "Is this still happening?"
@@ -2255,7 +2255,7 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
 .statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
 .phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
-.phone-label-bar.customer{color:#2563eb}.phone-label-bar.owner{color:#ea580c}
+.phone-label-bar.customer{color:#2563eb}.phone-label-bar.operator{color:#ea580c}
 .pref-bar{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;flex-wrap:wrap}
 .pref-label{font-size:13px;color:#888;font-weight:500}
 .filter-btn{font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.2s}
@@ -2281,9 +2281,9 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .input-row button{padding:10px 14px;border-radius:50%;border:none;font-size:16px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center}
 .input-row button.blue{background:#2563eb;color:#fff}.input-row button.orange{background:#ea580c;color:#fff}
 .input-row button:disabled{opacity:0.3;cursor:not-allowed}
-.owner-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}
+.operator-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}
 .cmd-btn{font-size:11px;padding:5px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;font-family:monospace;font-weight:600}.cmd-btn:hover{border-color:#ea580c;color:#1a1a1a}
-.owner-input{display:none}.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
+.operator-input{display:none}.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
 .examples{margin-bottom:20px;padding:0 20px}.examples p{font-size:12px;color:#aaa;margin-bottom:6px;text-align:center}
 .ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.ex{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04)}.ex:hover{border-color:#2563eb;color:#1a1a1a}
 .cta{text-align:center;margin:24px 0;padding:0 20px}.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
@@ -2331,17 +2331,17 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div>
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
-<div class="phone-label-bar owner">Owner</div>
+<div class="phone-label-bar operator">Operator</div>
 <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;color:#aaa;gap:6px"><span style="font-weight:600;color:#888;white-space:nowrap">Alert level:</span><div style="display:flex;gap:4px"><button class="filter-btn active" id="filt-crit" onclick="setFilter('critical')" style="font-size:10px;padding:3px 10px;border-radius:4px">🔴 Critical only</button><button class="filter-btn" id="filt-all" onclick="setFilter('all')" style="font-size:10px;padding:3px 10px;border-radius:4px">📋 All messages</button></div></div>
-<div class="msgs" id="m-owner"><div class="bubble system">Owner alerts appear here</div></div>
-<div class="owner-cmds" id="owner-cmds">
-<div class="cmd-btn" onclick="ownerCmd('REPLY')">REPLY</div>
-<div class="cmd-btn" onclick="ownerCmd('CLOSE')">CLOSE</div>
-<div class="cmd-btn" onclick="ownerCmd('MENU')">MENU</div>
+<div class="msgs" id="m-operator"><div class="bubble system">Operator alerts appear here</div></div>
+<div class="operator-cmds" id="operator-cmds">
+<div class="cmd-btn" onclick="operatorCmd('REPLY')">REPLY</div>
+<div class="cmd-btn" onclick="operatorCmd('CLOSE')">CLOSE</div>
+<div class="cmd-btn" onclick="operatorCmd('MENU')">MENU</div>
 </div>
-<div class="input-area owner-input" id="owner-input"><div class="input-row">
-<input type="text" id="owner-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')ownerCmd(this.value)">
-<button class="orange" onclick="ownerCmd(document.getElementById('owner-inp').value)">&#9650;</button>
+<div class="input-area operator-input" id="operator-input"><div class="input-row">
+<input type="text" id="operator-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')operatorCmd(this.value)">
+<button class="orange" onclick="operatorCmd(document.getElementById('operator-inp').value)">&#9650;</button>
 </div></div><div class="home-bar"></div>
 </div></div>
 </div>
@@ -2352,21 +2352,21 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
 let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
-const mc=document.getElementById('m-cust'),mo=document.getElementById('m-owner');
+const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
 function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text.replace(/\\n/g,'<br>');d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
-function showOwnerInput(){document.getElementById('owner-cmds').style.display='flex';document.getElementById('owner-input').style.display='block'}
-function hideOwnerInput(){document.getElementById('owner-cmds').style.display='none';document.getElementById('owner-input').style.display='none'}
-function resetDemo(){history=[];lastData=null;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Owner alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('owner-inp').value='';hideOwnerInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
+function showOperatorInput(){document.getElementById('operator-cmds').style.display='flex';document.getElementById('operator-input').style.display='block'}
+function hideOperatorInput(){document.getElementById('operator-cmds').style.display='none';document.getElementById('operator-input').style.display='none'}
+function resetDemo(){history=[];lastData=null;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Operator alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('operator-inp').value='';hideOperatorInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
 function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 function fmtTime(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
 
 (function(){document.getElementById('filt-crit').classList.add('active')})();
 
-function ownerCmd(raw){
+function operatorCmd(raw){
   const cmd=(raw||'').trim().toUpperCase();
-  const inp=document.getElementById('owner-inp');
+  const inp=document.getElementById('operator-inp');
   inp.value='';
   if(!cmd)return;
 
@@ -2377,7 +2377,7 @@ function ownerCmd(raw){
     replyMode=false;
     addB(mo,'cmd','',raw.trim());
     addB(mo,'resp','','Reply sent. AI quiet for 15min.\\nType CLOSE when done, or just let it time out.');
-    addB(mc,'in','Owner reply',raw.trim());
+    addB(mc,'in','Operator reply',raw.trim());
     inp.placeholder='Type a command...';
     return;
   }
@@ -2424,15 +2424,15 @@ async function sendDemo(){
     const when=fmtTime();
     if(d.tier===1){
       const alert='🚨 URGENT ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nConcern: '+d.explanation+'\\n\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
-      addB(mo,'alert-red','',alert,1);showOwnerInput();
+      addB(mo,'alert-red','',alert,1);showOperatorInput();
     } else if(d.tier===2){
       const alert='⚠️ Issue ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nConcern: '+d.explanation+'\\n\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply+'\\n\\nReply REPLY to message customer back.';
-      addB(mo,'alert','',alert,2);showOwnerInput();
+      addB(mo,'alert','',alert,2);showOperatorInput();
     } else if(d.tier===3){
       const alert='💬 Feedback ('+when+')\\nCategory: '+d.category.replace('_',' ')+'\\nConcern: '+d.explanation+'\\n\\nCustomer:\\n'+text+'\\n\\nWe replied:\\n'+d.auto_reply;
-      addB(mo,'feedback','',alert,3);showOwnerInput();
+      addB(mo,'feedback','',alert,3);showOperatorInput();
     } else {
-      addB(mo,'info','','&#128172; '+d.summary,4);showOwnerInput();
+      addB(mo,'info','','&#128172; '+d.summary,4);showOperatorInput();
     }
   }catch(e){mo.lastChild.remove();addB(mo,'system','','Demo error. Try again.')}
   btn.disabled=false;inp.focus();
@@ -2612,7 +2612,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 """ + NAV_HTML + """
 <div class="hero">
 <h1>Know what's happening before it costs you</h1>
-<p class="sub">Hotline alerts owners and senior management to the things that matter most: safety risks, operational failures, and the moments that make or break your reputation.</p>
+<p class="sub">Hotline alerts operators and senior management to the things that matter most: safety risks, operational failures, and the moments that make or break your reputation.</p>
 </div>
 <div class="grid">
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128664;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
@@ -2659,8 +2659,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128230;</span><h3 style="display:inline">Self-Storage Facilities</h3></div><span class="arrow">&#9654;</span></div>
 <div class="card-body"><em>"The gate code isn't working"</em> or <em>"There's water coming into my unit."</em> Customers only visit occasionally — when something goes wrong, they need to reach you fast. Hotline puts a direct line on every unit door so you hear about gate failures, leaks, break-ins, and climate control issues before they become liability claims or lost renewals.<div class="tag-row"><span class="tag-sm">gate & access issues</span><span class="tag-sm">water intrusion</span><span class="tag-sm">climate control</span><span class="tag-sm">security concerns</span></div></div></div>
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127970;</span><h3 style="display:inline">Franchise Owners</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Nobody at the register"</em> or <em>"The equipment at location 3 has been down all morning."</em> You can't be everywhere. Franchise owners managing multiple locations are flying blind without a direct line from each site. Hotline gives every location its own customer text line so issues surface instantly — no matter which location, no matter what time.<div class="tag-row"><span class="tag-sm">multi-location visibility</span><span class="tag-sm">operational blind spots</span><span class="tag-sm">staff accountability</span><span class="tag-sm">revenue protection</span></div></div></div>
+<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127970;</span><h3 style="display:inline">Franchise Operators</h3></div><span class="arrow">&#9654;</span></div>
+<div class="card-body"><em>"Nobody at the register"</em> or <em>"The equipment at location 3 has been down all morning."</em> You can't be everywhere. Franchise operators managing multiple locations are flying blind without a direct line from each site. Hotline gives every location its own customer text line so issues surface instantly — no matter which location, no matter what time.<div class="tag-row"><span class="tag-sm">multi-location visibility</span><span class="tag-sm">operational blind spots</span><span class="tag-sm">staff accountability</span><span class="tag-sm">revenue protection</span></div></div></div>
 </div>
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
@@ -2758,7 +2758,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <a href="/resources/faq" class="card faq-card">
 <div class="card-meta"><span>FAQ</span><span>Common questions</span></div>
 <h2>Everything you want to know before you sign up</h2>
-<p>How Hotline works, what customers see, what owners see, pricing, privacy, and more. Start here.</p>
+<p>How Hotline works, what customers see, what operators see, pricing, privacy, and more. Start here.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
 <a href="/resources/why-you-need-a-hotline" class="card">
@@ -2770,7 +2770,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <a href="/resources/where-to-put-your-qr" class="card">
 <div class="card-meta"><span>02 &mdash; Setup</span><span>3 min read</span></div>
 <h2>Where to put your QR code so customers actually use it</h2>
-<p>Physical signs are just the start. The best placements are often digital, and most owners skip them entirely.</p>
+<p>Physical signs are just the start. The best placements are often digital, and most operators skip them entirely.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
 <a href="/resources/responding-to-alerts" class="card">
@@ -2836,7 +2836,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ FAQ</div>
 <header class="ah">
 <h1>Frequently asked questions</h1>
-<p>How Hotline works, what customers and owners see, pricing, and privacy. If something isn't covered here, email us at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
+<p>How Hotline works, what customers and operators see, pricing, and privacy. If something isn't covered here, email us at <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
 </header>
 
 <div class="section">
@@ -2885,7 +2885,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Will I get spammed with complaints? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Owners who use Hotline are usually surprised by how quiet it is. Most days you'll get nothing. When something comes in, it's almost always real and actionable. There is also built-in rate limiting so a single frustrated customer can't flood you with alerts.</p></div>
+<div class="faq-a"><p>Operators who use Hotline are usually surprised by how quiet it is. Most days you'll get nothing. When something comes in, it's almost always real and actionable. There is also built-in rate limiting so a single frustrated customer can't flood you with alerts.</p></div>
 </div>
 
 <div class="faq-item">
@@ -2960,7 +2960,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">What if a customer texts without scanning the QR? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>If a customer texts the Hotline number directly without a QR code scan, the message includes a business code that routes it correctly. If there's no code and no recent session, they'll get a prompt to scan the QR. Messages without a valid business code aren't forwarded to any owner.</p></div>
+<div class="faq-a"><p>If a customer texts the Hotline number directly without a QR code scan, the message includes a business code that routes it correctly. If there's no code and no recent session, they'll get a prompt to scan the QR. Messages without a valid business code aren't forwarded to any operator.</p></div>
 </div>
 </div>
 
@@ -2969,22 +2969,22 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Will the business know it was me who texted? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No. Every message goes through the Hotline number, not your personal phone. The business operator sees the message content and when it came in. They do not see your phone number, your name, or any identifying information. As far as the owner knows, an anonymous customer sent a message through Hotline.</p></div>
+<div class="faq-a"><p>No. Every message goes through the Hotline number, not your personal phone. The business operator sees the message content and when it came in. They do not see your phone number, your name, or any identifying information. As far as the operator knows, an anonymous customer sent a message through Hotline.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can the business see my personal phone number? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No. Your message travels through the Hotline system number, not directly from your phone to theirs. The owner's alert shows the message text and timestamp only. Your personal number is never displayed to the business, not in the alert, not in any reply thread, not anywhere in their interface.</p></div>
+<div class="faq-a"><p>No. Your message travels through the Hotline system number, not directly from your phone to theirs. The operator's alert shows the message text and timestamp only. Your personal number is never displayed to the business, not in the alert, not in any reply thread, not anywhere in their interface.</p></div>
 </div>
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Does the business operator have my contact info after I text? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No. The owner has no way to contact you outside of Hotline unless you choose to share your information in the message itself. If the owner replies using the REPLY command, that message comes back to you through the Hotline number, keeping both sides anonymous throughout the conversation.</p></div>
+<div class="faq-a"><p>No. The operator has no way to contact you outside of Hotline unless you choose to share your information in the message itself. If the operator replies using the REPLY command, that message comes back to you through the Hotline number, keeping both sides anonymous throughout the conversation.</p></div>
 </div>
 
 <div class="faq-item">
-<button class="faq-q" onclick="toggle(this)">Who else can see my message besides the owner? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Any alert recipients the owner has added, such as a manager or business partner, will receive the same alert text. None of them see your phone number. Messages are stored in Hotline's system for logging. They are not shared with third parties or used for marketing.</p></div>
+<button class="faq-q" onclick="toggle(this)">Who else can see my message besides the operator? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Any alert recipients the operator has added, such as a manager or business partner, will receive the same alert text. None of them see your phone number. Messages are stored in Hotline's system for logging. They are not shared with third parties or used for marketing.</p></div>
 </div>
 
 <div class="faq-item">
@@ -3004,7 +3004,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Is my business data shared with anyone? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>No. Your business name, phone number, and incoming message data are used only to operate the service. Owner data is never sold or shared with advertisers or third parties.</p></div>
+<div class="faq-a"><p>No. Your business name, phone number, and incoming message data are used only to operate the service. Operator data is never sold or shared with advertisers or third parties.</p></div>
 </div>
 
 <div class="faq-item">
@@ -3051,7 +3051,7 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <h2>The gap between what happens and what you know</h2>
 
-<p>Every business has this gap. Problems happen at the floor level. Owners operate above it. The information that travels between the two gets filtered by time, by staff who don't want to deliver bad news, and by systems that only catch things after the fact.</p>
+<p>Every business has this gap. Problems happen at the floor level. Operators operate above it. The information that travels between the two gets filtered by time, by staff who don't want to deliver bad news, and by systems that only catch things after the fact.</p>
 
 <p>That gap closes when customers have a direct line to you, in the moment, while the problem is still fixable.</p>
 
@@ -3107,7 +3107,7 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p class="lead">The QR code only works if a customer sees it at the right moment. That moment is when the problem is in front of them, not after they've already walked out.</p>
 
-<p>Most owners post a sign near the entrance and call it done. That's the least effective spot. By the time someone's at the exit, the problem is behind them. They're already deciding whether to leave a review.</p>
+<p>Most operators post a sign near the entrance and call it done. That's the least effective spot. By the time someone's at the exit, the problem is behind them. They're already deciding whether to leave a review.</p>
 
 <p>Put it at the problem, not at the door.</p>
 
@@ -3127,7 +3127,7 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Waterproof sticker stock for bathrooms and wet areas. Minimum 1.5 inches. Bigger in low light.</p>
 
-<h2>Digital placements (most owners skip these)</h2>
+<h2>Digital placements (most operators skip these)</h2>
 
 <p>Physical signs catch customers mid-problem. Digital placements catch them after, when they're about to write a review. You want both.</p>
 
@@ -3150,7 +3150,7 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Keep it to one line. Tell them what happens when they scan.</p>
 
-<div class="sample">"Something wrong? Text us. Owner reads every message."</div>
+<div class="sample">"Something wrong? Text us. Operator reads every message."</div>
 <div class="sample">"Issue with your visit? Let us know before you leave."</div>
 <div class="sample">"Staff not around? Something broken? Scan to text us."</div>
 
@@ -3185,7 +3185,7 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p class="lead">Every single message that comes in gets handled. You only hear about the ones that actually need you.</p>
 
-<p>That distinction matters. Most owners brace for a flood of notifications and then realize the opposite is true. Every incoming message is read, each customer gets an automatic response with the right tone, and everything is filtered before it reaches you. Compliments, questions, minor complaints, spam, all of it gets processed without you lifting a finger.</p>
+<p>That distinction matters. Most operators brace for a flood of notifications and then realize the opposite is true. Every incoming message is read, each customer gets an automatic response with the right tone, and everything is filtered before it reaches you. Compliments, questions, minor complaints, spam, all of it gets processed without you lifting a finger.</p>
 
 <p>What makes it through to your phone is a short list: real operational problems and emergencies. That's the job you actually need to do.</p>
 
@@ -3500,7 +3500,7 @@ footer a{color:#aaa}
 <p>We collect the following information when you use Hotline:</p>
 <ul>
 <li><strong>Customer SMS messages:</strong> The text content of messages sent to a Hotline business number, along with the sender&rsquo;s phone number and timestamp.</li>
-<li><strong>Business owner information:</strong> Business name, owner phone number, optional email address, and optional website URL provided during signup.</li>
+<li><strong>Business operator information:</strong> Business name, operator phone number, optional email address, and optional website URL provided during signup.</li>
 <li><strong>Usage data:</strong> Message tiers, categories, sentiment classifications, and acknowledgment records generated by our AI system.</li>
 </ul>
 
@@ -3515,11 +3515,11 @@ footer a{color:#aaa}
 <p>We do <strong>not</strong> sell, rent, or share your personal information with third parties for marketing purposes.</p>
 
 <h2>4. SMS Messaging and Opt-In</h2>
-<p><strong>Business owners:</strong> By signing up for Hotline, you consent to receive SMS alerts and notifications from your assigned Hotline number. You may opt out at any time by texting <strong>STOP</strong> to your Hotline number. Standard message and data rates from your carrier may apply.</p>
+<p><strong>Business operators:</strong> By signing up for Hotline, you consent to receive SMS alerts and notifications from your assigned Hotline number. You may opt out at any time by texting <strong>STOP</strong> to your Hotline number. Standard message and data rates from your carrier may apply.</p>
 <p><strong>Customers texting a business:</strong> When you text a Hotline-powered business number, your message and phone number are stored and forwarded to the business operator. You are not opted in to any marketing list. The business may reply to your message directly via SMS.</p>
 
 <h2>5. Data Retention</h2>
-<p>Customer messages and associated data are stored for up to 90 days by default. Business owner accounts and associated message history are retained for the duration of the account. You may request deletion by contacting <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
+<p>Customer messages and associated data are stored for up to 90 days by default. Business operator accounts and associated message history are retained for the duration of the account. You may request deletion by contacting <a href="mailto:Connect@HotlineTXT.com">Connect@HotlineTXT.com</a>.</p>
 
 <h2>6. Third-Party Services</h2>
 <p>Hotline uses the following third-party services to operate:</p>
@@ -3579,10 +3579,10 @@ footer a{color:#aaa}
 <p>By signing up for or using Hotline (&ldquo;the Service&rdquo;) operated by HotlineTXT.com, you agree to be bound by these Terms of Service. If you do not agree, do not use the Service.</p>
 
 <h2>2. Description of Service</h2>
-<p>Hotline is an SMS-based system that allows customers to send text messages to a business phone number. The Service uses AI to classify incoming messages and notifies registered business operators of important issues via SMS. Business owners interact with the Service entirely via SMS commands.</p>
+<p>Hotline is an SMS-based system that allows customers to send text messages to a business phone number. The Service uses AI to classify incoming messages and notifies registered business operators of important issues via SMS. Business operators interact with the Service entirely via SMS commands.</p>
 
 <h2>3. SMS Messaging &mdash; Opt-In and Opt-Out</h2>
-<p><strong>Business owners:</strong> By completing signup and providing your phone number, you expressly consent to receive SMS messages from Hotline, including:</p>
+<p><strong>Business operators:</strong> By completing signup and providing your phone number, you expressly consent to receive SMS messages from Hotline, including:</p>
 <ul>
 <li>Alert notifications when customers send flagged messages</li>
 <li>Weekly digest summaries (if enabled)</li>
@@ -3677,7 +3677,7 @@ async def stripe_webhook(request: Request):
         if biz:
             set_sub_status(biz["id"], "active")
             logger.info(f"[STRIPE] Payment succeeded — {biz['id']} set active")
-            # Notify owner if they were previously blocked
+            # Notify operator if they were previously blocked
             if (biz.get("sub_status") or "trialing") in ("expired", "past_due"):
                 for p in get_alert_phones(biz):
                     send_sms(p, "\u2705 Payment received. Hotline alerts are active again.")
