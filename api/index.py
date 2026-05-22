@@ -2025,10 +2025,11 @@ def _process_customer_message(biz, sender, body, image_url=""):
 
 
 @app.post("/sms/incoming")
-async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
+async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form(""), MediaUrl0:str=Form(""), **kwargs):
     _ensure_init()
     sender, body = From.strip(), Body.strip()
-    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r}")
+    media_url = MediaUrl0.strip() if MediaUrl0 else ""
+    logger.info(f"[INCOMING] From={sender} Body={body[:80]!r} Media={media_url[:50] if media_url else 'none'!r}")
 
     # If the message body contains a BC#### code, treat it as a customer
     # message even when the sender is a registered owner. This lets owners
@@ -2039,10 +2040,18 @@ async def incoming_sms(From:str=Form(...), Body:str=Form(...), To:str=Form("")):
         biz = get_business_by_code(code)
         if biz:
             clean_body = _scrub_hotline_header(body)
-            if not clean_body:
-                logger.info(f"[BLANK MSG] {sender} \u2192 {biz['id']} \u2014 awaiting message")
+            has_meaningful_text = len(clean_body.strip()) > 5
+            
+            if media_url and not has_meaningful_text:
+                # Image only without text — ask for description
+                logger.info(f"[MMS IMAGE ONLY] {sender} → {biz['id']} — image without description")
+                return _twiml("Photo received. Quick description: what's going on?")
+            elif not clean_body:
+                logger.info(f"[BLANK MSG] {sender} → {biz['id']} — awaiting message")
                 return _twiml("Got it! Now just describe what's wrong and send it to us.")
-            auto_reply = _process_customer_message(biz, sender, clean_body)
+            
+            # Has text — process with optional image
+            auto_reply = _process_customer_message(biz, sender, clean_body, image_url=media_url)
             return _twiml(auto_reply)
         else:
             logger.warning(f"[NO BIZ] Received code {code!r} but no matching business")
