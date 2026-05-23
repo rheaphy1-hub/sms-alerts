@@ -1469,19 +1469,20 @@ def send_all_digests(force_freq=None):
 
 
 # --- FastAPI ---
-app = FastAPI(title="Hotline", version="3.0.0")
+app = FastAPI(title="Hotline", version="3.3.0")
 
 # ── Version Endpoint (to check what code is running) ──────────────────────
 @app.get("/version")
 async def get_version():
     """Check what version of code is running on this deployment."""
     return {
-        "version": "3.2",
+        "version": "3.3",
         "features": {
             "context_aware_templates": True,
             "tier_two_validator": True,
             "specific_issue_acknowledgment": True,
-            "strict_regex_enforcement": True
+            "strict_regex_enforcement": True,
+            "one_code_path": True
         },
         "validator": "TierTwoValidator (7-point validation)",
         "safe_structures": [
@@ -3067,11 +3068,22 @@ async def demo_classify(request_data:dict=None):
                 for h in history[-6:]: user_msg += f'Customer: "{h.get("customer","")}"\nSystem: "{h.get("reply","")}"\n\n'
                 user_msg += f'New message from same customer: "{text}"\n\nClassify with full context.'
             else: user_msg = f'Classify this customer SMS:\n\n"{text}"'
-            raw = _anthropic_http(DEMO_PROMPT, user_msg, model="claude-haiku-4-5-20251001")
+            # Use same CLASSIFICATION_PROMPT as real SMS — one code path, one standard
+            demo_prompt = CLASSIFICATION_PROMPT.replace("{website_context}", "No business website info available. Do NOT guess answers to customer questions.")
+            raw = _anthropic_http(demo_prompt, user_msg, model="claude-haiku-4-5-20251001")
             if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             c = json.loads(raw)
             c["tier"]=max(1,min(4,int(c.get("tier",4)))); c["confidence"]=max(0.0,min(1.0,float(c.get("confidence",0.5))))
             for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks so much for reaching out!")]: c.setdefault(k,v)
+            # Apply same TierTwoValidator as real SMS — demo and production behave identically
+            if c.get("tier") == 2:
+                validator = TierTwoValidator()
+                is_valid, reason = validator.validate(c.get("auto_reply", ""))
+                if not is_valid:
+                    logger.warning(f"[DEMO TIER2 VALIDATION FAILED] Reason: {reason} | Original: {c.get('auto_reply')}")
+                    c["auto_reply"] = "Thank you for reporting this. Management has been notified."
+                else:
+                    logger.info(f"[DEMO TIER2 VALIDATION PASSED]")
         except Exception as e: logger.error(f"Demo: {e}"); c = _classify_fallback(text)
     else: c = _classify_fallback(text)
     explanation = generate_explanation(c["tier"], c.get("category", "other"))
