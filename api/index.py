@@ -1471,6 +1471,28 @@ def send_all_digests(force_freq=None):
 # --- FastAPI ---
 app = FastAPI(title="Hotline", version="3.0.0")
 
+# ── Version Endpoint (to check what code is running) ──────────────────────
+@app.get("/version")
+async def get_version():
+    """Check what version of code is running on this deployment."""
+    return {
+        "version": "3.2",
+        "features": {
+            "context_aware_templates": True,
+            "tier_two_validator": True,
+            "specific_issue_acknowledgment": True,
+            "strict_regex_enforcement": True
+        },
+        "validator": "TierTwoValidator (7-point validation)",
+        "safe_structures": [
+            "Thank you for reporting [issue]. Management has been notified.",
+            "Thank you for reporting [issue]. We've communicated this to management.",
+            "Thank you for reporting [issue]. This is a critical issue. Management has been notified.",
+            "Thank you for reporting [issue]. We understand this is important. Management has been notified."
+        ],
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
 RATE_LIMIT_MAX = 5; RATE_LIMIT_WINDOW = 10; _initialized = False
 _ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER",""); _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER","")
 _ENV_NAME = os.getenv("BUSINESS_NAME","MyBusiness"); _ADMIN_KEY = os.getenv("ADMIN_KEY","changeme")
