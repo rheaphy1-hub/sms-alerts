@@ -1146,24 +1146,50 @@ _ZIP3_TZ = {
 
 def _tz_for_business(business):
     """Pick an IANA tz for a business. Zip code wins, then state, then area code.
-    Falls back to env DEFAULT_TZ, then UTC."""
+    Falls back to env DEFAULT_TZ, then UTC. Logs resolution path."""
     if not business: return os.getenv("DEFAULT_TZ","UTC")
-    # 1. Zip code (most accurate)
+    biz_id = business.get("id","?")
+    
+    # 1. Zip code (most accurate) — try lookup table first
     zip_code = (business.get("zip") or "").strip()
     if len(zip_code) >= 3:
         z3 = zip_code[:3]
-        if z3 in _ZIP3_TZ: return _ZIP3_TZ[z3]
-    # 2. State (from zip lookup at signup)
+        if z3 in _ZIP3_TZ:
+            tz = _ZIP3_TZ[z3]
+            logger.debug(f"[TZ] {biz_id}: zip={zip_code} (z3={z3}) → {tz} (from map)")
+            return tz
+        # Fallback: if zip exists but not in map, try live lookup via _lookup_zip
+        try:
+            city, state = _lookup_zip(zip_code)
+            if state and state in _STATE_TZ:
+                tz = _STATE_TZ[state]
+                logger.info(f"[TZ] {biz_id}: zip={zip_code} → state={state} → {tz} (live lookup)")
+                return tz
+        except Exception as e:
+            logger.debug(f"[TZ] {biz_id}: live zip lookup failed: {e}")
+    
+    # 2. State (from zip lookup at signup) — fallback if zip failed
     state = (business.get("state") or "").upper().strip()
-    if state in _STATE_TZ: return _STATE_TZ[state]
+    if state in _STATE_TZ:
+        tz = _STATE_TZ[state]
+        logger.debug(f"[TZ] {biz_id}: state={state} → {tz}")
+        return tz
+    
     # 3. Area code of operator phone (least reliable)
     phone = business.get("owner_phone") or ""
     digits = re.sub(r"\D","",phone)
     if len(digits)==11 and digits[0]=="1": digits = digits[1:]
     if len(digits)>=10:
         ac = digits[:3]
-        if ac in _AREA_CODE_TZ: return _AREA_CODE_TZ[ac]
-    return os.getenv("DEFAULT_TZ","UTC")
+        if ac in _AREA_CODE_TZ:
+            tz = _AREA_CODE_TZ[ac]
+            logger.debug(f"[TZ] {biz_id}: phone={phone} (ac={ac}) → {tz}")
+            return tz
+    
+    # Final fallback
+    default_tz = os.getenv("DEFAULT_TZ","UTC")
+    logger.warning(f"[TZ] {biz_id}: no match found, using default: {default_tz}")
+    return default_tz
 
 def _fmt_ts(iso, business=None):
     """Format a stored UTC iso timestamp in the business's local tz.
@@ -1693,6 +1719,92 @@ async def admin_update_phones(request: Request):
     logger.info(f"[ADMIN] Updated alert phones for {biz_id}: {normalized}")
     return {"success":True, "alert_phones": normalized}
 
+@app.post("/admin/update-business")
+async def admin_update_business(request: Request):
+    """Update editable business fields: name, owner_phone, zip, email, website_url, digest_freq, alert_tier."""
+    _ensure_init()
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    body = await request.json()
+    biz_id = body.get("biz_id","").strip()
+    if not biz_id: return {"error":"biz_id required"}
+    
+    # Fetch current business
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
+    if not biz: return {"error":"Business not found"}, 404
+    
+    # Extract and validate fields
+    name = body.get("name","").strip()
+    owner_phone = body.get("owner_phone","").strip()
+    zip_code = body.get("zip","").strip()
+    email = body.get("email","").strip()
+    website_url = body.get("website_url","").strip()
+    digest_freq = body.get("digest_freq","weekly").strip().lower()
+    alert_tier = body.get("alert_tier","tier2").strip().lower()
+    
+    # Validation
+    errors = []
+    if not name: errors.append("Business name required")
+    if not owner_phone: errors.append("Owner phone required")
+    if owner_phone and not re.match(r"^\+?1?\d{10}$", owner_phone.replace("-","").replace(" ","").replace("(","").replace(")","")):
+        errors.append("Invalid phone format")
+    if zip_code and not re.match(r"^\d{5}$", zip_code):
+        errors.append("Zip must be 5 digits")
+    if email and not re.match(r"^[^@]+@[^@]+\.[^@]+$", email):
+        errors.append("Invalid email format")
+    if digest_freq not in ("daily", "weekly"):
+        errors.append("digest_freq must be 'daily' or 'weekly'")
+    if alert_tier not in ("tier2", "tier3"):
+        errors.append("alert_tier must be 'tier2' or 'tier3'")
+    
+    if errors: return {"error": "; ".join(errors)}, 400
+    
+    # Normalize phone to +1 format
+    digits = re.sub(r"\D","", owner_phone)
+    if len(digits) == 10: digits = "1" + digits
+    elif len(digits) == 11 and digits[0] != "1": digits = "1" + digits[1:]
+    normalized_phone = f"+{digits}" if digits else owner_phone
+    
+    # If zip changed, re-lookup city/state
+    city, state = biz.get("city",""), biz.get("state","")
+    if zip_code != (biz.get("zip") or ""):
+        city, state = _lookup_zip(zip_code) if zip_code else ("", "")
+        logger.info(f"[ADMIN] {biz_id}: zip changed from {biz.get('zip')} to {zip_code}, re-looked up city={city}, state={state}")
+    
+    # Convert alert_tier to alert_tier3 (legacy column)
+    alert_tier3 = 1 if alert_tier == "tier3" else 0
+    
+    # Update database
+    with get_db() as c:
+        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=? WHERE id=?"),
+                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, biz_id))
+    
+    # Log the changes
+    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}")
+    
+    # Fetch updated business to return
+    with get_db() as c:
+        updated_biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
+    
+    tz_name = _tz_for_business(updated_biz)
+    return {
+        "success": True,
+        "business": {
+            "id": updated_biz["id"],
+            "name": updated_biz["name"],
+            "owner_phone": updated_biz["owner_phone"],
+            "zip": updated_biz["zip"],
+            "city": updated_biz["city"],
+            "state": updated_biz["state"],
+            "timezone": tz_name,
+            "email": updated_biz["email"],
+            "website_url": updated_biz["website_url"],
+            "digest_freq": updated_biz["digest_freq"],
+            "alert_tier": "tier3" if updated_biz["alert_tier3"] else "tier2",
+            "business_code": updated_biz["business_code"],
+        }
+    }
+
 @app.post("/admin/remove")
 async def admin_remove(request: Request):
     _ensure_init()
@@ -1955,6 +2067,65 @@ def admin_ui(request: Request):
     </div>
   </div>
 </div>
+
+<!-- Edit Business Modal -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:350;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:28px;width:420px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.15);max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <h3 style="margin:0;font-size:16px">Edit Business</h3>
+      <a href="#" onclick="closeEditModal();return false" style="color:#888;font-size:20px;text-decoration:none">&times;</a>
+    </div>
+    <div id="edit-error" style="display:none;background:#fee2e2;color:#991b1b;padding:10px 12px;border-radius:6px;margin-bottom:16px;font-size:13px"></div>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Business Name *</label>
+        <input id="em-name" type="text" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Owner Phone *</label>
+        <input id="em-phone" type="tel" placeholder="+1(555)555-1234" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Zipcode</label>
+          <input id="em-zip" type="text" placeholder="12345" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">City, State</label>
+          <input id="em-location" type="text" disabled style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:13px;background:#f8f8f6;box-sizing:border-box;color:#aaa">
+        </div>
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Email</label>
+        <input id="em-email" type="email" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Website URL</label>
+        <input id="em-website" type="url" placeholder="https://example.com" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Digest Frequency</label>
+          <select id="em-digest" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Alert Tier</label>
+          <select id="em-tier" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+            <option value="tier2">Tier 2 (Critical)</option>
+            <option value="tier3">Tier 3 (All)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:20px;border-top:1px solid #f0f0ec;padding-top:16px">
+      <button onclick="saveBusinessEdit()" style="flex:1;padding:10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer">Save Changes</button>
+      <button onclick="closeEditModal()" style="flex:1;padding:10px;background:#f5f5f0;color:#333;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;cursor:pointer">Cancel</button>
+    </div>
+  </div>
+</div>
 <script>
 var _bmBizId="",_bmName="";
 function toast(msg,ok){{var el=document.getElementById("toast");el.textContent=msg;el.style.background=ok?"#166534":"#991b1b";el.style.display="block";setTimeout(()=>el.style.display="none",3000);}}
@@ -2069,10 +2240,52 @@ async function openDrawer(bizId, bizName){{
         </div>
       </div>
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
-      <div>${{msg_rows}}</div>`;
+      <div>${{msg_rows}}</div>
+      <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
+        <button onclick="openEditModal('{bizId}',{{'name':'{b['name'].replace(chr(39),'').replace(chr(34),'&quot;')}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+      </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
+var _emBizId="",_emData={{}};
+function openEditModal(bizId,data){{
+  _emBizId=bizId;_emData=data;
+  document.getElementById("em-name").value=data.name||"";
+  document.getElementById("em-phone").value=data.owner_phone||"";
+  document.getElementById("em-zip").value=data.zip||"";
+  document.getElementById("em-location").value=(data.city||"")+(data.state?" "+data.state:"");
+  document.getElementById("em-email").value=data.email||"";
+  document.getElementById("em-website").value=data.website_url||"";
+  document.getElementById("em-digest").value=data.digest_freq||"weekly";
+  document.getElementById("em-tier").value=data.alert_tier||"tier2";
+  document.getElementById("edit-error").style.display="none";
+  document.getElementById("edit-modal").style.display="flex";
+}}
+function closeEditModal(){{
+  document.getElementById("edit-modal").style.display="none";
+  _emBizId="";_emData={{}};
+}}
+async function saveBusinessEdit(){{
+  const name=document.getElementById("em-name").value.trim();
+  const phone=document.getElementById("em-phone").value.trim();
+  const zip=document.getElementById("em-zip").value.trim();
+  const email=document.getElementById("em-email").value.trim();
+  const website=document.getElementById("em-website").value.trim();
+  const digest=document.getElementById("em-digest").value;
+  const tier=document.getElementById("em-tier").value;
+  const errEl=document.getElementById("edit-error");
+  if(!name||!phone){{errEl.textContent="Name and phone are required";errEl.style.display="block";return;}}
+  try{{
+    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier}})}});
+    const d=await r.json();
+    if(!d.success){{errEl.textContent=d.error||"Failed to save";errEl.style.display="block";return;}}
+    toast("Business updated",true);
+    closeEditModal();
+    closeDrawer();
+    location.reload();
+  }}catch(e){{errEl.textContent="Error: "+e.message;errEl.style.display="block";}}
+}}
 document.getElementById("billing-modal").addEventListener("click",function(e){{if(e.target===this)closeBilling();}});
+document.getElementById("edit-modal").addEventListener("click",function(e){{if(e.target===this)closeEditModal();}});
 </script>
 </body></html>'''
     return Response(content=html, media_type="text/html")
