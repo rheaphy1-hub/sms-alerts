@@ -544,7 +544,7 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action.
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type received, say management has been notified. Do NOT promise action, timeline, or send anyone. No exclamation marks. NEVER promise specific action.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If vague or needs clarification, ask follow-up. Forward to management.
@@ -562,6 +562,10 @@ HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
+- NEVER say "someone is on their way", "we're sending help", "our team is looking into this", "we'll fix it", "we'll get someone to you", or any phrase implying specific action without explicit business authorization.
+- NEVER promise timeliness ("immediately", "right now", "shortly", "momentarily", "soon", "in a moment").
+- NEVER imply the business has already acted ("we've checked", "we've started", "we're checking").
+- DO acknowledge receipt only: "Thank you for reporting. Your feedback has been communicated to management."
 - NEVER ask follow-up questions for Tier 1 or 2 if issue is clear. Just acknowledge and notify.
 - Keep auto_reply under 160 characters.
 - Vary responses naturally. Don't repeat same template.
@@ -2242,7 +2246,7 @@ async function openDrawer(bizId, bizName){{
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
       <div>${{msg_rows}}</div>
       <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
-        <button onclick="openEditModal('{bizId}',{{'name':'{b['name'].replace(chr(39),'').replace(chr(34),'&quot;')}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+        <button onclick="openEditModal('{b['id']}',{{'name':'{b['name'].replace(chr(39),'').replace(chr(34),'&quot;')}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
       </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
