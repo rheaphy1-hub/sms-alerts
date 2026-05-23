@@ -544,7 +544,11 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Acknowledge issue received, say management has been notified. Use PASSIVE voice ONLY (never active). Do NOT promise action, timeline, or send anyone. Do NOT use active voice like "they're fixing", "we're investigating", "they're addressing". Passive voice example: "This will be reviewed by management." No exclamation marks.
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Then use ONE of these TEMPLATES EXACTLY:
+  Template A: "Thank you for reporting this. Management has been notified."
+  Template B: "Thank you for reporting this. We've communicated this to management."
+  Template C: "Thank you for reporting this. [Context]. Management has been notified." where Context MUST be ONLY: "This is a critical issue" OR "We understand this is important"
+  You MUST NOT add any words beyond these templates. You MUST NOT use future tense, action verbs (address, resolve, fix), or timeline words (immediately, soon). If you cannot fit your response to these templates, use Template A and STOP.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If vague or needs clarification, ask follow-up. Forward to management.
@@ -562,14 +566,15 @@ HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
-- NEVER say "someone is on their way", "we're sending help", "our team is looking into this", "we'll fix it", "we'll get someone to you", "they're addressing it", "they're working on it", "they're handling it", or any phrase implying specific action without explicit business authorization.
-- NEVER promise timeliness ("immediately", "right now", "shortly", "momentarily", "soon", "in a moment", "now", "at once").
-- NEVER imply the business has already acted or is actively acting ("we've checked", "we've started", "we're checking", "they're addressing", "they're working", "they're handling", "they're investigating").
-- DO acknowledge receipt ONLY: "Thank you for reporting. We've communicated this to management." OR "Thank you for reporting. This has been forwarded to the team." No more, no timeline, no action promises.
-- For Tier 2, if you must reference next steps, use passive voice ONLY: "This will be reviewed by management." NOT "Management is reviewing this." (active = implies action in progress)
+- Tier 2 TEMPLATE ENFORCEMENT (Critical): You MUST generate Tier 2 replies matching ONLY these structures:
+  ✅ "Thank you for reporting this. Management has been notified."
+  ✅ "Thank you for reporting this. We've communicated this to management."
+  ✅ "Thank you for reporting this. [Critical/Important]. Management has been notified."
+  ❌ FORBIDDEN: Future tense (will, shall), Action verbs (address, resolve, fix, handle, investigate), Timeline words (immediately, shortly, soon, now)
+  ❌ FORBIDDEN: "management will address this", "to address the gate", "for handling", infinitive phrases
+  ❌ FORBIDDEN: Anything beyond acknowledgment + context + notification
 - NEVER ask follow-up questions for Tier 1 or 2 if issue is clear. Just acknowledge and notify.
 - Keep auto_reply under 160 characters.
-- Vary responses naturally. Don't repeat same template.
 - ALWAYS thank customer first in every response.
 
 EDGE CASES — ACCESS (all Tier 2, category "access"):
@@ -634,6 +639,71 @@ def _anthropic_http(system_prompt, user_msg, model="claude-haiku-4-5-20251001", 
     return data["content"][0]["text"].strip()
 
 
+class TierTwoValidator:
+    """Enforces safe grammatical structures for Tier 2 auto-replies."""
+    
+    FORBIDDEN_FUTURE_VERBS = {'will', 'shall', 'are going to', 'is going to'}
+    FORBIDDEN_ACTION_VERBS = {
+        'address', 'resolve', 'fix', 'handle', 'investigate', 'manage', 
+        'review', 'check', 'look into', 'deal with', 'control', 'ensure',
+        'guarantee', 'commit', 'undertake', 'perform', 'execute', 'implement',
+        'arrange', 'organize'
+    }
+    FORBIDDEN_TIMELINE_WORDS = {
+        'immediately', 'shortly', 'soon', 'now', 'at once', 'in a moment',
+        'momentarily', 'right away', 'asap'
+    }
+    
+    SAFE_STRUCTURES = [
+        r"^Thank you for reporting.*\. .*has been notified\.$",
+        r"^Thank you for reporting.*\. .*has been communicated.*\.$",
+        r"^Thank you for reporting.*\. .*has been forwarded.*\.$",
+    ]
+    
+    def validate(self, reply):
+        """
+        Validate a Tier 2 reply matches safe structures.
+        
+        Returns:
+          (is_safe: bool, reason: str)
+        """
+        import re
+        
+        # Check 1: Matches safe structure
+        if not any(re.match(pattern, reply, re.IGNORECASE) for pattern in self.SAFE_STRUCTURES):
+            return False, "Reply does not match approved Tier 2 structures"
+        
+        # Check 2: No forbidden future verbs
+        reply_lower = reply.lower()
+        for verb in self.FORBIDDEN_FUTURE_VERBS:
+            if verb in reply_lower:
+                return False, f"Forbidden future verb: '{verb}'"
+        
+        # Check 3: No forbidden action verbs
+        for verb in self.FORBIDDEN_ACTION_VERBS:
+            if verb in reply_lower:
+                return False, f"Forbidden action verb: '{verb}'"
+        
+        # Check 4: No forbidden timeline words
+        for word in self.FORBIDDEN_TIMELINE_WORDS:
+            if word in reply_lower:
+                return False, f"Forbidden timeline word: '{word}'"
+        
+        # Check 5: Ends with period (no additions)
+        if not reply.endswith('.'):
+            return False, "Reply must end with period"
+        
+        # Check 6: No infinitive phrases (to [verb])
+        if re.search(r'\bto\s+[a-z]+', reply, re.IGNORECASE):
+            return False, "Infinitive phrases forbidden"
+        
+        # Check 7: No "will be [verb]" (passive future)
+        if 'will be' in reply_lower:
+            return False, "Passive future tense forbidden"
+        
+        return True, "Valid Tier 2 reply"
+
+
 def classify_message(text, website_info=""):
     # SAFETY FIRST: Check for emergency keywords BEFORE calling AI.
     # The AI can misinterpret literal emergencies as figurative language.
@@ -653,6 +723,19 @@ def classify_message(text, website_info=""):
             r["confidence"] = max(0.0,min(1.0,float(r.get("confidence",0.5))))
             for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks for reaching out. We've received your message.")]:
                 r.setdefault(k,v)
+            
+            # NEW: Validate Tier 2 replies match safe structures
+            if r.get("tier") == 2:
+                validator = TierTwoValidator()
+                is_valid, reason = validator.validate(r.get("auto_reply", ""))
+                if not is_valid:
+                    logger.warning(f"[TIER2 VALIDATION FAILED] Reason: {reason}")
+                    logger.warning(f"[TIER2 VALIDATION FAILED] Original reply: {r.get('auto_reply')}")
+                    # Fallback to safest response
+                    r["auto_reply"] = "Thank you for reporting this. Management has been notified."
+                else:
+                    logger.info(f"[TIER2 VALIDATION PASSED] Reply is safe")
+            
             return r
         except Exception as e: logger.error(f"AI classify failed: {e}")
     return _classify_fallback(text)
