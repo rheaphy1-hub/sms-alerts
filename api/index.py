@@ -544,21 +544,20 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting [specific issue]." Then acknowledge receipt and notify management. You MUST:
-  1. Acknowledge the SPECIFIC issue (e.g., "the pump error", "the jammed machine", "the payment system")
-  2. State that management has been notified
-  3. STOP. Do not add any other words.
+- Tier 2: Professional, serious. Use EXACTLY this format — no deviations:
+  "Thank you for reporting [issue]. Management has been notified."
   
-  ALLOWED FORMATS:
-  ✅ "Thank you for reporting [issue]. Management has been notified."
-  ✅ "Thank you for reporting [issue]. We've communicated this to management."
-  ✅ "Thank you for reporting [issue]. This has been forwarded to the team."
-  ✅ "Thank you for reporting [issue]. [One-sentence context]. Management has been notified."
+  WHERE [issue] = 2-5 word description extracted from the customer message.
+  Examples: "the stuck parking gate", "the gas pump error", "the jammed arcade machine", "the flooding", "the payment system issue"
   
-  WHERE [issue] = specific, concrete description (e.g., "the pump error", "the jammed arcade machine", "the payment system down")
-  WHERE [context] = ONLY: "This is a critical issue" OR "We understand this is important"
-  
-  FORBIDDEN: Future tense, action verbs (address, resolve, fix, check, look into), timeline words (immediately, soon, will, shall). STOP after notification.
+  STRICT RULES:
+  - The reply MUST end with exactly "Management has been notified." — no other ending allowed.
+  - You MAY optionally add ONE middle sentence ONLY from these two: "This is a critical issue." OR "We understand this is important."
+  - The reply MUST follow one of these two exact patterns:
+    Pattern A: "Thank you for reporting [issue]. Management has been notified."
+    Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
+  - NO other words, sentences, or structures are permitted.
+  - DO NOT add "We're looking into it", "We've notified", "to check", "immediately", or any other phrase.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If vague or needs clarification, ask follow-up. Forward to management.
@@ -576,22 +575,19 @@ HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
-- Tier 2 CONTEXT-AWARE TEMPLATE ENFORCEMENT (Critical): You MUST generate Tier 2 replies that:
-  1. Acknowledge the SPECIFIC issue (e.g., "the pump", "the payment system", "the jammed machine")
-  2. State management has been notified
-  3. STOP. No future tense, action verbs, timeline words, or additional context.
+- Tier 2 REPLY ENFORCEMENT: The ONLY valid Tier 2 reply patterns are:
+  Pattern A: "Thank you for reporting [issue]. Management has been notified."
+  Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
   
-  ✅ ALLOWED (context-aware):
-    "Thank you for reporting the pump error. Management has been notified."
-    "Thank you for reporting the payment system issue. We've communicated this to management."
+  ✅ CORRECT:
+    "Thank you for reporting the stuck parking gate. Management has been notified."
+    "Thank you for reporting the gas pump error. Management has been notified."
     "Thank you for reporting the jammed arcade machine. This is a critical issue. Management has been notified."
-    "Thank you for reporting the flooding. We understand this is important. Management has been notified."
   
-  ❌ FORBIDDEN:
-    Future tense (will, shall), Action verbs (address, resolve, fix, check, investigate), 
-    Timeline words (immediately, shortly, soon, now), Infinitive phrases (to address), 
-    Active voice promises (we're looking into, they're investigating), 
-    Anything beyond acknowledgment + context + notification
+  ❌ WRONG — these will be rejected and replaced with a generic fallback:
+    Anything ending with "We're looking into it", "to check", "immediately", "soon", "will", "now"
+    Anything not ending with "Management has been notified."
+    Any sentence beyond the two allowed patterns
 - NEVER ask follow-up questions for Tier 1 or 2 if issue is clear. Just acknowledge and notify.
 - Keep auto_reply under 160 characters.
 - ALWAYS thank customer first in every response.
@@ -674,21 +670,10 @@ class TierTwoValidator:
     }
     
     SAFE_STRUCTURES = [
-        # Format: "Thank you for reporting [specific issue]. Management has been notified."
+        # Pattern A: "Thank you for reporting [issue]. Management has been notified."
         r"^Thank you for reporting .+\. Management has been notified\.$",
-        # Format: "Thank you for reporting [specific issue]. We've communicated this to management."
-        r"^Thank you for reporting .+\. We've communicated this to management\.$",
-        # Format: "Thank you for reporting [specific issue]. This has been communicated to management."
-        r"^Thank you for reporting .+\. This has been communicated to management\.$",
-        # Format: "Thank you for reporting [specific issue]. This has been forwarded to the team."
-        r"^Thank you for reporting .+\. This has been forwarded to the team\.$",
-        # Format with context: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
+        # Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
         r"^Thank you for reporting .+\. This is a critical issue\. Management has been notified\.$",
-        # Format with context: "Thank you for reporting [issue]. We understand this is important. Management has been notified."
-        r"^Thank you for reporting .+\. We understand this is important\. Management has been notified\.$",
-        # Variants with "We've communicated" + context
-        r"^Thank you for reporting .+\. This is a critical issue\. We've communicated this to management\.$",
-        r"^Thank you for reporting .+\. We understand this is important\. We've communicated this to management\.$",
     ]
     
     def validate(self, reply):
@@ -1476,7 +1461,7 @@ app = FastAPI(title="Hotline", version="3.3.0")
 async def get_version():
     """Check what version of code is running on this deployment."""
     return {
-        "version": "3.3",
+        "version": "3.4",
         "features": {
             "context_aware_templates": True,
             "tier_two_validator": True,
