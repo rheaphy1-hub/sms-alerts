@@ -29,6 +29,16 @@ import hmac, hashlib, secrets, time as _time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sms")
 
+# --- Version info (bump VERSION on each new index.py file) ---
+VERSION = "v8"
+BUILD_TIME = datetime.now(timezone.utc).isoformat()
+FEATURE_FLAGS = {
+    "tier3_conf_gate": 0.4,
+    "alert_dedupe_minutes": 5,
+    "classifier_history": True,
+    "process_fail_traceback": True,
+}
+
 # --- Database ---
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres")
@@ -1494,6 +1504,20 @@ def root():
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
 
+@app.get("/version")
+def version():
+    """Returns current code version, build time, and feature flags.
+    Use this to verify which version of index.py is actually deployed."""
+    _ensure_init()
+    return {
+        "version": VERSION,
+        "build_time": BUILD_TIME,
+        "features": FEATURE_FLAGS,
+        "twilio_configured": bool(_twilio_client),
+        "ai_configured": bool(_ai_client),
+        "db": "postgres" if USE_POSTGRES else "sqlite",
+    }
+
 # --- Media storage (images from MMS) ---
 def _download_and_store_media(twilio_media_url, business_id, message_id=None):
     """Download image from Twilio (authenticated) and store in Neon DB. Returns media ID or None."""
@@ -2722,7 +2746,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
         # Tier 1 is ALWAYS sent regardless of dedupe (spec: emergencies always fire).
         dedupe_skip = False
         if should_alert and tier != 1:
-            last_alert_at = get_last_alert_at_for_customer(biz["id"], sender, minutes=30)
+            last_alert_at = get_last_alert_at_for_customer(biz["id"], sender, minutes=5)
             if last_alert_at:
                 # Check if previous alert was same tier or lower-severity (higher number).
                 # Only re-alert if THIS message is more severe than what we last alerted on.
@@ -2733,7 +2757,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
                         prev_tier = prev.get("ptier") if prev else None
                         if prev_tier is not None and tier >= int(prev_tier):
                             dedupe_skip = True
-                            logger.info(f"[ALERT DEDUPED] biz={biz['id']} sender={sender} prev_tier={prev_tier} new_tier={tier} last_alert={last_alert_at} \u2014 already alerted on same/higher severity in last 30min")
+                            logger.info(f"[ALERT DEDUPED] biz={biz['id']} sender={sender} prev_tier={prev_tier} new_tier={tier} last_alert={last_alert_at} \u2014 already alerted on same/higher severity in last 5min")
                 except Exception as e:
                     logger.error(f"Dedupe check failed (will send alert): {e}")
 
