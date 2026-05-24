@@ -544,89 +544,24 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Build the reply in two explicit steps.
-
-  STEP 1 — Read the customer message and extract the specific issue as a 2-5 word noun phrase starting with "the":
-    "Parking gate is stuck closed" → "the stuck parking gate"
-    "Gas pump is showing an error" → "the gas pump error"
-    "Arcade machine is jammed and eating coins" → "the jammed arcade machine"
-    "Bathroom is flooding" → "the bathroom flooding"
-    "Payment system is down" → "the payment system issue"
-    "I've been waiting 25 minutes" → "the wait time"
-
-  STEP 2 — Choose ONE of these three patterns and place the extracted phrase:
-
-    Pattern A — simple acknowledgment (default for most Tier 2):
-      "Thank you for reporting [phrase]. Management has been notified."
-
-    Pattern B — critical flag (use ONLY for life-safety or major revenue loss: fire, flooding, gas leak, total outage):
-      "Thank you for reporting [phrase]. This is a critical issue. Management has been notified."
-
-    Pattern C — with customer guidance (when there is helpful action the CUSTOMER can take):
-      "Thank you for reporting [phrase]. [Customer guidance]. Management has been notified."
-
-  CUSTOMER GUIDANCE RULES — this is what makes the reply feel intelligent without making promises:
-
-    The guidance sentence MUST start with one of these exact phrases:
-      "Please avoid"     → e.g. "Please avoid the area for safety."
-      "Please use"       → e.g. "Please use the side entrance."
-      "Please try"       → e.g. "Please try again in a few minutes."
-      "Please contact"   → e.g. "Please contact the front desk for assistance."
-      "Please expect"    → e.g. "Please expect a brief delay."
-      "Please be aware"  → e.g. "Please be aware that the gate is currently closed."
-      "Please stay clear"→ e.g. "Please stay clear of the affected area."
-      "For your safety"  → e.g. "For your safety please stay back."
-
-    The guidance describes what the CUSTOMER does. NEVER describe what the business does.
-      ✅ "Please avoid the area" — customer action
-      ❌ "We are sending help" — business promise (forbidden)
-      ❌ "We're checking the pump" — business promise (forbidden)
-      ❌ "Someone will be there soon" — business promise (forbidden)
-
-  CHOOSING THE PATTERN — prefer Pattern C whenever possible:
-    - DEFAULT: Pattern C. Before defaulting to A, ask yourself: "Is there any reasonable thing the customer can do right now while they wait?" If yes, use Pattern C.
-    - Pattern B: ONLY for life-safety or major outages (fire, flooding, gas leak, total system down).
-    - Pattern A: ONLY when there is genuinely no helpful customer action to suggest.
-
-  GUIDANCE IDEAS BY ISSUE TYPE (use these to find a Pattern C guidance sentence):
-    - Equipment broken (pump, machine, washer) → "Please try a different [pump/machine/unit]."
-    - Door locked / entrance blocked → "Please use the side entrance." or "Please contact the front desk for assistance."
-    - Long wait / slow service → "Please expect a brief delay."
-    - Safety hazard (flooding, spill, debris) → "Please avoid the area for safety." or "Please stay clear of the affected area."
-    - Gate / barrier issue → "Please be aware that the gate is currently closed." or "Please contact the front desk for assistance."
-    - Payment / card issue → "Please try a different payment method." (use "Please try")
-    - Rude staff complaint → Pattern A (nothing actionable for the customer)
-    - Vague or unclear complaint → Pattern A (nothing actionable for the customer)
-
-  The reply MUST end with "Management has been notified." Nothing comes after it.
-  Do not paraphrase the customer message into vague terms like "this" or "the issue" — extract a concrete noun phrase.
-- Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action.
+- Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Ask for specifics ONLY if genuinely needed ("Which area?" "What exactly happened?"). Natural tone, no corporate language.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
-- Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If vague or needs clarification, ask follow-up. Forward to management.
+- Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If genuinely vague or unclear, ask one clarifying question. Forward to management. Natural conversation, not templates.
 
-FOLLOW-UP QUESTIONS (ask for clarity on):
-- Vague issues: "Which [machine/bathroom/area/location]?"
-- Unclear descriptions: "Can you tell us more about what's happening?"
-- Timing: "Is this still happening?"
-- Multi-location: "Which unit/location/station are you at?"
-- Technical: "What's the specific error message?"
-- When to ask: Tier 3 (reputation), Tier 4 inquiry (vague), only if TRULY unclear.
-- When NOT to ask: Tier 1 (emergency), Tier 2 clear issues (management knows), Tier 4 positive.
+FOLLOW-UP QUESTIONS (ask for clarity ONLY in these cases):
+- Tier 3 (Complaint/Reputation): Ask specifics to help resolution. "Which [machine/area]?" or "What specifically happened?"
+- Tier 4 Inquiry (Vague): Ask for clarity since you cannot answer without details. "Which location?" or "Can you tell us more?"
+- NEVER ask follow-ups for: Tier 1 (emergency — no time), Tier 2 clear issues (management knows), Tier 4 positive (just thank them).
 
 HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
-- Tier 2 REPLY ENFORCEMENT: The ONLY valid Tier 2 reply patterns are:
-  Pattern A: "Thank you for reporting [issue]. Management has been notified."
-  Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
-
-  [issue] MUST be the specific problem named (e.g. "the gas pump error", "the stuck gate", "the flooding").
-  NEVER use "this", "the issue", or any vague placeholder for [issue].
-  NEVER end with anything other than "Management has been notified."
-  Replies using "this" or vague placeholders will be replaced with a generic fallback automatically.
-- NEVER ask follow-up questions for Tier 1 or 2 if issue is clear. Just acknowledge and notify.
+- NEVER ask follow-up questions for Tier 1 (emergency), Tier 2 (clear issues), or Tier 4 positive.
+- Only ask follow-ups for: Tier 3 complaints (if specifics needed) or Tier 4 vague inquiries (if clarification needed).
 - Keep auto_reply under 160 characters.
+- Vary responses naturally. Don't repeat same template. Sound conversational, not corporate.
 - ALWAYS thank customer first in every response.
 
 EDGE CASES — ACCESS (all Tier 2, category "access"):
@@ -691,101 +626,6 @@ def _anthropic_http(system_prompt, user_msg, model="claude-haiku-4-5-20251001", 
     return data["content"][0]["text"].strip()
 
 
-class TierTwoValidator:
-    """Enforces safe grammatical structures for Tier 2 auto-replies."""
-    
-    FORBIDDEN_FUTURE_VERBS = {'will', 'shall', 'are going to', 'is going to'}
-    FORBIDDEN_ACTION_VERBS = {
-        'address', 'resolve', 'fix', 'handle', 'investigate', 'manage', 
-        'review', 'check', 'look into', 'deal with', 'control', 'ensure',
-        'guarantee', 'commit', 'undertake', 'perform', 'execute', 'implement',
-        'arrange', 'organize'
-    }
-    FORBIDDEN_TIMELINE_WORDS = {
-        'immediately', 'shortly', 'soon', 'now', 'at once', 'in a moment',
-        'momentarily', 'right away', 'asap'
-    }
-    
-    # Whitelisted guidance starters — customer-facing safety/practical tips only.
-    # These describe what the CUSTOMER can do, never what the BUSINESS will do.
-    GUIDANCE_STARTERS = (
-        'Please avoid',
-        'Please use',
-        'Please try',
-        'Please contact',
-        'Please expect',
-        'Please be aware',
-        'Please stay clear',
-        'For your safety',
-    )
-
-    SAFE_STRUCTURES = [
-        # Pattern A: simple acknowledgment
-        # "Thank you for reporting [issue]. Management has been notified."
-        r"^Thank you for reporting .+\. Management has been notified\.$",
-        # Pattern B: critical flag
-        # "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
-        r"^Thank you for reporting .+\. This is a critical issue\. Management has been notified\.$",
-        # Pattern C: with customer guidance (one sentence between issue and notification)
-        # "Thank you for reporting [issue]. [Customer guidance]. Management has been notified."
-        # The guidance sentence is validated separately against GUIDANCE_STARTERS
-        r"^Thank you for reporting [^.]+\. ([^.]+)\. Management has been notified\.$",
-    ]
-    
-    def validate(self, reply):
-        """
-        Validate a Tier 2 reply matches safe structures.
-        
-        Returns:
-          (is_safe: bool, reason: str)
-        """
-        import re
-        
-        # Check 1: Matches safe structure
-        if not any(re.match(pattern, reply, re.IGNORECASE) for pattern in self.SAFE_STRUCTURES):
-            return False, "Reply does not match approved Tier 2 structures"
-
-        # Check 1b: If reply uses Pattern C (3-sentence), the middle sentence must be
-        # either the critical-issue flag OR start with an approved guidance phrase.
-        # This keeps customer guidance allowed while blocking any business-action promises.
-        parts = [p.strip() for p in reply.split(".") if p.strip()]
-        if len(parts) == 3:
-            middle = parts[1]
-            if middle != "This is a critical issue":
-                if not any(middle.startswith(s) for s in self.GUIDANCE_STARTERS):
-                    return False, f"Middle sentence not in allowed guidance set: '{middle}'"
-        
-        # Check 2: No forbidden future verbs (word-boundary match to avoid false positives)
-        reply_lower = reply.lower()
-        for verb in self.FORBIDDEN_FUTURE_VERBS:
-            if re.search(r'\b' + re.escape(verb) + r'\b', reply_lower):
-                return False, f"Forbidden future verb: '{verb}'"
-        
-        # Check 3: No forbidden action verbs (word-boundary match — 'manage' must NOT match 'Management')
-        for verb in self.FORBIDDEN_ACTION_VERBS:
-            if re.search(r'\b' + re.escape(verb) + r'\b', reply_lower):
-                return False, f"Forbidden action verb: '{verb}'"
-        
-        # Check 4: No forbidden timeline words (word-boundary match)
-        for word in self.FORBIDDEN_TIMELINE_WORDS:
-            if re.search(r'\b' + re.escape(word) + r'\b', reply_lower):
-                return False, f"Forbidden timeline word: '{word}'"
-        
-        # Check 5: Ends with period (no additions)
-        if not reply.endswith('.'):
-            return False, "Reply must end with period"
-        
-        # Check 6: No infinitive phrases (to [verb])
-        if re.search(r'\bto\s+[a-z]+', reply, re.IGNORECASE):
-            return False, "Infinitive phrases forbidden"
-        
-        # Check 7: No "will be [verb]" (passive future)
-        if 'will be' in reply_lower:
-            return False, "Passive future tense forbidden"
-        
-        return True, "Valid Tier 2 reply"
-
-
 def classify_message(text, website_info=""):
     # SAFETY FIRST: Check for emergency keywords BEFORE calling AI.
     # The AI can misinterpret literal emergencies as figurative language.
@@ -805,19 +645,6 @@ def classify_message(text, website_info=""):
             r["confidence"] = max(0.0,min(1.0,float(r.get("confidence",0.5))))
             for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks for reaching out. We've received your message.")]:
                 r.setdefault(k,v)
-            
-            # NEW: Validate Tier 2 replies match safe structures
-            if r.get("tier") == 2:
-                validator = TierTwoValidator()
-                is_valid, reason = validator.validate(r.get("auto_reply", ""))
-                if not is_valid:
-                    logger.warning(f"[TIER2 VALIDATION FAILED] Reason: {reason}")
-                    logger.warning(f"[TIER2 VALIDATION FAILED] Original reply: {r.get('auto_reply')}")
-                    # Fallback to safest response
-                    r["auto_reply"] = "Thank you for reporting this. Management has been notified."
-                else:
-                    logger.info(f"[TIER2 VALIDATION PASSED] Reply is safe")
-            
             return r
         except Exception as e: logger.error(f"AI classify failed: {e}")
     return _classify_fallback(text)
@@ -1520,30 +1347,7 @@ def send_all_digests(force_freq=None):
 
 
 # --- FastAPI ---
-app = FastAPI(title="Hotline", version="3.3.0")
-
-# ── Version Endpoint (to check what code is running) ──────────────────────
-@app.get("/version")
-async def get_version():
-    """Check what version of code is running on this deployment."""
-    return {
-        "version": "3.8",
-        "features": {
-            "context_aware_templates": True,
-            "tier_two_validator": True,
-            "specific_issue_acknowledgment": True,
-            "strict_regex_enforcement": True,
-            "one_code_path": True
-        },
-        "validator": "TierTwoValidator (7-point validation)",
-        "safe_structures": [
-            "Thank you for reporting [issue]. Management has been notified.",
-            "Thank you for reporting [issue]. We've communicated this to management.",
-            "Thank you for reporting [issue]. This is a critical issue. Management has been notified.",
-            "Thank you for reporting [issue]. We understand this is important. Management has been notified."
-        ],
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
+app = FastAPI(title="Hotline", version="3.0.0")
 
 RATE_LIMIT_MAX = 5; RATE_LIMIT_WINDOW = 10; _initialized = False
 _ENV_OWNER = os.getenv("OWNER_PHONE_NUMBER",""); _ENV_TWILIO = os.getenv("TWILIO_PHONE_NUMBER","")
@@ -2116,7 +1920,7 @@ def admin_ui(request: Request):
         alert_phones_display = alert_phones_str if alert_phones_str else b.get("owner_phone","")
         rows += (
             f'<tr id="row-{bid}">'
-            f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace(chr(39), "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
+            f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace("\'", "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
             f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
@@ -2435,7 +2239,7 @@ async function openDrawer(bizId, bizName){{
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
       <div>${{msg_rows}}</div>
       <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
-        <button onclick="openEditModal('{b['id']}',{{'name':'{b['name'].replace(chr(39),'').replace(chr(34),'&quot;')}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+        <button onclick="openEditModal('{bid}',{{'name':'{b['name'].replace("'","").replace("\"","&quot;")}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
       </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
@@ -3119,22 +2923,11 @@ async def demo_classify(request_data:dict=None):
                 for h in history[-6:]: user_msg += f'Customer: "{h.get("customer","")}"\nSystem: "{h.get("reply","")}"\n\n'
                 user_msg += f'New message from same customer: "{text}"\n\nClassify with full context.'
             else: user_msg = f'Classify this customer SMS:\n\n"{text}"'
-            # Use same CLASSIFICATION_PROMPT as real SMS — one code path, one standard
-            demo_prompt = CLASSIFICATION_PROMPT.replace("{website_context}", "No business website info available. Do NOT guess answers to customer questions.")
-            raw = _anthropic_http(demo_prompt, user_msg, model="claude-haiku-4-5-20251001")
+            raw = _anthropic_http(DEMO_PROMPT, user_msg, model="claude-haiku-4-5-20251001")
             if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             c = json.loads(raw)
             c["tier"]=max(1,min(4,int(c.get("tier",4)))); c["confidence"]=max(0.0,min(1.0,float(c.get("confidence",0.5))))
             for k,v in [("category","other"),("sentiment","neutral"),("summary",text[:50]),("auto_reply","Thanks so much for reaching out!")]: c.setdefault(k,v)
-            # Apply same TierTwoValidator as real SMS — demo and production behave identically
-            if c.get("tier") == 2:
-                validator = TierTwoValidator()
-                is_valid, reason = validator.validate(c.get("auto_reply", ""))
-                if not is_valid:
-                    logger.warning(f"[DEMO TIER2 VALIDATION FAILED] Reason: {reason} | Original: {c.get('auto_reply')}")
-                    c["auto_reply"] = "Thank you for reporting this. Management has been notified."
-                else:
-                    logger.info(f"[DEMO TIER2 VALIDATION PASSED]")
         except Exception as e: logger.error(f"Demo: {e}"); c = _classify_fallback(text)
     else: c = _classify_fallback(text)
     explanation = generate_explanation(c["tier"], c.get("category", "other"))
