@@ -558,6 +558,7 @@ HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
+- NEVER use words like "immediately", "shortly", "soon", "right away", "quickly", "asap", "will get back to you". Avoid all urgency language about timing.
 - NEVER ask follow-up questions for Tier 1 (emergency), Tier 2 (clear issues), or Tier 4 positive.
 - Only ask follow-ups for: Tier 3 complaints (if specifics needed) or Tier 4 vague inquiries (if clarification needed).
 - Keep auto_reply under 160 characters.
@@ -734,11 +735,11 @@ def _classify_fallback(text):
     # Use word-boundary matching on cleaned text so punctuation never blocks a match
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,"summary":"Possible emergency reported",
-                "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business operator."}
+                "auto_reply":"Thank you for alerting us. Call 911 now. Evacuate if safe to do so."}
     question_words = ["what time","when do","where is","where are","do you have","is there","how do i","how much","can i","are you open"]
     if any(w in t for w in question_words) or t.endswith("?"):
         return {"tier":4,"category":"inquiry","sentiment":"neutral","confidence":0.7,"summary":"Customer inquiry",
-                "auto_reply":"Great question! We've forwarded this to management and someone will get back to you shortly."}
+                "auto_reply":"Thanks for reaching out. We'll have someone get back to you."}
     crit = {"cleanliness":(["dirty","disgusting","filthy","mess","bathroom","gross","unsanitary"],
             "We've flagged this as a cleanliness issue and notified management. Thank you for letting us know."),
         "access":(["door is locked","locked door","can't get in","cant get in","door won't open","door wont open","locked","nobody answered","no one at the door","can't enter","cant enter"],
