@@ -583,10 +583,20 @@ AUTO-REPLY TONE:
       ❌ "We're checking the pump" — business promise (forbidden)
       ❌ "Someone will be there soon" — business promise (forbidden)
 
-  CHOOSING THE PATTERN:
-    - If the issue has clear customer-facing guidance (safety, alternate route, retry) → Pattern C
-    - If the issue is life-threatening or business-critical → Pattern B
-    - Otherwise → Pattern A
+  CHOOSING THE PATTERN — prefer Pattern C whenever possible:
+    - DEFAULT: Pattern C. Before defaulting to A, ask yourself: "Is there any reasonable thing the customer can do right now while they wait?" If yes, use Pattern C.
+    - Pattern B: ONLY for life-safety or major outages (fire, flooding, gas leak, total system down).
+    - Pattern A: ONLY when there is genuinely no helpful customer action to suggest.
+
+  GUIDANCE IDEAS BY ISSUE TYPE (use these to find a Pattern C guidance sentence):
+    - Equipment broken (pump, machine, washer) → "Please try a different [pump/machine/unit]."
+    - Door locked / entrance blocked → "Please use the side entrance." or "Please contact the front desk for assistance."
+    - Long wait / slow service → "Please expect a brief delay."
+    - Safety hazard (flooding, spill, debris) → "Please avoid the area for safety." or "Please stay clear of the affected area."
+    - Gate / barrier issue → "Please be aware that the gate is currently closed." or "Please contact the front desk for assistance."
+    - Payment / card issue → "Please try a different payment method." (use "Please try")
+    - Rude staff complaint → Pattern A (nothing actionable for the customer)
+    - Vague or unclear complaint → Pattern A (nothing actionable for the customer)
 
   The reply MUST end with "Management has been notified." Nothing comes after it.
   Do not paraphrase the customer message into vague terms like "this" or "the issue" — extract a concrete noun phrase.
@@ -1517,7 +1527,7 @@ app = FastAPI(title="Hotline", version="3.3.0")
 async def get_version():
     """Check what version of code is running on this deployment."""
     return {
-        "version": "3.7",
+        "version": "3.8",
         "features": {
             "context_aware_templates": True,
             "tier_two_validator": True,
