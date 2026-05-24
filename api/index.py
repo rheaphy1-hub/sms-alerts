@@ -1923,7 +1923,7 @@ def admin_ui(request: Request):
         alert_phones_display = alert_phones_str if alert_phones_str else b.get("owner_phone","")
         rows += (
             f'<tr id="row-{bid}">'
-            f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace(chr(39), "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
+            f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace("\'", "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
             f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
@@ -2242,7 +2242,7 @@ async function openDrawer(bizId, bizName){{
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
       <div>${{msg_rows}}</div>
       <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
-        <button onclick="openEditModal('{bizId}',{{'name':'{b['name'].replace(chr(39),'').replace(chr(34),'&quot;')}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+        <button onclick="openEditModal('{bizId}',{{'name':'{b['name'].replace("'","").replace("\"","&quot;")}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
       </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
