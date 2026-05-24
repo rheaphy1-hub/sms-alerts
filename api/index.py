@@ -547,19 +547,46 @@ AUTO-REPLY TONE:
 - Tier 2: Build the reply in two explicit steps.
 
   STEP 1 — Read the customer message and extract the specific issue as a 2-5 word noun phrase starting with "the":
-    Customer says "Parking gate is stuck closed" → extract: "the stuck parking gate"
-    Customer says "Gas pump is showing an error" → extract: "the gas pump error"
-    Customer says "Arcade machine is jammed and eating coins" → extract: "the jammed arcade machine"
-    Customer says "Bathroom is flooding" → extract: "the bathroom flooding"
-    Customer says "Payment system is down" → extract: "the payment system issue"
-    Customer says "I've been waiting 25 minutes" → extract: "the wait time"
+    "Parking gate is stuck closed" → "the stuck parking gate"
+    "Gas pump is showing an error" → "the gas pump error"
+    "Arcade machine is jammed and eating coins" → "the jammed arcade machine"
+    "Bathroom is flooding" → "the bathroom flooding"
+    "Payment system is down" → "the payment system issue"
+    "I've been waiting 25 minutes" → "the wait time"
 
-  STEP 2 — Place the extracted phrase into one of these two patterns:
-    Pattern A: "Thank you for reporting [extracted phrase]. Management has been notified."
-    Pattern B: "Thank you for reporting [extracted phrase]. This is a critical issue. Management has been notified."
+  STEP 2 — Choose ONE of these three patterns and place the extracted phrase:
 
-  Use Pattern B only for safety-critical or revenue-critical issues (flooding, fire risk, equipment down, payment failure).
-  Use Pattern A for everything else in Tier 2.
+    Pattern A — simple acknowledgment (default for most Tier 2):
+      "Thank you for reporting [phrase]. Management has been notified."
+
+    Pattern B — critical flag (use ONLY for life-safety or major revenue loss: fire, flooding, gas leak, total outage):
+      "Thank you for reporting [phrase]. This is a critical issue. Management has been notified."
+
+    Pattern C — with customer guidance (when there is helpful action the CUSTOMER can take):
+      "Thank you for reporting [phrase]. [Customer guidance]. Management has been notified."
+
+  CUSTOMER GUIDANCE RULES — this is what makes the reply feel intelligent without making promises:
+
+    The guidance sentence MUST start with one of these exact phrases:
+      "Please avoid"     → e.g. "Please avoid the area for safety."
+      "Please use"       → e.g. "Please use the side entrance."
+      "Please try"       → e.g. "Please try again in a few minutes."
+      "Please contact"   → e.g. "Please contact the front desk for assistance."
+      "Please expect"    → e.g. "Please expect a brief delay."
+      "Please be aware"  → e.g. "Please be aware that the gate is currently closed."
+      "Please stay clear"→ e.g. "Please stay clear of the affected area."
+      "For your safety"  → e.g. "For your safety please stay back."
+
+    The guidance describes what the CUSTOMER does. NEVER describe what the business does.
+      ✅ "Please avoid the area" — customer action
+      ❌ "We are sending help" — business promise (forbidden)
+      ❌ "We're checking the pump" — business promise (forbidden)
+      ❌ "Someone will be there soon" — business promise (forbidden)
+
+  CHOOSING THE PATTERN:
+    - If the issue has clear customer-facing guidance (safety, alternate route, retry) → Pattern C
+    - If the issue is life-threatening or business-critical → Pattern B
+    - Otherwise → Pattern A
 
   The reply MUST end with "Management has been notified." Nothing comes after it.
   Do not paraphrase the customer message into vague terms like "this" or "the issue" — extract a concrete noun phrase.
@@ -669,11 +696,30 @@ class TierTwoValidator:
         'momentarily', 'right away', 'asap'
     }
     
+    # Whitelisted guidance starters — customer-facing safety/practical tips only.
+    # These describe what the CUSTOMER can do, never what the BUSINESS will do.
+    GUIDANCE_STARTERS = (
+        'Please avoid',
+        'Please use',
+        'Please try',
+        'Please contact',
+        'Please expect',
+        'Please be aware',
+        'Please stay clear',
+        'For your safety',
+    )
+
     SAFE_STRUCTURES = [
-        # Pattern A: "Thank you for reporting [issue]. Management has been notified."
+        # Pattern A: simple acknowledgment
+        # "Thank you for reporting [issue]. Management has been notified."
         r"^Thank you for reporting .+\. Management has been notified\.$",
-        # Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
+        # Pattern B: critical flag
+        # "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
         r"^Thank you for reporting .+\. This is a critical issue\. Management has been notified\.$",
+        # Pattern C: with customer guidance (one sentence between issue and notification)
+        # "Thank you for reporting [issue]. [Customer guidance]. Management has been notified."
+        # The guidance sentence is validated separately against GUIDANCE_STARTERS
+        r"^Thank you for reporting [^.]+\. ([^.]+)\. Management has been notified\.$",
     ]
     
     def validate(self, reply):
@@ -688,6 +734,16 @@ class TierTwoValidator:
         # Check 1: Matches safe structure
         if not any(re.match(pattern, reply, re.IGNORECASE) for pattern in self.SAFE_STRUCTURES):
             return False, "Reply does not match approved Tier 2 structures"
+
+        # Check 1b: If reply uses Pattern C (3-sentence), the middle sentence must be
+        # either the critical-issue flag OR start with an approved guidance phrase.
+        # This keeps customer guidance allowed while blocking any business-action promises.
+        parts = [p.strip() for p in reply.split(".") if p.strip()]
+        if len(parts) == 3:
+            middle = parts[1]
+            if middle != "This is a critical issue":
+                if not any(middle.startswith(s) for s in self.GUIDANCE_STARTERS):
+                    return False, f"Middle sentence not in allowed guidance set: '{middle}'"
         
         # Check 2: No forbidden future verbs (word-boundary match to avoid false positives)
         reply_lower = reply.lower()
@@ -1461,7 +1517,7 @@ app = FastAPI(title="Hotline", version="3.3.0")
 async def get_version():
     """Check what version of code is running on this deployment."""
     return {
-        "version": "3.6",
+        "version": "3.7",
         "features": {
             "context_aware_templates": True,
             "tier_two_validator": True,
