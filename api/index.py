@@ -544,20 +544,25 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 
 AUTO-REPLY TONE:
 - Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. Use EXACTLY this format — no deviations:
-  "Thank you for reporting [issue]. Management has been notified."
-  
-  WHERE [issue] = 2-5 word description extracted from the customer message.
-  Examples: "the stuck parking gate", "the gas pump error", "the jammed arcade machine", "the flooding", "the payment system issue"
-  
-  STRICT RULES:
-  - The reply MUST end with exactly "Management has been notified." — no other ending allowed.
-  - You MAY optionally add ONE middle sentence ONLY from these two: "This is a critical issue." OR "We understand this is important."
-  - The reply MUST follow one of these two exact patterns:
-    Pattern A: "Thank you for reporting [issue]. Management has been notified."
-    Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
-  - NO other words, sentences, or structures are permitted.
-  - DO NOT add "We're looking into it", "We've notified", "to check", "immediately", or any other phrase.
+- Tier 2: Build the reply in two explicit steps.
+
+  STEP 1 — Read the customer message and extract the specific issue as a 2-5 word noun phrase starting with "the":
+    Customer says "Parking gate is stuck closed" → extract: "the stuck parking gate"
+    Customer says "Gas pump is showing an error" → extract: "the gas pump error"
+    Customer says "Arcade machine is jammed and eating coins" → extract: "the jammed arcade machine"
+    Customer says "Bathroom is flooding" → extract: "the bathroom flooding"
+    Customer says "Payment system is down" → extract: "the payment system issue"
+    Customer says "I've been waiting 25 minutes" → extract: "the wait time"
+
+  STEP 2 — Place the extracted phrase into one of these two patterns:
+    Pattern A: "Thank you for reporting [extracted phrase]. Management has been notified."
+    Pattern B: "Thank you for reporting [extracted phrase]. This is a critical issue. Management has been notified."
+
+  Use Pattern B only for safety-critical or revenue-critical issues (flooding, fire risk, equipment down, payment failure).
+  Use Pattern A for everything else in Tier 2.
+
+  The reply MUST end with "Management has been notified." Nothing comes after it.
+  Do not paraphrase the customer message into vague terms like "this" or "the issue" — extract a concrete noun phrase.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If vague or needs clarification, ask follow-up. Forward to management.
@@ -578,16 +583,11 @@ HARD RULES:
 - Tier 2 REPLY ENFORCEMENT: The ONLY valid Tier 2 reply patterns are:
   Pattern A: "Thank you for reporting [issue]. Management has been notified."
   Pattern B: "Thank you for reporting [issue]. This is a critical issue. Management has been notified."
-  
-  ✅ CORRECT:
-    "Thank you for reporting the stuck parking gate. Management has been notified."
-    "Thank you for reporting the gas pump error. Management has been notified."
-    "Thank you for reporting the jammed arcade machine. This is a critical issue. Management has been notified."
-  
-  ❌ WRONG — these will be rejected and replaced with a generic fallback:
-    Anything ending with "We're looking into it", "to check", "immediately", "soon", "will", "now"
-    Anything not ending with "Management has been notified."
-    Any sentence beyond the two allowed patterns
+
+  [issue] MUST be the specific problem named (e.g. "the gas pump error", "the stuck gate", "the flooding").
+  NEVER use "this", "the issue", or any vague placeholder for [issue].
+  NEVER end with anything other than "Management has been notified."
+  Replies using "this" or vague placeholders will be replaced with a generic fallback automatically.
 - NEVER ask follow-up questions for Tier 1 or 2 if issue is clear. Just acknowledge and notify.
 - Keep auto_reply under 160 characters.
 - ALWAYS thank customer first in every response.
@@ -1461,7 +1461,7 @@ app = FastAPI(title="Hotline", version="3.3.0")
 async def get_version():
     """Check what version of code is running on this deployment."""
     return {
-        "version": "3.4",
+        "version": "3.5",
         "features": {
             "context_aware_templates": True,
             "tier_two_validator": True,
