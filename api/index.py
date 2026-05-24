@@ -689,20 +689,20 @@ class TierTwoValidator:
         if not any(re.match(pattern, reply, re.IGNORECASE) for pattern in self.SAFE_STRUCTURES):
             return False, "Reply does not match approved Tier 2 structures"
         
-        # Check 2: No forbidden future verbs
+        # Check 2: No forbidden future verbs (word-boundary match to avoid false positives)
         reply_lower = reply.lower()
         for verb in self.FORBIDDEN_FUTURE_VERBS:
-            if verb in reply_lower:
+            if re.search(r'\b' + re.escape(verb) + r'\b', reply_lower):
                 return False, f"Forbidden future verb: '{verb}'"
         
-        # Check 3: No forbidden action verbs
+        # Check 3: No forbidden action verbs (word-boundary match — 'manage' must NOT match 'Management')
         for verb in self.FORBIDDEN_ACTION_VERBS:
-            if verb in reply_lower:
+            if re.search(r'\b' + re.escape(verb) + r'\b', reply_lower):
                 return False, f"Forbidden action verb: '{verb}'"
         
-        # Check 4: No forbidden timeline words
+        # Check 4: No forbidden timeline words (word-boundary match)
         for word in self.FORBIDDEN_TIMELINE_WORDS:
-            if word in reply_lower:
+            if re.search(r'\b' + re.escape(word) + r'\b', reply_lower):
                 return False, f"Forbidden timeline word: '{word}'"
         
         # Check 5: Ends with period (no additions)
@@ -1461,7 +1461,7 @@ app = FastAPI(title="Hotline", version="3.3.0")
 async def get_version():
     """Check what version of code is running on this deployment."""
     return {
-        "version": "3.5",
+        "version": "3.6",
         "features": {
             "context_aware_templates": True,
             "tier_two_validator": True,
