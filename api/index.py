@@ -255,6 +255,36 @@ def log_alert(mid, bid, at):
 def update_auto_reply(mid, text):
     with get_db() as c: _execute(c, _q("UPDATE messages SET auto_reply=? WHERE id=?"), (text or "", mid))
 
+def get_recent_customer_history(bid, customer_phone, minutes=30, limit=6):
+    """Return last `limit` messages between this customer and the business in the past `minutes`,
+    oldest-first, as [{customer, reply}]. Used to give the classifier conversation context."""
+    cust = _normalize_phone(customer_phone)
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    out = []
+    try:
+        with get_db() as c:
+            rows = _fetchall(c, _q("SELECT message_text, auto_reply FROM messages WHERE business_id=? AND from_number=? AND created_at>=? ORDER BY created_at DESC LIMIT ?"),
+                             (bid, cust, cutoff, limit))
+            for r in reversed(rows or []):
+                out.append({"customer": r.get("message_text") or "", "reply": r.get("auto_reply") or ""})
+    except Exception as e:
+        logger.error(f"get_recent_customer_history failed: {e}")
+    return out
+
+def get_last_alert_at_for_customer(bid, customer_phone, minutes=30):
+    """Return the most recent alert_log timestamp for this customer in the past `minutes`, or None.
+    Used to de-dupe alerts during an active back-and-forth so the operator gets one alert per real issue."""
+    cust = _normalize_phone(customer_phone)
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT MAX(a.sent_at) as last_at FROM alert_log a JOIN messages m ON a.message_id=m.id WHERE a.business_id=? AND m.from_number=? AND a.sent_at>=?"),
+                            (bid, cust, cutoff))
+            if row and row.get("last_at"): return row["last_at"]
+    except Exception as e:
+        logger.error(f"get_last_alert_at_for_customer failed: {e}")
+    return None
+
 # --- Live conversation state (15-min operator-takeover window) ---
 CONVERSATION_WINDOW_MIN = 15
 
@@ -627,7 +657,10 @@ def _anthropic_http(system_prompt, user_msg, model="claude-haiku-4-5-20251001", 
     return data["content"][0]["text"].strip()
 
 
-def classify_message(text, website_info=""):
+def classify_message(text, website_info="", history=None):
+    """Classify a customer SMS. If history (list of {customer, reply} dicts) is provided,
+    the AI uses prior turns as context so it doesn't reclassify follow-ups from scratch
+    or ask circular clarifying questions."""
     # SAFETY FIRST: Check for emergency keywords BEFORE calling AI.
     # The AI can misinterpret literal emergencies as figurative language.
     # Regex-based detection is fast, reliable, and errs on the side of caution.
@@ -639,7 +672,21 @@ def classify_message(text, website_info=""):
     prompt = CLASSIFICATION_PROMPT.replace("{website_context}", ctx)
     if _ai_client:
         try:
-            raw = _anthropic_http(prompt, f'Classify this customer SMS:\n\n"{text}"')
+            # Build user message — include conversation history if present
+            if history:
+                user_msg = "Conversation so far (same customer):\n"
+                for h in history[-6:]:
+                    cust = (h.get("customer") or "").strip()
+                    rep = (h.get("reply") or "").strip()
+                    if cust: user_msg += f'Customer: "{cust}"\n'
+                    if rep: user_msg += f'System replied: "{rep}"\n'
+                user_msg += (f'\nNew message from same customer: "{text}"\n\n'
+                             f'Classify with full context. If this is a follow-up to a prior complaint, '
+                             f'KEEP the same tier and category — do NOT reclassify from scratch. '
+                             f'If the operator already has enough info, do NOT ask another follow-up question.')
+            else:
+                user_msg = f'Classify this customer SMS:\n\n"{text}"'
+            raw = _anthropic_http(prompt, user_msg)
             if raw.startswith("```"): raw = raw.split("\n",1)[1].rsplit("```",1)[0].strip()
             r = json.loads(raw)
             r["tier"] = max(1,min(4,int(r.get("tier",4))))
@@ -2631,44 +2678,84 @@ def _scrub_hotline_header(body: str) -> str:
 
 def _process_customer_message(biz, sender, body, image_url=""):
     """Classify + alert for a customer message. Returns the auto-reply text (or empty if suppressed)."""
-    website_info = biz.get("website_info", "")
-    c = classify_message(body, website_info=website_info)
-    explanation = generate_explanation(c["tier"], c.get("category", "other"))
-    
-    # If customer sent an image, download and store it for public access
-    public_media_url = ""
-    if image_url:
-        media_id = _download_and_store_media(image_url, biz["id"])
-        if media_id:
-            public_media_url = _get_public_media_url(media_id)
-    
-    msg_id = store_message(biz["id"], sender, body, c, explanation=explanation, image_url=public_media_url or image_url)
-    tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
-    cat = c.get("category", "other")
+    try:
+        website_info = biz.get("website_info", "")
+        # Pull recent back-and-forth between this customer and this business so the
+        # classifier doesn't reclassify follow-ups from scratch or loop on clarifying questions.
+        history = get_recent_customer_history(biz["id"], sender, minutes=30, limit=6)
+        c = classify_message(body, website_info=website_info, history=history)
+        explanation = generate_explanation(c["tier"], c.get("category", "other"))
+        
+        # If customer sent an image, download and store it for public access
+        public_media_url = ""
+        if image_url:
+            media_id = _download_and_store_media(image_url, biz["id"])
+            if media_id:
+                public_media_url = _get_public_media_url(media_id)
+        
+        msg_id = store_message(biz["id"], sender, body, c, explanation=explanation, image_url=public_media_url or image_url)
+        tier, conf, summary = c["tier"], c["confidence"], c.get("summary", "Issue reported")
+        cat = c.get("category", "other")
 
-    # If the operator has recently replied to this customer, the human is on the
-    # line. Don't step on them with an AI message. Alerts still fire.
-    convo_active = is_conversation_active(biz["id"], sender)
-    if convo_active:
-        auto_reply = ""
-        logger.info(f"[CONVO ACTIVE] Suppressing auto-reply for {sender} \u2192 {biz['id']} (operator active)")
-    else:
-        auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
-    update_auto_reply(msg_id, auto_reply)
+        # If the operator has recently replied to this customer, the human is on the
+        # line. Don't step on them with an AI message. Alerts still fire.
+        convo_active = is_conversation_active(biz["id"], sender)
+        if convo_active:
+            auto_reply = ""
+            logger.info(f"[CONVO ACTIVE] Suppressing auto-reply for {sender} \u2192 {biz['id']} (operator active)")
+        else:
+            auto_reply = c.get("auto_reply") or "Thanks for reaching out. We've received your message."
+        update_auto_reply(msg_id, auto_reply)
 
-    alert_phones = get_alert_phones(biz)
-    should_alert_t3 = biz.get("alert_tier3") and tier == 3 and conf > 0.5
-    should_alert = tier == 1 or (tier == 2 and conf > 0.7) or should_alert_t3
-    paused = bool(biz.get("paused"))
-    recent_count = get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW)
+        alert_phones = get_alert_phones(biz)
+        # Tier 3 gate lowered from 0.5 to 0.4 — short clear complaints like "food is terrible"
+        # often come back with conf 0.4–0.5. Tier 2 stays at 0.7 (higher bar for operational).
+        should_alert_t3 = bool(biz.get("alert_tier3")) and tier == 3 and conf >= 0.4
+        should_alert = tier == 1 or (tier == 2 and conf > 0.7) or should_alert_t3
+        paused = bool(biz.get("paused"))
+        recent_count = get_recent_alert_count(biz["id"], RATE_LIMIT_WINDOW)
 
-    logger.info(f"[CLASSIFY] biz={biz['id']} tier={tier} conf={conf:.2f} cat={cat} summary={summary!r}")
+        logger.info(f"[CLASSIFY] biz={biz['id']} tier={tier} conf={conf:.2f} cat={cat} alert_tier3={biz.get('alert_tier3')} should_alert={should_alert} summary={summary!r}")
 
-    _trial_ok = can_send_alerts(biz)
-    if not _trial_ok and tier != 1:
-        logger.info(f"[TRIAL BLOCKED] Alert suppressed for {biz['id']} — trial expired or unpaid")
-    elif alert_phones and should_alert and not (paused and tier != 1):
-        if recent_count < RATE_LIMIT_MAX:
+        # Dedupe alerts within an active thread. If we already alerted this customer in the
+        # past 30 min AND the new tier isn't an escalation (lower-numbered), skip the alert.
+        # Tier 1 is ALWAYS sent regardless of dedupe (spec: emergencies always fire).
+        dedupe_skip = False
+        if should_alert and tier != 1:
+            last_alert_at = get_last_alert_at_for_customer(biz["id"], sender, minutes=30)
+            if last_alert_at:
+                # Check if previous alert was same tier or lower-severity (higher number).
+                # Only re-alert if THIS message is more severe than what we last alerted on.
+                try:
+                    with get_db() as conn:
+                        prev = _fetchone(conn, _q("SELECT m.tier as ptier FROM alert_log a JOIN messages m ON a.message_id=m.id WHERE a.business_id=? AND m.from_number=? AND a.sent_at=? LIMIT 1"),
+                                         (biz["id"], _normalize_phone(sender), last_alert_at))
+                        prev_tier = prev.get("ptier") if prev else None
+                        if prev_tier is not None and tier >= int(prev_tier):
+                            dedupe_skip = True
+                            logger.info(f"[ALERT DEDUPED] biz={biz['id']} sender={sender} prev_tier={prev_tier} new_tier={tier} last_alert={last_alert_at} \u2014 already alerted on same/higher severity in last 30min")
+                except Exception as e:
+                    logger.error(f"Dedupe check failed (will send alert): {e}")
+
+        _trial_ok = can_send_alerts(biz)
+        if not _trial_ok and tier != 1:
+            logger.info(f"[ALERT SKIPPED] reason=trial_expired biz={biz['id']} tier={tier}")
+        elif not alert_phones:
+            logger.info(f"[ALERT SKIPPED] reason=no_alert_phones biz={biz['id']} tier={tier}")
+        elif not should_alert:
+            reasons = []
+            if tier == 2 and conf <= 0.7: reasons.append(f"tier2_low_conf({conf:.2f})")
+            if tier == 3 and not biz.get("alert_tier3"): reasons.append("tier3_disabled")
+            if tier == 3 and biz.get("alert_tier3") and conf < 0.4: reasons.append(f"tier3_low_conf({conf:.2f})")
+            if tier == 4: reasons.append("tier4_routine")
+            logger.info(f"[ALERT SKIPPED] reason={'|'.join(reasons) or 'policy'} biz={biz['id']} tier={tier} conf={conf:.2f}")
+        elif paused and tier != 1:
+            logger.info(f"[ALERT SKIPPED] reason=paused biz={biz['id']} tier={tier}")
+        elif dedupe_skip:
+            pass  # already logged
+        elif recent_count >= RATE_LIMIT_MAX:
+            logger.warning(f"[RATE LIMITED] {biz['id']} hit {recent_count} alerts in {RATE_LIMIT_WINDOW}min window")
+        else:
             # Self-contained alert: everything the operator needs in one message.
             if tier == 1:
                 header = "\U0001f6a8 URGENT"
@@ -2690,12 +2777,14 @@ def _process_customer_message(biz, sender, body, image_url=""):
                 alert += "\n📷 Photo attached"
             for p in alert_phones:
                 ok = send_sms(p, alert, media_url=public_media_url if (public_media_url and biz.get("alert_include_images")) else "")
-                logger.info(f"[ALERT SENT] to={p} ok={ok}")
+                logger.info(f"[ALERT SENT] to={p} ok={ok} biz={biz['id']} tier={tier}")
             mark_alerted(msg_id); log_alert(msg_id, biz["id"], f"tier_{tier}")
-        else:
-            logger.warning(f"[RATE LIMITED] {biz['id']} hit {recent_count} alerts in {RATE_LIMIT_WINDOW}min window")
 
-    return auto_reply
+        return auto_reply
+    except Exception as e:
+        import traceback
+        logger.error(f"[PROCESS FAIL] biz={biz.get('id')} sender={sender} body={body[:80]!r} err={e}\n{traceback.format_exc()}")
+        return "Thanks for reaching out. We've received your message."
 
 
 @app.post("/sms/incoming")
