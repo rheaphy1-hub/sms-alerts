@@ -545,26 +545,24 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 AUTO-REPLY TONE:
 - Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
 - Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action.
-- Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
+- Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Ask for specifics ONLY if genuinely needed ("Which area?" "What exactly happened?"). Natural tone, no corporate language.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
-- Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If vague or needs clarification, ask follow-up. Forward to management.
+- Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If genuinely vague or unclear, ask one clarifying question. Forward to management. Natural conversation, not templates.
 
-FOLLOW-UP QUESTIONS (ask for clarity on):
-- Vague issues: "Which [machine/bathroom/area/location]?"
-- Unclear descriptions: "Can you tell us more about what's happening?"
-- Timing: "Is this still happening?"
-- Multi-location: "Which unit/location/station are you at?"
-- Technical: "What's the specific error message?"
-- When to ask: Tier 3 (reputation), Tier 4 inquiry (vague), only if TRULY unclear.
-- When NOT to ask: Tier 1 (emergency), Tier 2 clear issues (management knows), Tier 4 positive.
+FOLLOW-UP QUESTIONS (ask for clarity ONLY in these cases):
+- Tier 3 (Complaint/Reputation): Ask specifics to help resolution. "Which [machine/area]?" or "What specifically happened?"
+- Tier 4 Inquiry (Vague): Ask for clarity since you cannot answer without details. "Which location?" or "Can you tell us more?"
+- NEVER ask follow-ups for: Tier 1 (emergency — no time), Tier 2 clear issues (management knows), Tier 4 positive (just thank them).
 
 HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
-- NEVER ask follow-up questions for Tier 1 or 2 if issue is clear. Just acknowledge and notify.
+- NEVER use words like "immediately", "shortly", "soon", "right away", "quickly", "asap", "will get back to you". Avoid all urgency language about timing.
+- NEVER ask follow-up questions for Tier 1 (emergency), Tier 2 (clear issues), or Tier 4 positive.
+- Only ask follow-ups for: Tier 3 complaints (if specifics needed) or Tier 4 vague inquiries (if clarification needed).
 - Keep auto_reply under 160 characters.
-- Vary responses naturally. Don't repeat same template.
+- Vary responses naturally. Don't repeat same template. Sound conversational, not corporate.
 - ALWAYS thank customer first in every response.
 
 EDGE CASES — ACCESS (all Tier 2, category "access"):
@@ -737,11 +735,11 @@ def _classify_fallback(text):
     # Use word-boundary matching on cleaned text so punctuation never blocks a match
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.8,"summary":"Possible emergency reported",
-                "auto_reply":"If this is an emergency, please call 911 immediately. We have notified the business operator."}
+                "auto_reply":"Thank you for alerting us. Call 911 now. Evacuate if safe to do so."}
     question_words = ["what time","when do","where is","where are","do you have","is there","how do i","how much","can i","are you open"]
     if any(w in t for w in question_words) or t.endswith("?"):
         return {"tier":4,"category":"inquiry","sentiment":"neutral","confidence":0.7,"summary":"Customer inquiry",
-                "auto_reply":"Great question! We've forwarded this to management and someone will get back to you shortly."}
+                "auto_reply":"Thanks for reaching out. We'll have someone get back to you."}
     crit = {"cleanliness":(["dirty","disgusting","filthy","mess","bathroom","gross","unsanitary"],
             "We've flagged this as a cleanliness issue and notified management. Thank you for letting us know."),
         "access":(["door is locked","locked door","can't get in","cant get in","door won't open","door wont open","locked","nobody answered","no one at the door","can't enter","cant enter"],
