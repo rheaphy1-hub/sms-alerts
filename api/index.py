@@ -3217,41 +3217,39 @@ footer{text-align:center;padding:24px;color:#aaa;font-size:12px;border-top:1px s
 </div>
 <footer>Hotline &middot; AI-powered alerts for """ + label + """s &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
-var vHistory=[],vCount=0,vMax=8,vLastData=null,vFilterMode='critical';
-var mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
-function addVC(cls,text){var d=document.createElement('div');d.className='bubble '+cls;d.innerHTML=text;mc.appendChild(d);mc.scrollTop=mc.scrollHeight}
-function addVO(cls,text,tier){var d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text.replace(/\n/g,'<br>');mo.appendChild(d);mo.scrollTop=mo.scrollHeight;applyVFilter()}
-function applyVFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(vFilterMode==='all'||t<=2)?'':'none'})}
-function setVFilter(m){vFilterMode=m;document.getElementById('v-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('v-filt-all').className='filter-btn'+(m==='all'?' active':'');applyVFilter()}
-function tryEx(el){document.getElementById('v-input').value=el.textContent;sendV()}
+var vHist=[],vCnt=0,vMax=8,vFilter='critical';
+var mc=document.getElementById('v-cust');
+var mo=document.getElementById('v-oper');
+function addC(cls,txt){var b=document.createElement('div');b.className='bubble '+cls;b.innerHTML=txt;mc.appendChild(b);mc.scrollTop=mc.scrollHeight}
+function addO(cls,txt,tier){var b=document.createElement('div');b.className='bubble '+cls;if(tier)b.setAttribute('data-tier',tier);b.innerHTML=txt;mo.appendChild(b);mo.scrollTop=mo.scrollHeight;doFilter()}
+function doFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=(vFilter==='all'||t<=2)?'':'none'})}
+function setVFilter(m){vFilter=m;document.getElementById('v-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('v-filt-all').className='filter-btn'+(m==='all'?' active':'');doFilter()}
+function tryEx(el){var inp=document.getElementById('v-input');inp.value=el.textContent;inp.focus();sendV()}
 function fmtT(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
 async function sendV(){
-  var inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();
+  var inp=document.getElementById('v-input'),btn=document.getElementById('v-btn');
+  var text=inp.value.trim();
   if(!text)return;
-  if(vCount>=vMax){addVC('system','Demo limit reached — <a href="/signup" style="color:#ea580c">sign up to get started</a>');return}
-  inp.value='';btn.disabled=true;vCount++;
-  addVC('out-blue',text);
-  addVO('system','<span class="spinner"></span> Processing...');
+  if(vCnt>=vMax){addC('system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free.</a>');return}
+  inp.value='';btn.disabled=true;vCnt++;
+  addC('out-blue',text);
+  addO('system','<span class="spinner"></span> AI reading...');
   try{
-    var r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:vHistory})});
-    if(!r.ok){throw new Error('HTTP '+r.status)}
-    var d=await r.json();vLastData=d;
-    if(mo.lastChild)mo.lastChild.remove();
-    var reply=d.auto_reply||'Thanks for letting us know.';
-    var cat=(d.category||'general').replace(/_/g,' ');
-    var expl=d.explanation||'';
-    var summ=d.summary||'';
-    vHistory.push({customer:text,reply:reply});if(vHistory.length>6)vHistory.shift();
-    await new Promise(function(r){setTimeout(r,250)});
-    addVC('in',reply);
-    await new Promise(function(r){setTimeout(r,350)});
+    var resp=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:vHist})});
+    var data=await resp.json();
+    mo.lastChild.remove();
+    var reply=(data.auto_reply||'Thanks, we are looking into it.');
+    var cat=((data.category||'general')+'').replace(/_/g,' ');
+    vHist.push({customer:text,reply:reply});
+    if(vHist.length>6)vHist.shift();
+    addC('in',reply);
     var t=fmtT();
-    if(d.tier===1){addVO('alert-red','&#128680; URGENT ('+t+')\nCategory: '+cat+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+reply,1)}
-    else if(d.tier===2){addVO('alert','&#9888; Issue ('+t+')\nCategory: '+cat+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+reply,2)}
-    else if(d.tier===3){addVO('feedback','&#128172; Feedback ('+t+')\n'+(expl||summ),3)}
-    else{addVO('info','&#128172; '+(summ||'Message received.'),4)}
-  }catch(e){if(mo.lastChild)mo.lastChild.remove();addVO('system','Demo error: '+e.message+'. Try again.')}
-  btn.disabled=false;inp.focus();
+    if(data.tier===1){addO('alert-red','&#128680; URGENT ('+t+')\nCategory: '+cat+'\n\nCustomer: '+text+'\n\nWe replied: '+reply,1)}
+    else if(data.tier===2){addO('alert','&#9888; Issue ('+t+')\nCategory: '+cat+'\n\nCustomer: '+text+'\n\nWe replied: '+reply,2)}
+    else if(data.tier===3){addO('feedback','&#128172; Feedback ('+t+')\n'+(data.explanation||data.summary||cat),3)}
+    else{addO('info','&#128172; '+(data.summary||'Logged.'),4)}
+  }catch(ex){if(mo.lastChild)mo.lastChild.remove();addO('system','Error: '+ex.message)}
+  btn.disabled=false;
 }
 async function submitV(){
   var name=document.getElementById('v-name').value.trim();
@@ -3754,11 +3752,11 @@ h1 em{font-style:normal;color:#ea580c}
 .multi p{font-size:13px;color:#15803d;line-height:1.5;margin:0}
 h2.sect{font-size:20px;font-weight:700;margin-bottom:6px;text-align:center}
 .sect-sub{font-size:14px;color:#888;text-align:center;margin-bottom:20px}
-.verticals{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:48px}
-.v-card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:20px;text-align:center;transition:border-color 0.15s,box-shadow 0.15s;display:block;color:#1a1a1a}
-.v-card:hover{border-color:#ea580c;box-shadow:0 4px 14px rgba(234,88,12,0.1);color:#1a1a1a}
-.v-card .v-icon{font-size:28px;margin-bottom:8px}
-.v-card h3{font-size:14px;font-weight:700;margin-bottom:4px}
+.verticals{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:48px}
+@media(max-width:700px){.verticals{grid-template-columns:1fr 1fr}}
+.v-card{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:18px 14px;text-align:left;transition:border-color 0.15s,box-shadow 0.15s;display:block;color:#1a1a1a}
+.v-card:hover{border-color:#ea580c;box-shadow:0 3px 12px rgba(234,88,12,0.1);color:#1a1a1a}
+.v-card h3{font-size:14px;font-weight:700;margin-bottom:5px;color:#1a1a1a}
 .v-card p{font-size:12px;color:#888;line-height:1.4;margin:0}
 .v-card .v-cta{display:inline-block;margin-top:10px;font-size:11px;font-weight:700;color:#ea580c;text-transform:uppercase;letter-spacing:0.05em}
 .cta-block{text-align:center;padding:0 24px 56px}
@@ -3806,7 +3804,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="sol-step"><div class="sol-num">1</div><p><strong>Post one sign.</strong> Your print-ready sign goes up in 60 seconds. It gives customers a direct text line to you — right where they need it.</p></div>
 <div class="sol-step"><div class="sol-num">2</div><p><strong>Customers text when something's wrong.</strong> No app. No account. They text the number on the sign. Every message gets read by AI.</p></div>
 <div class="sol-step"><div class="sol-num">3</div><p><strong>AI triages every message.</strong> Emergencies and equipment failures reach you within seconds. Routine feedback gets logged. Spam is filtered. You only hear what actually needs you.</p></div>
-<div class="sol-step"><div class="sol-num">4</div><p><strong>You respond by text.</strong> Reply from wherever you are. Talk directly to the customer, close the issue, or just log it. No app, no dashboard, no login required.</p></div>
+<div class="sol-step"><div class="sol-num">4</div><p><strong>You take action from anywhere.</strong> Get the alert, assess the situation, and act \u2014 call a vendor, reply to the customer, or head over yourself. No app, no dashboard, no login required.</p></div>
 </div>
 </div>
 
@@ -3815,39 +3813,13 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p>Sign up each location separately — each gets its own sign and business code. All alerts route to the same phone number. One inbox, full visibility across every location.</p>
 </div>
 
-<h2 class="sect">The five operations we built this for</h2>
-<p class="sect-sub">Each has dedicated scenarios, examples, and a tailored sign.</p>
+<h2 class="sect">Operations We Serve</h2>
 <div class="verticals">
-<a href="/laundromat" class="v-card">
-<div class="v-icon">&#128057;</div>
-<h3>Laundromat</h3>
-<p>Machine failures, leaks, access issues, coin jams</p>
-<span class="v-cta">See it &rarr;</span>
-</a>
-<a href="/carwash" class="v-card">
-<div class="v-icon">&#128664;</div>
-<h3>Car Wash</h3>
-<p>Bay jams, tunnel stops, payment failures, stuck gates</p>
-<span class="v-cta">See it &rarr;</span>
-</a>
-<a href="/selfstorage" class="v-card">
-<div class="v-icon">&#128230;</div>
-<h3>Self Storage</h3>
-<p>Gate access, unit locks, leaks, after-hours issues</p>
-<span class="v-cta">See it &rarr;</span>
-</a>
-<a href="/parking" class="v-card">
-<div class="v-icon">&#128665;</div>
-<h3>Parking</h3>
-<p>Kiosk outages, stuck gates, payment failures</p>
-<span class="v-cta">See it &rarr;</span>
-</a>
-<a href="/gym" class="v-card">
-<div class="v-icon">&#127947;</div>
-<h3>24/7 Gym</h3>
-<p>Broken equipment, access fobs, safety issues</p>
-<span class="v-cta">See it &rarr;</span>
-</a>
+<a href="/laundromat" class="v-card"><h3>Laundromat</h3><p>Machine failures, leaks, access issues, coin jams</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/carwash" class="v-card"><h3>Car Wash</h3><p>Bay jams, tunnel stops, payment failures, stuck gates</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/selfstorage" class="v-card"><h3>Self Storage</h3><p>Gate access, unit locks, leaks, after-hours issues</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/parking" class="v-card"><h3>Parking</h3><p>Kiosk outages, stuck gates, payment failures</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/gym" class="v-card"><h3>24/7 Gym</h3><p>Broken equipment, access fobs, safety issues</p><span class="v-cta">See it &rarr;</span></a>
 </div>
 
 </div>
