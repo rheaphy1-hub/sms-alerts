@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v9"
+VERSION = "v10"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -38,6 +38,19 @@ FEATURE_FLAGS = {
     "classifier_history": True,
     "process_fail_traceback": True,
 }
+
+# --- Google Analytics ---
+GA_MEASUREMENT_ID = "G-6YYB2N0BSS"
+_GA_SCRIPT = (
+    f'<script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>'
+    f'<script>window.dataLayer=window.dataLayer||[];'
+    f'function gtag(){{dataLayer.push(arguments);}}'
+    f'gtag("js",new Date());gtag("config","{GA_MEASUREMENT_ID}");</script>'
+)
+
+def _ga(html: str) -> str:
+    """Inject GA tracking tag before </head>. Wrap every public HTML Response with this."""
+    return html.replace("</head>", _GA_SCRIPT + "</head>", 1)
 
 # --- Database ---
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
@@ -124,7 +137,7 @@ def init_db():
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
                          ("business_code","\'\'"),("trial_ends_at","\'\'"),
                          ("sub_status","\'trialing\'"),("stripe_customer_id","\'\'"),
-                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'")]:
+                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'"),("vertical","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
@@ -197,7 +210,7 @@ def _lookup_zip(zip_code):
         logger.warning(f"[ZIP LOOKUP] Failed for {zip_code}: {e}")
         return ("", "")
 
-def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code="", zip_code=""):
+def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code="", zip_code="", vertical=""):
     now = datetime.now(timezone.utc).isoformat()
     all_phones = ",".join([owner_phone] + [p.strip() for p in extra_phones.split(",") if p.strip()]) if extra_phones else owner_phone
     website_info = scrape_website_info(website_url) if website_url else ""
@@ -205,21 +218,21 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         business_code = _gen_business_code()
     trial_end = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
     city, state = _lookup_zip(zip_code) if zip_code else ("", "")
-    # Try full INSERT with zip/city/state; fall back without if columns don't exist yet
+    # Try full INSERT with zip/city/state/vertical; fall back without if columns don't exist yet
     for use_zip_cols in (True, False):
         try:
             with get_db() as c:
                 if use_zip_cols:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, now))
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, vertical or "", now))
                 else:
                     _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
             return business_code
         except Exception as e:
             err_msg = str(e).lower()
-            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "column" in err_msg):
-                logger.warning(f"create_business: zip/city/state columns missing, retrying without — {e}")
+            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "vertical" in err_msg or "column" in err_msg):
+                logger.warning(f"create_business: zip/city/state/vertical columns missing, retrying without — {e}")
                 continue
             logger.error(f"create_business failed for {biz_id}: {e}")
             return None
@@ -1499,7 +1512,7 @@ Emergencies always get through."""
 # --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
+    _ensure_init(); return Response(content=_ga(DEMO_HTML), media_type="text/html")
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
@@ -1993,7 +2006,8 @@ def admin_ui(request: Request):
         rows += (
             f'<tr id="row-{bid}">'
             f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace("\'", "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
-            f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
+            f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>' \
+            f'<td style="padding:12px 16px">{("<span style=\'background:#f0fdf4;color:#166534;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;text-transform:uppercase\'>" + b.get("vertical","").replace("-"," ").title() + "</span>") if b.get("vertical") else "<span style=\'color:#ccc;font-size:11px\'>—</span>"}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
             f'<td style="padding:12px 16px">{badge_html}{trial_info}</td>'
@@ -2003,7 +2017,7 @@ def admin_ui(request: Request):
             f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:12px">Remove</a>'
             f'</td></tr>'
         )
-    if not rows: rows = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
+    if not rows: rows = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
     # --- Metrics ---
     now_utc    = datetime.now(timezone.utc)
@@ -2047,6 +2061,15 @@ def admin_ui(request: Request):
     {stat_card("Churn Rate", churn_rate, "paid who left", "#991b1b" if churned_count else "#1a1a1a")}
     {stat_card("Messages (7d)", msg_7d, f"{tier1_7d} emergencies")}
     {stat_card("Top Issue (30d)", top_cat)}
+  </div>
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Signups by Vertical</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:28px">
+    {"".join(
+      f'<div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:10px">' +
+      f'<span style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em">{label}</span>' +
+      f'<span style="font-size:20px;font-weight:700;color:#1a1a1a">{sum(1 for b in all_biz if (b.get("vertical") or "") == slug)}</span></div>'
+      for slug, label in [("laundromat","Laundromat"),("carwash","Car Wash"),("selfstorage","Self Storage"),("parking","Parking"),("gym","Gym"),("","Other / Direct")]
+    )}
   </div>'''
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title>
@@ -3051,6 +3074,278 @@ async def demo_classify(request_data:dict=None):
             "would_alert":c["tier"]==1 or (c["tier"]==2 and c["confidence"]>0.7)}
 
 
+
+# ── Vertical Landing Pages ──────────────────────────────────────────────────
+# Helper that generates a full dedicated landing page for each ICP vertical.
+# Each page has: hero, interactive demo, how-it-works, embedded signup form.
+
+def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, step3):
+    """Generate a complete vertical landing page HTML string."""
+    ex_chips = "".join(f'<div class="ex" onclick="tryEx(this)">{s}</div>' for s in scenarios)
+    steps_html = f"""
+<div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
+<div class="hiw-step"><div class="hiw-num">2</div><div><strong>{step2[0]}</strong><p>{step2[1]}</p></div></div>
+<div class="hiw-step"><div class="hiw-num">3</div><div><strong>{step3[0]}</strong><p>{step3[1]}</p></div></div>"""
+    return """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>""" + label + """ Alert System — Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.hero{text-align:center;padding:40px 24px 28px;max-width:700px;margin:0 auto}
+h1{font-size:clamp(26px,4.5vw,40px);font-weight:700;line-height:1.18;margin-bottom:14px;letter-spacing:-0.02em;color:#1a1a1a}
+h1 em{font-style:normal;color:#ea580c}
+.sub{font-size:16px;color:#666;max-width:560px;margin:0 auto 10px;line-height:1.55}
+.urgency{font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:24px}
+.layout{display:grid;grid-template-columns:1fr 1fr;gap:32px;max-width:960px;margin:0 auto;padding:0 24px 40px;align-items:start}
+@media(max-width:720px){.layout{grid-template-columns:1fr}}
+.panel-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#aaa;margin-bottom:10px}
+.device{width:100%}
+.frame{background:#fff;border-radius:28px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
+.notch{width:80px;height:22px;background:#fff;border-radius:0 0 12px 12px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:6px;height:6px;background:#e8e8e4;border-radius:50%;position:absolute;right:16px;top:6px}
+.statusbar{display:flex;justify-content:space-between;padding:2px 16px 4px;font-size:11px;color:#aaa;margin-top:-8px}
+.phone-label-bar{text-align:center;padding:5px 0 8px;font-size:12px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec;color:#2563eb}
+.msgs{height:260px;overflow-y:auto;padding:10px 12px;background:#fafaf8}
+.bubble{padding:8px 12px;border-radius:14px;font-size:13px;margin-bottom:6px;max-width:88%;line-height:1.4;animation:fadeUp 0.3s ease both}
+.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
+.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
+.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}
+.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}
+.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}
+.bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:5px 8px}
+.input-area{padding:6px 10px 10px;border-top:1px solid #f0f0ec;background:#fff}
+.input-row{display:flex;gap:5px}.input-row input{flex:1;padding:9px 11px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:18px;font-size:13px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
+.input-row button{padding:9px 12px;border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:14px;cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center}
+.input-row button:disabled{opacity:0.3;cursor:not-allowed}
+.home-bar{width:100px;height:3px;background:#ddd;border-radius:2px;margin:6px auto 8px}
+.examples p{font-size:12px;color:#aaa;margin-bottom:6px}
+.ex-row{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.ex{font-size:11px;padding:5px 9px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer}.ex:hover{border-color:#2563eb;color:#1a1a1a}
+@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.spinner{display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:3px}@keyframes spin{to{transform:rotate(360deg)}}
+/* Signup form */
+.form-panel{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,0.04)}
+.trial-badge{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:18px;text-align:center}
+.form-sub{font-size:12px;color:#aaa;text-align:center;margin:-10px 0 16px}
+label{display:block;font-size:12px;font-weight:600;color:#888;margin-bottom:3px;margin-top:12px}label:first-of-type{margin-top:0}
+input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;padding:11px 13px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:15px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
+.btn{width:100%;padding:13px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;margin-top:16px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
+.result{padding:12px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.btn-spinner{display:inline-block;width:14px;height:14px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:5px}
+.optin-wrap{display:flex;align-items:flex-start;gap:8px;margin-top:14px;padding:12px 14px;background:#f8f8f6;border:1px solid #e0e0dc;border-radius:8px}
+.optin-wrap input[type=checkbox]{width:16px;height:16px;min-width:16px;margin-top:2px;accent-color:#ea580c;cursor:pointer}
+.optin-wrap label{font-size:11px;color:#555;line-height:1.5;margin:0;font-weight:400}
+.optin-wrap label a{color:#ea580c;text-decoration:underline}
+.optin-err{display:none;color:#991b1b;font-size:11px;margin-top:5px}
+/* How it works */
+.hiw{max-width:960px;margin:0 auto;padding:0 24px 40px}
+.hiw h2{font-size:20px;font-weight:700;margin-bottom:16px;text-align:center}
+.hiw-steps{display:flex;flex-direction:column;gap:10px;max-width:520px;margin:0 auto}
+.hiw-step{display:flex;align-items:flex-start;gap:12px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:14px 16px}
+.hiw-num{width:26px;height:26px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:12px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+.hiw-step strong{font-size:13px;display:block;margin-bottom:2px}.hiw-step p{font-size:12px;color:#888;margin:0;line-height:1.35}
+footer{text-align:center;padding:28px 24px;color:#aaa;font-size:12px;border-top:1px solid #e0e0dc}
+</style></head><body>
+""" + NAV_HTML + f"""
+<div class="hero">
+<h1>{headline}</h1>
+<p class="sub">{sub}</p>
+<p class="urgency">No app. No software. No setup. Works by text.</p>
+</div>
+<div class="layout">
+<div>
+<p class="panel-label">See it in action — try a scenario</p>
+<div class="examples">
+<div class="ex-row">{ex_chips}</div>
+</div>
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;88%</span></div>
+<div class="phone-label-bar">Customer Phone</div>
+<div class="msgs" id="v-cust"><div class="bubble system">Tap a scenario or type your own</div></div>
+<div class="input-area"><div class="input-row">
+<input type="text" id="v-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendV()">
+<button id="v-btn" onclick="sendV()">&#9650;</button>
+</div></div>
+<div class="home-bar"></div>
+</div></div>
+</div>
+<div>
+<p class="panel-label">Start your free trial</p>
+<div class="form-panel">
+<div class="trial-badge">14-day free trial &middot; No credit card required</div>
+<div class="form-sub">Then $19.99/month. Cancel anytime.</div>
+<div class="result" id="v-result"></div>
+<label>Business name</label><input type="text" id="v-name" placeholder="Joe's {label}">
+<label>Your cell phone</label><input type="tel" id="v-phone" placeholder="(512) 555-1234">
+<label>Partner or manager phone (optional)</label><input type="tel" id="v-phone2" placeholder="(512) 555-5678">
+<label>Email (for weekly digest reports)</label><input type="email" id="v-email" placeholder="you@example.com">
+<label>Business zip code</label><input type="text" id="v-zip" placeholder="78745" maxlength="5" inputmode="numeric">
+<!-- TWILIO COMPLIANCE — SMS OPT-IN DISCLOSURE — DO NOT REMOVE -->
+<div class="optin-wrap">
+  <input type="checkbox" id="v-optin">
+  <label for="v-optin">By checking this box, you agree to receive recurring SMS alerts from Hotline (the Hotline business alert service). Msg &amp; data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to cancel, <strong>HELP</strong> for help. View our <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</label>
+</div>
+<div class="optin-err" id="v-optin-err">&#9888; You must agree to receive SMS messages to continue.</div>
+<!-- END TWILIO COMPLIANCE BLOCK -->
+<button class="btn" id="v-submit" onclick="submitV()">Start my free trial &rarr;</button>
+</div>
+</div>
+</div>
+<div class="hiw">
+<h2>How it works</h2>
+<div class="hiw-steps">""" + steps_html + """
+</div>
+</div>
+<footer>Hotline &middot; AI-powered alerts for """ + label + """s &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<script>
+var vHistory=[],vCount=0,vMax=5;
+var mc=document.getElementById('v-cust');
+function addB(cls,text){var d=document.createElement('div');d.className='bubble '+cls;d.innerHTML=text;mc.appendChild(d);mc.scrollTop=mc.scrollHeight}
+function tryEx(el){document.getElementById('v-input').value=el.textContent;sendV()}
+async function sendV(){
+  var inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();
+  if(!text)return;
+  if(vCount>=vMax){addB('system','Demo limit reached. Sign up to get started!');return}
+  inp.value='';btn.disabled=true;vCount++;
+  addB('out-blue',text);
+  addB('system','<span class="spinner"></span> Processing...');
+  try{
+    var r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:vHistory})});
+    var d=await r.json();
+    mc.lastChild.remove();
+    vHistory.push({customer:text,reply:d.auto_reply});if(vHistory.length>6)vHistory.shift();
+    await new Promise(r=>setTimeout(r,250));
+    addB('in',d.auto_reply);
+  }catch(e){mc.lastChild&&mc.lastChild.remove();addB('system','Error. Try again.')}
+  btn.disabled=false;inp.focus();
+}
+async function submitV(){
+  var name=document.getElementById('v-name').value.trim();
+  var phone=document.getElementById('v-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
+  var phone2=document.getElementById('v-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
+  var email=document.getElementById('v-email').value.trim();
+  var zip=document.getElementById('v-zip').value.trim();
+  var res=document.getElementById('v-result'),btn=document.getElementById('v-submit');
+  var optin=document.getElementById('v-optin'),optinErr=document.getElementById('v-optin-err');
+  if(!optin.checked){optinErr.style.display='block';optinErr.scrollIntoView({behavior:'smooth',block:'nearest'});return}
+  optinErr.style.display='none';
+  if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
+  if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
+  if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
+  if(!zip||!/^\\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
+  btn.disabled=true;btn.innerHTML='<span class="btn-spinner"></span>Setting up...';res.style.display='none';
+  try{
+    var r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,zip,vertical:'""" + slug + """'})});
+    var d=await r.json();
+    if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your phone for your sign PDF and QR code.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign &rarr;</a>';res.style.display='block';btn.textContent='Done!'}
+    else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Start my free trial &rarr;'}
+  }catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Start my free trial &rarr;'}
+}
+</script></body></html>"""
+
+# ── Vertical page definitions ────────────────────────────────────────────────
+
+VERTICAL_LAUNDROMAT_HTML = _make_vertical_page(
+    slug="laundromat",
+    label="Laundromat",
+    headline="Your machines break. Your customers leave. You find out tomorrow.",
+    sub="Hotline alerts you the moment something goes wrong — broken washers, flooded floors, locked doors — before it costs you.",
+    scenarios=[
+        "Washer #4 is leaking all over the floor",
+        "Dryer 7 took my money but won\'t start",
+        "The front door is locked, I can\'t get in",
+        "Change machine won\'t accept my bill",
+        "The bathroom is flooding",
+        "Washer 2 won\'t spin — clothes soaking wet",
+        "All the soap dispensers are empty",
+        "Parking lot exit is blocked",
+    ],
+    step1=("Sign up and post your sign", "Takes 60 seconds. Works on every machine, door, and wall in your laundromat."),
+    step2=("Customers text when something\'s wrong", "No app needed. They text the number on the sign. AI reads every message."),
+    step3=("You get alerted instantly by text", "Critical issues go straight to your phone. You reply by text. Done."),
+)
+
+VERTICAL_CARWASH_HTML = _make_vertical_page(
+    slug="carwash",
+    label="Car Wash",
+    headline="Your bay is down. Customers are leaving. You have no idea.",
+    sub="Hotline tells you when a payment kiosk fails, a bay jams, or a customer can\'t get out — in real time, by text.",
+    scenarios=[
+        "Bay 2 won\'t start after I paid",
+        "Card reader on bay 3 is not working",
+        "My car is stuck in the bay, the door won\'t open",
+        "Vacuum on the right side is broken",
+        "The exit gate is stuck closed",
+        "Foam isn\'t coming out in bay 1",
+        "Entry is blocked, can\'t pull in",
+        "Touchscreen is frozen, can\'t select a wash",
+    ],
+    step1=("Sign up and post your sign", "One sign at entry and one at each bay covers your whole facility."),
+    step2=("Customers text equipment issues instantly", "No app. No phone call. They text. AI classifies urgency."),
+    step3=("You get a text alert within seconds", "Know before a line forms. Fix it before you lose the revenue."),
+)
+
+VERTICAL_SELFSTORAGE_HTML = _make_vertical_page(
+    slug="selfstorage",
+    label="Self Storage",
+    headline="Your gate is broken. Your tenant is locked out. You\'re the last to know.",
+    sub="Hotline puts a direct line between your tenants and you — so access issues, lock problems, and facility failures don\'t spiral.",
+    scenarios=[
+        "Gate keypad isn\'t accepting my code",
+        "My unit lock is jammed, I can\'t get in",
+        "Elevator is out of service",
+        "Hallway lights are out in building C",
+        "There\'s water dripping from the ceiling near unit 42",
+        "Security camera is visibly broken",
+        "After-hours intercom isn\'t working",
+        "Dumpster area is completely blocked",
+    ],
+    step1=("Sign up and post your sign", "One sign at the gate, one at the office, one in each hallway."),
+    step2=("Tenants text issues directly to you", "No hold music. No ignored voicemails. A text you actually see."),
+    step3=("You get alerted before it becomes a complaint", "Resolve access issues fast. Protect your retention."),
+)
+
+VERTICAL_PARKING_HTML = _make_vertical_page(
+    slug="parking",
+    label="Parking",
+    headline="Your kiosk is down. Revenue is walking away. You won\'t know until tonight.",
+    sub="Hotline alerts you instantly when payment fails, gates jam, or customers are blocked — no staff required.",
+    scenarios=[
+        "Pay station is showing an error, won\'t take payment",
+        "Entry gate is stuck closed, can\'t get in",
+        "Exit gate is stuck open",
+        "Ticket machine is jammed",
+        "Lights are out in section B",
+        "Someone is blocking two spaces and won\'t move",
+        "Entry intercom isn\'t responding",
+        "I paid but the gate still won\'t open",
+    ],
+    step1=("Sign up and post your sign", "One sign at pay stations and gates. Customers know exactly what to do."),
+    step2=("Customers text equipment failures instantly", "No app. No phone number to find. Just text. AI handles triage."),
+    step3=("You get a text the moment something breaks", "Fix it fast. Recover the revenue you\'d otherwise lose."),
+)
+
+VERTICAL_GYM_HTML = _make_vertical_page(
+    slug="gym",
+    label="Gym",
+    headline="Your equipment is down. Your members are frustrated. You\'re not there.",
+    sub="Hotline gives your members a direct line to you — so broken equipment, access failures, and safety issues don\'t go unreported.",
+    scenarios=[
+        "Treadmill 4 is making a loud grinding noise",
+        "My access fob isn\'t working at the front door",
+        "Men\'s bathroom has water on the floor",
+        "AC hasn\'t been working all morning",
+        "Cable machine is broken, nobody fixed it",
+        "Locker 22 is stuck and won\'t open",
+        "Front door isn\'t locking after entry",
+        "No hot water in the showers",
+    ],
+    step1=("Sign up and post your sign", "One sign at the entrance, one near equipment, one in each locker room."),
+    step2=("Members text issues the moment they happen", "No more angry reviews because no one to tell. They tell you."),
+    step3=("You get alerted before it becomes a problem", "Fix equipment fast. Keep members happy. Protect your retention."),
+)
+
 DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hotline \u2014 Stop losing customers to fixable problems</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
@@ -3115,7 +3410,6 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h1 style="max-width:800px;margin:0 auto 12px;font-size:clamp(28px,4vw,44px);line-height:1.15">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
 <p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
-<p style="text-align:center;padding:12px 20px;font-size:12px;color:#999;margin-bottom:16px;border-top:1px solid #e0e0dc;border-bottom:1px solid #e0e0dc">We never share your private number with customers.</p>
 <p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p>
 <div class="examples">
 <div class="ex-row">
@@ -3252,7 +3546,7 @@ async function sendDemo(){
 </script></body></html>"""
 
 @app.get("/demo")
-def demo_page(): _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
+def demo_page(): _ensure_init(); return Response(content=_ga(DEMO_HTML), media_type="text/html")
 
 
 # --- How It Works page ---
@@ -3313,10 +3607,6 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">2</div><div><strong>Put it anywhere customers look.</strong><p>The QR is yours to use anywhere. Bathroom mirror. Menu. Receipt. Front door. Wherever they might need you.</p></div></div>
 <div class="step"><div class="step-num">3</div><div><strong>You get a text \u2014 only when it matters.</strong><p>AI filters every message. Emergencies and critical issues reach you in seconds with the customer's exact words and our auto-reply. Reply REPLY to talk directly to the customer.</p></div></div>
 </div>
-</section>
-
-<section style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:24px;margin:0 24px">
-<p style="font-size:13px;color:#7c2d12;line-height:1.6;margin:0"><strong>Built for both sides:</strong> Customers can reach you directly through replies, but we never share your personal number. Your cell number stays yours \u2014 all communication flows through Hotline. Messages auto-purge after 90 days.</p>
 </section>
 
 <section>
@@ -3397,7 +3687,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 @app.get("/how-it-works")
 def how_it_works_page():
     _ensure_init()
-    return Response(content=HOW_IT_WORKS_HTML, media_type="text/html")
+    return Response(content=_ga(HOW_IT_WORKS_HTML), media_type="text/html")
 
 
 # --- Industries page ---
@@ -3484,7 +3774,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </body></html>"""
 
 @app.get("/industries")
-def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, media_type="text/html")
+def industries_page(): _ensure_init(); return Response(content=_ga(INDUSTRIES_HTML), media_type="text/html")
 
 
 # --- Signup page ---
@@ -4063,19 +4353,19 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 
 @app.get("/resources")
-def resources_page(): _ensure_init(); return Response(content=RESOURCES_HTML, media_type="text/html")
+def resources_page(): _ensure_init(); return Response(content=_ga(RESOURCES_HTML), media_type="text/html")
 
 @app.get("/resources/faq")
-def resources_faq(): _ensure_init(); return Response(content=RESOURCES_FAQ_HTML, media_type="text/html")
+def resources_faq(): _ensure_init(); return Response(content=_ga(RESOURCES_FAQ_HTML), media_type="text/html")
 
 @app.get("/resources/why-you-need-a-hotline")
-def resources_article_1(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_1_HTML, media_type="text/html")
+def resources_article_1(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_1_HTML), media_type="text/html")
 
 @app.get("/resources/where-to-put-your-qr")
-def resources_article_2(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_2_HTML, media_type="text/html")
+def resources_article_2(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_2_HTML), media_type="text/html")
 
 @app.get("/resources/responding-to-alerts")
-def resources_article_3(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_3_HTML, media_type="text/html")
+def resources_article_3(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_3_HTML), media_type="text/html")
 
 RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Why your staff may be your biggest operational blind spot &mdash; Hotline</title>
@@ -4163,7 +4453,7 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </body></html>"""
 
 @app.get("/resources/why-staff-fail-you")
-def resources_article_4(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_4_HTML, media_type="text/html")
+def resources_article_4(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_4_HTML), media_type="text/html")
 
 
 # --- Signup page ---
@@ -4208,7 +4498,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
-<h1>Get your QR code</h1>
+<h1>Start getting alerts today</h1>
 <p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready sign instantly.</p>
 <div class="card">
 <div class="trial">14-day free trial &middot; No credit card required</div>
@@ -4238,14 +4528,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
      END TWILIO COMPLIANCE BLOCK
      ============================================================ -->
 
-<p style="font-size:12px;color:#999;text-align:center;margin-bottom:16px;padding:12px;border-top:1px solid #f0f0f0;border-bottom:1px solid #f0f0f0">We never share your personal number with customers.</p>
-
-<button class="btn" id="f-btn" onclick="signup()">Get my QR code &rarr;</button>
+<button class="btn" id="f-btn" onclick="signup()">Start my free trial &rarr;</button>
 </div>
 <div class="steps">
 <div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get your QR code and sign in seconds</p></div>
-<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Print your sign and post it in your business</p></div>
-<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>Customers scan, AI filters, you get alerted</p></div>
+<div class="step"><div class="step-num">2</div><h3>Post your sign</h3><p>Takes 30 seconds. Works immediately.</p></div>
+<div class="step"><div class="step-num">3</div><h3>Get alerted</h3><p>Know the moment something needs your attention</p></div>
 </div>
 </div>
 <footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
@@ -4282,7 +4570,22 @@ async function signup(){
 </script></body></html>"""
 
 @app.get("/signup")
-def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
+def signup_page(): _ensure_init(); return Response(content=_ga(SIGNUP_HTML), media_type="text/html")
+
+@app.get("/laundromat")
+def vertical_laundromat(): _ensure_init(); return Response(content=_ga(VERTICAL_LAUNDROMAT_HTML), media_type="text/html")
+
+@app.get("/carwash")
+def vertical_carwash(): _ensure_init(); return Response(content=_ga(VERTICAL_CARWASH_HTML), media_type="text/html")
+
+@app.get("/selfstorage")
+def vertical_selfstorage(): _ensure_init(); return Response(content=_ga(VERTICAL_SELFSTORAGE_HTML), media_type="text/html")
+
+@app.get("/parking")
+def vertical_parking(): _ensure_init(); return Response(content=_ga(VERTICAL_PARKING_HTML), media_type="text/html")
+
+@app.get("/gym")
+def vertical_gym(): _ensure_init(); return Response(content=_ga(VERTICAL_GYM_HTML), media_type="text/html")
 
 
 # --- Privacy Policy page ---
@@ -4364,7 +4667,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/privacy")
-def privacy_page(): _ensure_init(); return Response(content=PRIVACY_HTML, media_type="text/html")
+def privacy_page(): _ensure_init(); return Response(content=_ga(PRIVACY_HTML), media_type="text/html")
 
 
 # --- Terms of Service page ---
@@ -4450,7 +4753,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/terms")
-def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
+def terms_page(): _ensure_init(); return Response(content=_ga(TERMS_HTML), media_type="text/html")
 
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
@@ -4546,6 +4849,7 @@ async def signup_create(request_data:dict=None):
     email = (request_data.get("email") or "").strip()
     website_url = (request_data.get("website_url") or "").strip()
     zip_code = (request_data.get("zip") or "").strip()
+    vertical = (request_data.get("vertical") or "").strip().lower()
     if not name: return {"error":"Business name required"}
     if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
 
@@ -4560,7 +4864,7 @@ async def signup_create(request_data:dict=None):
         with get_db() as c:
             if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
                 biz_id = base_biz_id[:20]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")+"-"+"".join(__import__("random").choices("0123456789",k=4))
-        business_code = create_business(biz_id, name, phone, SHARED_NUMBER, extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
+        business_code = create_business(biz_id, name, phone, SHARED_NUMBER, extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code, vertical=vertical)
         if business_code:
             break
         logger.warning(f"create_business attempt {attempt+1} failed for {name} ({phone}) biz_id={biz_id}")
