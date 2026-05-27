@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v8"
+VERSION = "v9"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -38,6 +38,19 @@ FEATURE_FLAGS = {
     "classifier_history": True,
     "process_fail_traceback": True,
 }
+
+# --- Google Analytics ---
+GA_MEASUREMENT_ID = "G-6YYB2N0BSS"
+_GA_SCRIPT = (
+    f'<script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>'
+    f'<script>window.dataLayer=window.dataLayer||[];'
+    f'function gtag(){{dataLayer.push(arguments);}}'
+    f'gtag("js",new Date());gtag("config","{GA_MEASUREMENT_ID}");</script>'
+)
+
+def _ga(html: str) -> str:
+    """Inject GA tracking tag before </head>. Wrap every public HTML Response with this."""
+    return html.replace("</head>", _GA_SCRIPT + "</head>", 1)
 
 # --- Database ---
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
@@ -1499,7 +1512,7 @@ Emergencies always get through."""
 # --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
+    _ensure_init(); return Response(content=_ga(DEMO_HTML), media_type="text/html")
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
@@ -3251,7 +3264,7 @@ async function sendDemo(){
 </script></body></html>"""
 
 @app.get("/demo")
-def demo_page(): _ensure_init(); return Response(content=DEMO_HTML, media_type="text/html")
+def demo_page(): _ensure_init(); return Response(content=_ga(DEMO_HTML), media_type="text/html")
 
 
 # --- How It Works page ---
@@ -3392,7 +3405,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 @app.get("/how-it-works")
 def how_it_works_page():
     _ensure_init()
-    return Response(content=HOW_IT_WORKS_HTML, media_type="text/html")
+    return Response(content=_ga(HOW_IT_WORKS_HTML), media_type="text/html")
 
 
 # --- Industries page ---
@@ -3479,7 +3492,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </body></html>"""
 
 @app.get("/industries")
-def industries_page(): _ensure_init(); return Response(content=INDUSTRIES_HTML, media_type="text/html")
+def industries_page(): _ensure_init(); return Response(content=_ga(INDUSTRIES_HTML), media_type="text/html")
 
 
 # --- Signup page ---
@@ -4058,19 +4071,19 @@ RESOURCES_ARTICLE_3_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 
 @app.get("/resources")
-def resources_page(): _ensure_init(); return Response(content=RESOURCES_HTML, media_type="text/html")
+def resources_page(): _ensure_init(); return Response(content=_ga(RESOURCES_HTML), media_type="text/html")
 
 @app.get("/resources/faq")
-def resources_faq(): _ensure_init(); return Response(content=RESOURCES_FAQ_HTML, media_type="text/html")
+def resources_faq(): _ensure_init(); return Response(content=_ga(RESOURCES_FAQ_HTML), media_type="text/html")
 
 @app.get("/resources/why-you-need-a-hotline")
-def resources_article_1(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_1_HTML, media_type="text/html")
+def resources_article_1(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_1_HTML), media_type="text/html")
 
 @app.get("/resources/where-to-put-your-qr")
-def resources_article_2(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_2_HTML, media_type="text/html")
+def resources_article_2(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_2_HTML), media_type="text/html")
 
 @app.get("/resources/responding-to-alerts")
-def resources_article_3(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_3_HTML, media_type="text/html")
+def resources_article_3(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_3_HTML), media_type="text/html")
 
 RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Why your staff may be your biggest operational blind spot &mdash; Hotline</title>
@@ -4158,7 +4171,7 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </body></html>"""
 
 @app.get("/resources/why-staff-fail-you")
-def resources_article_4(): _ensure_init(); return Response(content=RESOURCES_ARTICLE_4_HTML, media_type="text/html")
+def resources_article_4(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_4_HTML), media_type="text/html")
 
 
 # --- Signup page ---
@@ -4275,7 +4288,7 @@ async function signup(){
 </script></body></html>"""
 
 @app.get("/signup")
-def signup_page(): _ensure_init(); return Response(content=SIGNUP_HTML, media_type="text/html")
+def signup_page(): _ensure_init(); return Response(content=_ga(SIGNUP_HTML), media_type="text/html")
 
 
 # --- Privacy Policy page ---
@@ -4357,7 +4370,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/privacy")
-def privacy_page(): _ensure_init(); return Response(content=PRIVACY_HTML, media_type="text/html")
+def privacy_page(): _ensure_init(); return Response(content=_ga(PRIVACY_HTML), media_type="text/html")
 
 
 # --- Terms of Service page ---
@@ -4443,7 +4456,7 @@ footer a{color:#aaa}
 </body></html>"""
 
 @app.get("/terms")
-def terms_page(): _ensure_init(); return Response(content=TERMS_HTML, media_type="text/html")
+def terms_page(): _ensure_init(); return Response(content=_ga(TERMS_HTML), media_type="text/html")
 
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
