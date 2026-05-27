@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v10"
+VERSION = "v11"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -2975,13 +2975,19 @@ NAV_CSS = """
 .nav-links a:hover{color:#1a1a1a}
 .nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
+.dropdown{position:relative}
+.dropdown>a::after{content:" ▾";font-size:10px;opacity:0.6}
+.dropdown-menu{display:none;position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.1);min-width:180px;z-index:100}
+.dropdown-menu a{display:block;padding:8px 14px;font-size:13px;color:#444;border-radius:6px;white-space:nowrap}
+.dropdown-menu a:hover{background:#fff7ed;color:#ea580c}
+.dropdown:hover .dropdown-menu{display:block}
 .hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
 @media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;flex:0 0 auto}.nav .logo svg{height:22px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
 """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 70" font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif"><rect x="0" y="5" width="60" height="60" rx="9" fill="#ea580c"/><text x="30" y="52" font-size="48" font-weight="700" fill="#fff" text-anchor="middle">H</text><text x="78" y="50" font-size="40" font-weight="700" fill="#ea580c" letter-spacing="6">HOTLINE</text></svg></a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
-<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><a href="/industries">Who We Support</a><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">Gym</a></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
 
 # --- Demo page (homepage) ---
@@ -3076,11 +3082,9 @@ async def demo_classify(request_data:dict=None):
 
 
 # ── Vertical Landing Pages ──────────────────────────────────────────────────
-# Helper that generates a full dedicated landing page for each ICP vertical.
-# Each page has: hero, interactive demo, how-it-works, embedded signup form.
 
 def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, step3):
-    """Generate a complete vertical landing page HTML string."""
+    """Generate a complete vertical landing page with two-phone demo + embedded signup."""
     ex_chips = "".join(f'<div class="ex" onclick="tryEx(this)">{s}</div>' for s in scenarios)
     steps_html = f"""
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
@@ -3092,60 +3096,65 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
 """ + NAV_CSS + """
-.hero{text-align:center;padding:40px 24px 28px;max-width:700px;margin:0 auto}
-h1{font-size:clamp(26px,4.5vw,40px);font-weight:700;line-height:1.18;margin-bottom:14px;letter-spacing:-0.02em;color:#1a1a1a}
-h1 em{font-style:normal;color:#ea580c}
-.sub{font-size:16px;color:#666;max-width:560px;margin:0 auto 10px;line-height:1.55}
-.urgency{font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:24px}
-.layout{display:grid;grid-template-columns:1fr 1fr;gap:32px;max-width:960px;margin:0 auto;padding:0 24px 40px;align-items:start}
-@media(max-width:720px){.layout{grid-template-columns:1fr}}
-.panel-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#aaa;margin-bottom:10px}
-.device{width:100%}
-.frame{background:#fff;border-radius:28px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
-.notch{width:80px;height:22px;background:#fff;border-radius:0 0 12px 12px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:6px;height:6px;background:#e8e8e4;border-radius:50%;position:absolute;right:16px;top:6px}
-.statusbar{display:flex;justify-content:space-between;padding:2px 16px 4px;font-size:11px;color:#aaa;margin-top:-8px}
-.phone-label-bar{text-align:center;padding:5px 0 8px;font-size:12px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec;color:#2563eb}
-.msgs{height:260px;overflow-y:auto;padding:10px 12px;background:#fafaf8}
-.bubble{padding:8px 12px;border-radius:14px;font-size:13px;margin-bottom:6px;max-width:88%;line-height:1.4;animation:fadeUp 0.3s ease both}
-.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
-.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
-.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
-.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}
-.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}
-.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}
-.bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:5px 8px}
-.input-area{padding:6px 10px 10px;border-top:1px solid #f0f0ec;background:#fff}
-.input-row{display:flex;gap:5px}.input-row input{flex:1;padding:9px 11px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:18px;font-size:13px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
-.input-row button{padding:9px 12px;border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:14px;cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center}
-.input-row button:disabled{opacity:0.3;cursor:not-allowed}
-.home-bar{width:100px;height:3px;background:#ddd;border-radius:2px;margin:6px auto 8px}
-.examples p{font-size:12px;color:#aaa;margin-bottom:6px}
-.ex-row{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.hero{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}
+h1{font-size:clamp(24px,4vw,38px);font-weight:700;line-height:1.18;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}
+.sub{font-size:15px;color:#666;max-width:560px;margin:0 auto 8px;line-height:1.55}
+.urgency{font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:20px}
+/* Demo section - full width two phones */
+.demo-section{max-width:960px;margin:0 auto;padding:0 24px 20px}
+.panel-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#aaa;margin-bottom:8px;text-align:center}
+.ex-row{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;justify-content:center}
 .ex{font-size:11px;padding:5px 9px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer}.ex:hover{border-color:#2563eb;color:#1a1a1a}
-@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-.spinner{display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:3px}@keyframes spin{to{transform:rotate(360deg)}}
+.phones{display:flex;gap:16px;justify-content:center}
+@media(max-width:640px){.phones{flex-direction:column;align-items:center}.phones .device{width:100%;max-width:340px}}
+.device{flex:1;max-width:340px}
+.frame{background:#fff;border-radius:24px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
+.notch{width:70px;height:20px;background:#fff;border-radius:0 0 10px 10px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:5px;height:5px;background:#e8e8e4;border-radius:50%;position:absolute;right:14px;top:5px}
+.statusbar{display:flex;justify-content:space-between;padding:2px 14px 4px;font-size:10px;color:#aaa;margin-top:-6px}
+.phone-label-bar{text-align:center;padding:5px 0 7px;font-size:11px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
+.phone-label-bar.cust{color:#2563eb}.phone-label-bar.oper{color:#ea580c}
+.msgs{height:240px;overflow-y:auto;padding:8px 10px;background:#fafaf8}
+.bubble{padding:7px 11px;border-radius:13px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both;white-space:pre-line}
+.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:3px}
+.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:3px}
+.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:3px}
+.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:3px}
+.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:3px}
+.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:3px}
+.bubble.system{background:#f0f0ec;color:#999;font-size:10px;text-align:center;max-width:100%;border-radius:7px;padding:4px 8px}
+.oper-filter{display:flex;align-items:center;justify-content:space-between;padding:5px 12px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:10px;color:#aaa;gap:4px}
+.filter-btn{font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-weight:600}
+.filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
+.input-area{padding:5px 8px 8px;border-top:1px solid #f0f0ec;background:#fff}
+.input-row{display:flex;gap:4px}.input-row input{flex:1;padding:8px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:16px;font-size:12px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
+.input-row button{border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:12px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.input-row button:disabled{opacity:0.3;cursor:not-allowed}
+.home-bar{width:80px;height:3px;background:#ddd;border-radius:2px;margin:5px auto 6px}
+@keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.spinner{display:inline-block;width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:3px}@keyframes spin{to{transform:rotate(360deg)}}
 /* Signup form */
+.form-section{max-width:520px;margin:0 auto;padding:0 24px 32px}
 .form-panel{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,0.04)}
-.trial-badge{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:18px;text-align:center}
-.form-sub{font-size:12px;color:#aaa;text-align:center;margin:-10px 0 16px}
-label{display:block;font-size:12px;font-weight:600;color:#888;margin-bottom:3px;margin-top:12px}label:first-of-type{margin-top:0}
-input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;padding:11px 13px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:15px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
-.btn{width:100%;padding:13px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;margin-top:16px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
-.result{padding:12px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.trial-badge{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:14px;text-align:center}
+.form-sub{font-size:12px;color:#aaa;text-align:center;margin:-6px 0 14px}
+label{display:block;font-size:12px;font-weight:600;color:#888;margin-bottom:3px;margin-top:10px}label:first-of-type{margin-top:0}
+input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;padding:11px 13px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:14px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
+.btn{width:100%;padding:13px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;margin-top:14px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
+.result{padding:12px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
 .btn-spinner{display:inline-block;width:14px;height:14px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:5px}
-.optin-wrap{display:flex;align-items:flex-start;gap:8px;margin-top:14px;padding:12px 14px;background:#f8f8f6;border:1px solid #e0e0dc;border-radius:8px}
+.optin-wrap{display:flex;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 12px;background:#f8f8f6;border:1px solid #e0e0dc;border-radius:8px}
 .optin-wrap input[type=checkbox]{width:16px;height:16px;min-width:16px;margin-top:2px;accent-color:#ea580c;cursor:pointer}
 .optin-wrap label{font-size:11px;color:#555;line-height:1.5;margin:0;font-weight:400}
 .optin-wrap label a{color:#ea580c;text-decoration:underline}
 .optin-err{display:none;color:#991b1b;font-size:11px;margin-top:5px}
 /* How it works */
-.hiw{max-width:960px;margin:0 auto;padding:0 24px 40px}
-.hiw h2{font-size:20px;font-weight:700;margin-bottom:16px;text-align:center}
-.hiw-steps{display:flex;flex-direction:column;gap:10px;max-width:520px;margin:0 auto}
-.hiw-step{display:flex;align-items:flex-start;gap:12px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:14px 16px}
-.hiw-num{width:26px;height:26px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:12px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+.hiw{max-width:600px;margin:0 auto;padding:0 24px 40px}
+.hiw h2{font-size:18px;font-weight:700;margin-bottom:14px;text-align:center}
+.hiw-steps{display:flex;flex-direction:column;gap:10px}
+.hiw-step{display:flex;align-items:flex-start;gap:12px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px 14px}
+.hiw-num{width:24px;height:24px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:11px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
 .hiw-step strong{font-size:13px;display:block;margin-bottom:2px}.hiw-step p{font-size:12px;color:#888;margin:0;line-height:1.35}
-footer{text-align:center;padding:28px 24px;color:#aaa;font-size:12px;border-top:1px solid #e0e0dc}
+footer{text-align:center;padding:24px;color:#aaa;font-size:12px;border-top:1px solid #e0e0dc}
 </style></head><body>
 """ + NAV_HTML + f"""
 <div class="hero">
@@ -3153,25 +3162,35 @@ footer{text-align:center;padding:28px 24px;color:#aaa;font-size:12px;border-top:
 <p class="sub">{sub}</p>
 <p class="urgency">No app. No software. No setup. Works by text.</p>
 </div>
-<div class="layout">
-<div>
+<div class="demo-section">
 <p class="panel-label">See it in action — try a scenario</p>
-<div class="examples">
 <div class="ex-row">{ex_chips}</div>
-</div>
+<div class="phones">
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;88%</span></div>
-<div class="phone-label-bar">Customer Phone</div>
-<div class="msgs" id="v-cust"><div class="bubble system">Tap a scenario or type your own</div></div>
+<div class="phone-label-bar cust">Customer</div>
+<div class="msgs" id="v-cust"><div class="bubble system">Tap a scenario above or type below</div></div>
 <div class="input-area"><div class="input-row">
 <input type="text" id="v-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendV()">
 <button id="v-btn" onclick="sendV()">&#9650;</button>
 </div></div>
 <div class="home-bar"></div>
 </div></div>
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;92%</span></div>
+<div class="phone-label-bar oper">Your Phone</div>
+<div class="oper-filter">
+<span style="font-weight:600;color:#888">Alert level:</span>
+<div style="display:flex;gap:3px">
+<button class="filter-btn active" id="v-filt-crit" onclick="setVFilter('critical')">🔴 Critical</button>
+<button class="filter-btn" id="v-filt-all" onclick="setVFilter('all')">📋 All</button>
+</div></div>
+<div class="msgs" id="v-oper"><div class="bubble system">Your alerts appear here</div></div>
+<div class="home-bar"></div>
+</div></div>
 </div>
-<div>
-<p class="panel-label">Start your free trial</p>
+</div>
+<div class="form-section">
 <div class="form-panel">
 <div class="trial-badge">14-day free trial &middot; No credit card required</div>
 <div class="form-sub">Then $19.99/month. Cancel anytime.</div>
@@ -3191,7 +3210,6 @@ footer{text-align:center;padding:28px 24px;color:#aaa;font-size:12px;border-top:
 <button class="btn" id="v-submit" onclick="submitV()">Start my free trial &rarr;</button>
 </div>
 </div>
-</div>
 <div class="hiw">
 <h2>How it works</h2>
 <div class="hiw-steps">""" + steps_html + """
@@ -3199,25 +3217,35 @@ footer{text-align:center;padding:28px 24px;color:#aaa;font-size:12px;border-top:
 </div>
 <footer>Hotline &middot; AI-powered alerts for """ + label + """s &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
-var vHistory=[],vCount=0,vMax=5;
-var mc=document.getElementById('v-cust');
-function addB(cls,text){var d=document.createElement('div');d.className='bubble '+cls;d.innerHTML=text;mc.appendChild(d);mc.scrollTop=mc.scrollHeight}
+var vHistory=[],vCount=0,vMax=8,vLastData=null,vFilterMode='critical';
+var mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
+function addVC(cls,text){var d=document.createElement('div');d.className='bubble '+cls;d.innerHTML=text;mc.appendChild(d);mc.scrollTop=mc.scrollHeight}
+function addVO(cls,text,tier){var d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text.replace(/\n/g,'<br>');mo.appendChild(d);mo.scrollTop=mo.scrollHeight;applyVFilter()}
+function applyVFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(vFilterMode==='all'||t<=2)?'':'none'})}
+function setVFilter(m){vFilterMode=m;document.getElementById('v-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('v-filt-all').className='filter-btn'+(m==='all'?' active':'');applyVFilter()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendV()}
+function fmtT(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
 async function sendV(){
   var inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();
   if(!text)return;
-  if(vCount>=vMax){addB('system','Demo limit reached. Sign up to get started!');return}
+  if(vCount>=vMax){addVC('system','Demo limit reached — <a href="/signup" style="color:#ea580c">sign up to get started</a>');return}
   inp.value='';btn.disabled=true;vCount++;
-  addB('out-blue',text);
-  addB('system','<span class="spinner"></span> Processing...');
+  addVC('out-blue',text);
+  addVO('system','<span class="spinner"></span> Processing...');
   try{
     var r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:vHistory})});
-    var d=await r.json();
-    mc.lastChild.remove();
+    var d=await r.json();vLastData=d;d.original_message=text;
+    mo.lastChild.remove();
     vHistory.push({customer:text,reply:d.auto_reply});if(vHistory.length>6)vHistory.shift();
     await new Promise(r=>setTimeout(r,250));
-    addB('in',d.auto_reply);
-  }catch(e){mc.lastChild&&mc.lastChild.remove();addB('system','Error. Try again.')}
+    addVC('in',d.auto_reply);
+    await new Promise(r=>setTimeout(r,350));
+    var t=fmtT();
+    if(d.tier===1){addVO('alert-red','\ud83d\udea8 URGENT ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,1)}
+    else if(d.tier===2){addVO('alert','\u26a0\ufe0f Issue ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,2)}
+    else if(d.tier===3){addVO('feedback','\ud83d\udcac Feedback ('+t+')\n'+d.explanation,3)}
+    else{addVO('info','\ud83d\udcac '+d.summary,4)}
+  }catch(e){mo.lastChild&&mo.lastChild.remove();addVO('system','Error. Try again.')}
   btn.disabled=false;inp.focus();
 }
 async function submitV(){
@@ -3269,21 +3297,21 @@ VERTICAL_LAUNDROMAT_HTML = _make_vertical_page(
 VERTICAL_CARWASH_HTML = _make_vertical_page(
     slug="carwash",
     label="Car Wash",
-    headline="Your bay is down. Customers are leaving. You have no idea.",
-    sub="Hotline tells you when a payment kiosk fails, a bay jams, or a customer can\'t get out — in real time, by text.",
+    headline="Your wash is down. Customers are leaving. You have no idea.",
+    sub="Whether you run self-serve bays or an unattended tunnel — Hotline tells you the moment payment fails, equipment jams, or a customer is stuck.",
     scenarios=[
         "Bay 2 won\'t start after I paid",
-        "Card reader on bay 3 is not working",
-        "My car is stuck in the bay, the door won\'t open",
+        "Tunnel stopped with my car still inside",
+        "Card reader on bay 3 isn\'t working",
+        "Car is stuck, exit door won\'t open",
         "Vacuum on the right side is broken",
-        "The exit gate is stuck closed",
-        "Foam isn\'t coming out in bay 1",
-        "Entry is blocked, can\'t pull in",
+        "Exit gate is stuck closed",
+        "Dryer at the end of the tunnel isn\'t working",
         "Touchscreen is frozen, can\'t select a wash",
     ],
-    step1=("Sign up and post your sign", "One sign at entry and one at each bay covers your whole facility."),
+    step1=("Sign up and post your sign", "One sign at entry and one at each bay or tunnel entrance covers your facility."),
     step2=("Customers text equipment issues instantly", "No app. No phone call. They text. AI classifies urgency."),
-    step3=("You get a text alert within seconds", "Know before a line forms. Fix it before you lose the revenue."),
+    step3=("You get a text the moment something breaks", "Know before a line forms. Fix it before you lose the revenue."),
 )
 
 VERTICAL_SELFSTORAGE_HTML = _make_vertical_page(
@@ -3345,6 +3373,7 @@ VERTICAL_GYM_HTML = _make_vertical_page(
     step2=("Members text issues the moment they happen", "No more angry reviews because no one to tell. They tell you."),
     step3=("You get alerted before it becomes a problem", "Fix equipment fast. Keep members happy. Protect your retention."),
 )
+
 
 DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hotline \u2014 Stop losing customers to fixable problems</title>
