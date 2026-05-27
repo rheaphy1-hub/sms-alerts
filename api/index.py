@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v12"
+VERSION = "v13"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -2977,9 +2977,9 @@ NAV_CSS = """
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
 .dropdown{position:relative}
 .dropdown>a::after{content:" ▾";font-size:10px;opacity:0.6}
-.dropdown-menu{display:none;position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.1);min-width:180px;z-index:100}
-.dropdown-menu a{display:block;padding:8px 14px;font-size:13px;color:#444;border-radius:6px;white-space:nowrap}
-.dropdown-menu a:hover{background:#fff7ed;color:#ea580c}
+.dropdown-menu{display:none;position:absolute;top:100%;left:50%;transform:translateX(-50%);background:transparent;min-width:180px;z-index:100;padding-top:6px}.dropdown-menu-inner{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.1)}
+.dropdown-menu-inner a{display:block;padding:8px 14px;font-size:13px;color:#444;border-radius:6px;white-space:nowrap}
+.dropdown-menu-inner a:hover{background:#fff7ed;color:#ea580c}
 .dropdown:hover .dropdown-menu{display:block}
 .hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
 @media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;flex:0 0 auto}.nav .logo svg{height:22px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
@@ -2987,7 +2987,7 @@ NAV_CSS = """
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 70" font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif"><rect x="0" y="5" width="60" height="60" rx="9" fill="#ea580c"/><text x="30" y="52" font-size="48" font-weight="700" fill="#fff" text-anchor="middle">H</text><text x="78" y="50" font-size="40" font-weight="700" fill="#ea580c" letter-spacing="6">HOTLINE</text></svg></a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
-<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">Gym</a></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
 
 # --- Demo page (homepage) ---
@@ -3234,18 +3234,23 @@ async function sendV(){
   addVO('system','<span class="spinner"></span> Processing...');
   try{
     var r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:vHistory})});
-    var d=await r.json();vLastData=d;d.original_message=text;
-    mo.lastChild.remove();
-    vHistory.push({customer:text,reply:d.auto_reply});if(vHistory.length>6)vHistory.shift();
-    await new Promise(r=>setTimeout(r,250));
-    addVC('in',d.auto_reply);
-    await new Promise(r=>setTimeout(r,350));
+    if(!r.ok){throw new Error('HTTP '+r.status)}
+    var d=await r.json();vLastData=d;
+    if(mo.lastChild)mo.lastChild.remove();
+    var reply=d.auto_reply||'Thanks for letting us know.';
+    var cat=(d.category||'general').replace(/_/g,' ');
+    var expl=d.explanation||'';
+    var summ=d.summary||'';
+    vHistory.push({customer:text,reply:reply});if(vHistory.length>6)vHistory.shift();
+    await new Promise(function(r){setTimeout(r,250)});
+    addVC('in',reply);
+    await new Promise(function(r){setTimeout(r,350)});
     var t=fmtT();
-    if(d.tier===1){addVO('alert-red','&#128680; URGENT ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,1)}
-    else if(d.tier===2){addVO('alert','&#9888; Issue ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,2)}
-    else if(d.tier===3){addVO('feedback','&#128172; Feedback ('+t+')\n'+d.explanation,3)}
-    else{addVO('info','&#128172; '+d.summary,4)}
-  }catch(e){mo.lastChild&&mo.lastChild.remove();addVO('system','Error. Try again.')}
+    if(d.tier===1){addVO('alert-red','&#128680; URGENT ('+t+')\nCategory: '+cat+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+reply,1)}
+    else if(d.tier===2){addVO('alert','&#9888; Issue ('+t+')\nCategory: '+cat+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+reply,2)}
+    else if(d.tier===3){addVO('feedback','&#128172; Feedback ('+t+')\n'+(expl||summ),3)}
+    else{addVO('info','&#128172; '+(summ||'Message received.'),4)}
+  }catch(e){if(mo.lastChild)mo.lastChild.remove();addVO('system','Demo error: '+e.message+'. Try again.')}
   btn.disabled=false;inp.focus();
 }
 async function submitV(){
@@ -3356,7 +3361,7 @@ VERTICAL_PARKING_HTML = _make_vertical_page(
 
 VERTICAL_GYM_HTML = _make_vertical_page(
     slug="gym",
-    label="Gym",
+    label="24/7 Gym",
     headline="Your equipment is down. Your members are frustrated. You\'re not there.",
     sub="Hotline gives your members a direct line to you — so broken equipment, access failures, and safety issues don\'t go unreported.",
     scenarios=[
@@ -3721,86 +3726,140 @@ def how_it_works_page():
 
 # --- Industries page ---
 INDUSTRIES_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Who We Support \u2014 Hotline</title>
+<title>Who We Support — Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
 """ + NAV_CSS + """
-.hero{text-align:center;padding:40px 24px 32px;max-width:600px;margin:0 auto}
-h1{font-size:clamp(24px,4vw,36px);font-weight:700;margin-bottom:12px}
-.sub{font-size:16px;color:#888;margin-bottom:32px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;max-width:800px;margin:0 auto 48px;padding:0 24px}
-.card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.card-top{padding:18px 20px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
-.card-top h3{font-size:16px;font-weight:600;margin:0}
-.card-top .icon{font-size:20px;margin-right:10px}
-.card-top .arrow{font-size:14px;color:#bbb;transition:transform 0.2s}
-.card.open .arrow{transform:rotate(90deg)}
-.card-body{display:none;padding:0 20px 16px;font-size:13px;color:#666;line-height:1.5}
-.card.open .card-body{display:block}
-.tag-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
-.tag-sm{font-size:11px;padding:3px 8px;background:#f5f5f0;border-radius:4px;color:#888}
-.cta{text-align:center;padding:0 24px 48px}
-.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+.hero{text-align:center;padding:52px 24px 40px;max-width:680px;margin:0 auto}
+h1{font-size:clamp(26px,4.5vw,40px);font-weight:700;margin-bottom:14px;line-height:1.18;letter-spacing:-0.02em}
+h1 em{font-style:normal;color:#ea580c}
+.sub{font-size:16px;color:#666;line-height:1.6;max-width:560px;margin:0 auto}
+.problem{max-width:720px;margin:0 auto;padding:0 24px 48px}
+.problem-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:40px}
+@media(max-width:600px){.problem-grid{grid-template-columns:1fr}}
+.prob-card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:20px 22px}
+.prob-card .icon{font-size:22px;margin-bottom:10px}
+.prob-card h3{font-size:15px;font-weight:700;margin-bottom:6px}
+.prob-card p{font-size:13px;color:#666;line-height:1.55;margin:0}
+.solution{background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:28px;margin-bottom:40px}
+.solution h2{font-size:18px;font-weight:700;color:#c2410c;margin-bottom:14px}
+.solution-steps{display:flex;flex-direction:column;gap:10px}
+.sol-step{display:flex;align-items:flex-start;gap:12px}
+.sol-num{width:24px;height:24px;border-radius:50%;background:#ea580c;color:#fff;font-weight:700;font-size:11px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;margin-top:1px}
+.sol-step p{font-size:14px;color:#7c2d12;line-height:1.5;margin:0}
+.sol-step strong{color:#9a3412}
+.multi{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:20px 22px;margin-bottom:40px}
+.multi h3{font-size:14px;font-weight:700;color:#166534;margin-bottom:6px}
+.multi p{font-size:13px;color:#15803d;line-height:1.5;margin:0}
+h2.sect{font-size:20px;font-weight:700;margin-bottom:6px;text-align:center}
+.sect-sub{font-size:14px;color:#888;text-align:center;margin-bottom:20px}
+.verticals{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:48px}
+.v-card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:20px;text-align:center;transition:border-color 0.15s,box-shadow 0.15s;display:block;color:#1a1a1a}
+.v-card:hover{border-color:#ea580c;box-shadow:0 4px 14px rgba(234,88,12,0.1);color:#1a1a1a}
+.v-card .v-icon{font-size:28px;margin-bottom:8px}
+.v-card h3{font-size:14px;font-weight:700;margin-bottom:4px}
+.v-card p{font-size:12px;color:#888;line-height:1.4;margin:0}
+.v-card .v-cta{display:inline-block;margin-top:10px;font-size:11px;font-weight:700;color:#ea580c;text-transform:uppercase;letter-spacing:0.05em}
+.cta-block{text-align:center;padding:0 24px 56px}
+.cta-block a{display:inline-block;padding:15px 36px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+.cta-block .fine{display:block;margin-top:10px;font-size:13px;color:#aaa}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>Know what's happening before it costs you</h1>
-<p class="sub">Hotline alerts operators and senior management to the things that matter most: safety risks, operational failures, and the moments that make or break your reputation.</p>
-</div>
-<div class="grid">
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128664;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The pressure washer isn't working on bay 2."</em> A customer tries to pay, can't complete the transaction, and leaves. You're losing revenue every minute until you find out. Hotline makes sure you know about equipment failures, payment jams, and service issues before the next customer walks away.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">payment issues</span><span class="tag-sm">service disruptions</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#129499;</span><h3 style="display:inline">Laundromats</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Machine #4 is leaking water all over the floor."</em> A broken dryer or washer is silent revenue loss—every 30 minutes without it, you're losing a customer transaction. Hotline tells you when it starts, not after you find standing water and potential liability issues.<div class="tag-row"><span class="tag-sm">equipment leaks</span><span class="tag-sm">safety hazards</span><span class="tag-sm">capacity loss</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127918;</span><h3 style="display:inline">Arcades & Gaming</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The pinball machine is stuck and won't take coins."</em> A broken cabinet is lost revenue, not just now but forever—that kid goes to the arcade down the street instead. Hotline alerts you to jams, payment failures, and malfunctions so you can fix them before your customers find a competitor.<div class="tag-row"><span class="tag-sm">payment jams</span><span class="tag-sm">machine failures</span><span class="tag-sm">revenue loss</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128472;</span><h3 style="display:inline">Parking Garages & Lots</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The gate is stuck closed and won't open."</em> A broken gate = zero revenue that hour and frustrated customers. Payment systems down, ticket machines jammed, access cards failing—you need to know instantly, not when you check the cameras tomorrow.<div class="tag-row"><span class="tag-sm">gate failures</span><span class="tag-sm">payment system down</span><span class="tag-sm">access issues</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9981;</span><h3 style="display:inline">Gas Stations</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Pump 3 is showing an error and won't accept my card."</em> A broken pump drives customers away mid-transaction. Payment readers fail, nozzles jam, systems go offline—each minute of downtime is lost gallons and frustrated drivers heading elsewhere.<div class="tag-row"><span class="tag-sm">pump failures</span><span class="tag-sm">payment reader issues</span><span class="tag-sm">system outages</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128273;</span><h3 style="display:inline">Car Rental Kiosks</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The kiosk won't read my license."</em> A down kiosk means customers can't rent, access vehicles, or complete transactions. License readers fail, touch screens freeze, payment systems timeout—your revenue stream stops instantly. Hotline gets you the alert before you miss a single rental.<div class="tag-row"><span class="tag-sm">kiosk outages</span><span class="tag-sm">reader failures</span><span class="tag-sm">payment downtime</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9749;</span><h3 style="display:inline">Restaurants & Cafes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"There's no one at the register and the bathroom is flooded."</em> You're across town. Without Hotline, this becomes a 1-star review. With it, you know in seconds—whether it's a no-show, an equipment failure, or an angry customer.<div class="tag-row"><span class="tag-sm">staffing issues</span><span class="tag-sm">food safety</span><span class="tag-sm">customer experience</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128722;</span><h3 style="display:inline">Retail Stores</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The self-checkout is down"</em> or <em>"Fitting room door is broken."</em> You hear about it when sales are already lost. Hotline connects you to what customers see the moment it matters.<div class="tag-row"><span class="tag-sm">equipment downtime</span><span class="tag-sm">customer friction</span><span class="tag-sm">safety issues</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127947;</span><h3 style="display:inline">Gyms & Fitness Studios</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The treadmill isn't working"</em> or <em>"Access card reader is down."</em> Members pay for working equipment. A broken machine or locked building means lost member trust and churn.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">access issues</span><span class="tag-sm">member satisfaction</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9986;</span><h3 style="display:inline">Salons & Barbershops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"A customer got a chemical burn"</em> or <em>"Appointment system crashed."</em> Safety issues and booking problems hit reputation and liability instantly. Hotline makes sure you know before damage spreads.<div class="tag-row"><span class="tag-sm">safety incidents</span><span class="tag-sm">system failures</span><span class="tag-sm">customer injury</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128295;</span><h3 style="display:inline">Auto Repair Shops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Your shop damaged my car"</em> or <em>"I've been waiting 4 hours."</em> Customers tell you how they feel the moment it happens. Hotline ensures you can respond to issues before they become bad reviews.<div class="tag-row"><span class="tag-sm">quality complaints</span><span class="tag-sm">wait time issues</span><span class="tag-sm">damage claims</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127976;</span><h3 style="display:inline">Hotels & Airbnbs</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The AC in room 205 stopped working and it's midnight."</em> A guest complaint is a potential bad review. Hotline gets you the alert while the guest is still there, not after they post about it online.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">guest complaints</span><span class="tag-sm">reputation risk</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127973;</span><h3 style="display:inline">Medical & Dental Offices</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Your equipment isn't sterilized"</em> or <em>"No one's answering the phone."</em> Patient safety and trust are non-negotiable. Hotline keeps you alert to operational and safety issues in real-time.<div class="tag-row"><span class="tag-sm">safety protocols</span><span class="tag-sm">equipment issues</span><span class="tag-sm">staff gaps</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128187;</span><h3 style="display:inline">Coworking Spaces</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"WiFi is down"</em> or <em>"The bathroom is unusable."</em> Members are paying for a working environment. Know about disruptions before members lose their workspace and consider leaving.<div class="tag-row"><span class="tag-sm">connectivity issues</span><span class="tag-sm">facility problems</span><span class="tag-sm">member experience</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128230;</span><h3 style="display:inline">Self-Storage Facilities</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The gate code isn't working"</em> or <em>"There's water coming into my unit."</em> Customers only visit occasionally — when something goes wrong, they need to reach you fast. Hotline puts a direct line on every unit door so you hear about gate failures, leaks, break-ins, and climate control issues before they become liability claims or lost renewals.<div class="tag-row"><span class="tag-sm">gate & access issues</span><span class="tag-sm">water intrusion</span><span class="tag-sm">climate control</span><span class="tag-sm">security concerns</span></div></div></div>
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127970;</span><h3 style="display:inline">Franchise Operators</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Nobody at the register"</em> or <em>"The equipment at location 3 has been down all morning."</em> You can't be everywhere. Franchise operators managing multiple locations are flying blind without a direct line from each site. Hotline gives every location its own customer text line so issues surface instantly — no matter which location, no matter what time.<div class="tag-row"><span class="tag-sm">multi-location visibility</span><span class="tag-sm">operational blind spots</span><span class="tag-sm">staff accountability</span><span class="tag-sm">revenue protection</span></div></div></div>
+<h1>Built for operators<br>who <em>can't always be there.</em></h1>
+<p class="sub">You built your business to run lean. The problem is when it breaks down at 7pm on a Saturday, your customers have no one to tell — and you have no way to know.</p>
 </div>
 
-<div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
+<div class="problem">
+
+<h2 class="sect">The problem with absentee operations</h2>
+<p class="sect-sub" style="margin-bottom:20px">Equipment fails silently. Customers leave frustrated. You find out too late.</p>
+
+<div class="problem-grid">
+<div class="prob-card">
+<div class="icon">&#128683;</div>
+<h3>No one to tell</h3>
+<p>When there's no staff on site, customers who hit a problem have nowhere to go. Most don't call. They leave, post a review, and don't come back.</p>
+</div>
+<div class="prob-card">
+<div class="icon">&#9201;</div>
+<h3>You find out too late</h3>
+<p>A jammed machine, a broken gate, a flooded bathroom — every minute you don't know is lost revenue and a worsening situation.</p>
+</div>
+<div class="prob-card">
+<div class="icon">&#128247;</div>
+<h3>Reviews before you can respond</h3>
+<p>The first time you hear about a problem is often a 1-star review. By then the customer is gone and the damage is done.</p>
+</div>
+<div class="prob-card">
+<div class="icon">&#128181;</div>
+<h3>Silent revenue loss</h3>
+<p>A broken pay kiosk or downed gate doesn't announce itself. You just notice the numbers look off at the end of the week.</p>
+</div>
+</div>
+
+<div class="solution">
+<h2>How Hotline fixes this</h2>
+<div class="solution-steps">
+<div class="sol-step"><div class="sol-num">1</div><p><strong>Post one sign.</strong> Your print-ready sign goes up in 60 seconds. It gives customers a direct text line to you — right where they need it.</p></div>
+<div class="sol-step"><div class="sol-num">2</div><p><strong>Customers text when something's wrong.</strong> No app. No account. They text the number on the sign. Every message gets read by AI.</p></div>
+<div class="sol-step"><div class="sol-num">3</div><p><strong>AI triages every message.</strong> Emergencies and equipment failures reach you within seconds. Routine feedback gets logged. Spam is filtered. You only hear what actually needs you.</p></div>
+<div class="sol-step"><div class="sol-num">4</div><p><strong>You respond by text.</strong> Reply from wherever you are. Talk directly to the customer, close the issue, or just log it. No app, no dashboard, no login required.</p></div>
+</div>
+</div>
+
+<div class="multi">
+<h3>&#127970; Running multiple locations?</h3>
+<p>Sign up each location separately — each gets its own sign and business code. All alerts route to the same phone number. One inbox, full visibility across every location.</p>
+</div>
+
+<h2 class="sect">The five operations we built this for</h2>
+<p class="sect-sub">Each has dedicated scenarios, examples, and a tailored sign.</p>
+<div class="verticals">
+<a href="/laundromat" class="v-card">
+<div class="v-icon">&#128057;</div>
+<h3>Laundromat</h3>
+<p>Machine failures, leaks, access issues, coin jams</p>
+<span class="v-cta">See it &rarr;</span>
+</a>
+<a href="/carwash" class="v-card">
+<div class="v-icon">&#128664;</div>
+<h3>Car Wash</h3>
+<p>Bay jams, tunnel stops, payment failures, stuck gates</p>
+<span class="v-cta">See it &rarr;</span>
+</a>
+<a href="/selfstorage" class="v-card">
+<div class="v-icon">&#128230;</div>
+<h3>Self Storage</h3>
+<p>Gate access, unit locks, leaks, after-hours issues</p>
+<span class="v-cta">See it &rarr;</span>
+</a>
+<a href="/parking" class="v-card">
+<div class="v-icon">&#128665;</div>
+<h3>Parking</h3>
+<p>Kiosk outages, stuck gates, payment failures</p>
+<span class="v-cta">See it &rarr;</span>
+</a>
+<a href="/gym" class="v-card">
+<div class="v-icon">&#127947;</div>
+<h3>24/7 Gym</h3>
+<p>Broken equipment, access fobs, safety issues</p>
+<span class="v-cta">See it &rarr;</span>
+</a>
+</div>
+
+</div>
+
+<div class="cta-block">
+<a href="/signup">Start your free trial &rarr;</a>
+<span class="fine">14-day free trial. No credit card. Cancel by text.</span>
+</div>
+
+<footer>Hotline &middot; AI-powered alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 </body></html>"""
+
 
 @app.get("/industries")
 def industries_page(): _ensure_init(); return Response(content=_ga(INDUSTRIES_HTML), media_type="text/html")
