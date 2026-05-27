@@ -3096,7 +3096,7 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
 """ + NAV_CSS + """
-.hero{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}
+.hero{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}.v-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#ea580c;margin-bottom:10px}
 h1{font-size:clamp(24px,4vw,38px);font-weight:700;line-height:1.18;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}
 .sub{font-size:15px;color:#666;max-width:560px;margin:0 auto 8px;line-height:1.55}
 .urgency{font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:20px}
@@ -3158,6 +3158,7 @@ footer{text-align:center;padding:24px;color:#aaa;font-size:12px;border-top:1px s
 </style></head><body>
 """ + NAV_HTML + f"""
 <div class="hero">
+<p class="v-label">Hotline for {label}s</p>
 <h1>{headline}</h1>
 <p class="sub">{sub}</p>
 <p class="urgency">No app. No software. No setup. Works by text.</p>
@@ -3244,9 +3245,9 @@ async function sendV(){
     if(vHist.length>6)vHist.shift();
     addC('in',reply);
     var t=fmtT();
-    if(data.tier===1){addO('alert-red','&#128680; URGENT ('+t+')\nCategory: '+cat+'\n\nCustomer: '+text+'\n\nWe replied: '+reply,1)}
-    else if(data.tier===2){addO('alert','&#9888; Issue ('+t+')\nCategory: '+cat+'\n\nCustomer: '+text+'\n\nWe replied: '+reply,2)}
-    else if(data.tier===3){addO('feedback','&#128172; Feedback ('+t+')\n'+(data.explanation||data.summary||cat),3)}
+    if(data.tier===1){addO('alert-red','&#128680; URGENT ('+t+')\\nCategory: '+cat+'\\n\\nCustomer: '+text+'\\n\\nWe replied: '+reply,1)}
+    else if(data.tier===2){addO('alert','&#9888; Issue ('+t+')\\nCategory: '+cat+'\\n\\nCustomer: '+text+'\\n\\nWe replied: '+reply,2)}
+    else if(data.tier===3){addO('feedback','&#128172; Feedback ('+t+')\\n'+(data.explanation||data.summary||cat),3)}
     else{addO('info','&#128172; '+(data.summary||'Logged.'),4)}
   }catch(ex){if(mo.lastChild)mo.lastChild.remove();addO('system','Error: '+ex.message)}
   btn.disabled=false;
