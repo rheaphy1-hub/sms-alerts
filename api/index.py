@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v11"
+VERSION = "v12"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -466,7 +466,7 @@ def send_trial_warnings():
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
         if days == 1:
-            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
+            link_part = f"\nSubscribe so you don't miss a critical issue from your customers &#9888;\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
             msg = f"Your free Hotline trial ends tomorrow.{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
@@ -474,7 +474,7 @@ def send_trial_warnings():
         elif days == 0:
             set_sub_status(biz["id"], "expired")
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
@@ -1330,7 +1330,7 @@ def handle_owner_command(text, business, sender_phone=""):
             return f"Trial active \u2014 {days} day(s) left.{link_part}"
         else:
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
-            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
 
     # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
     # level for 10DLC compliance, so we use MENU as the in-app command.
@@ -1400,7 +1400,7 @@ def build_digest_html(name, stats, period="week"):
 <div style="flex:1;background:#f5f5f0;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{t}</div><div style="font-size:12px;color:#888">messages</div></div>
 <div style="flex:1;background:#fff4e6;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{f}</div><div style="font-size:12px;color:#888">flagged</div></div>
 <div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
-{"<p style='color:#c0392b;font-size:14px'>\u26a0\ufe0f "+str(u)+" unacknowledged</p>" if u>0 else ""}
+{"<p style='color:#c0392b;font-size:14px'>&#9888; "+str(u)+" unacknowledged</p>" if u>0 else ""}
 {"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
 <p style="font-size:13px;color:#aaa;margin-top:24px">Reply MENU to your Hotline number for commands.</p></div>"""
 
@@ -1962,7 +1962,7 @@ async def admin_billing(request: Request):
         if status == "active":
             msg = "\u2705 Your Hotline subscription is active."
         elif status in ("expired","canceled","past_due"):
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
         else:
             msg = f"\u23f0 Your Hotline trial has {days} day(s) left.{link_part}"
         phones = get_alert_phones(biz)
@@ -2809,7 +2809,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
             elif cat == "inquiry":
                 header = "\u2753 Customer question"
             elif tier == 2:
-                header = "\u26a0\ufe0f Issue"
+                header = "&#9888; Issue"
             else:
                 header = "\U0001f4ac Feedback"
             when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
@@ -3241,10 +3241,10 @@ async function sendV(){
     addVC('in',d.auto_reply);
     await new Promise(r=>setTimeout(r,350));
     var t=fmtT();
-    if(d.tier===1){addVO('alert-red','\ud83d\udea8 URGENT ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,1)}
-    else if(d.tier===2){addVO('alert','\u26a0\ufe0f Issue ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,2)}
-    else if(d.tier===3){addVO('feedback','\ud83d\udcac Feedback ('+t+')\n'+d.explanation,3)}
-    else{addVO('info','\ud83d\udcac '+d.summary,4)}
+    if(d.tier===1){addVO('alert-red','&#128680; URGENT ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,1)}
+    else if(d.tier===2){addVO('alert','&#9888; Issue ('+t+')\nCategory: '+d.category.replace('_',' ')+'\n\nCustomer said:\n'+text+'\n\nWe replied:\n'+d.auto_reply,2)}
+    else if(d.tier===3){addVO('feedback','&#128172; Feedback ('+t+')\n'+d.explanation,3)}
+    else{addVO('info','&#128172; '+d.summary,4)}
   }catch(e){mo.lastChild&&mo.lastChild.remove();addVO('system','Error. Try again.')}
   btn.disabled=false;inp.focus();
 }
@@ -4839,7 +4839,7 @@ async def stripe_webhook(request: Request):
             PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
             link_part = f"\nUpdate payment: {PAYMENT_LINK}" if PAYMENT_LINK else ""
             for p in get_alert_phones(biz):
-                send_sms(p, f"\u26a0\ufe0f Hotline payment failed. Alerts may stop soon.{link_part}")
+                send_sms(p, f"&#9888; Hotline payment failed. Alerts may stop soon.{link_part}")
 
     elif event_type == "customer.subscription.updated":
         status_map = {"active": "active", "past_due": "past_due", "canceled": "canceled",
