@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v24"
+VERSION = "v25"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3084,7 +3084,7 @@ async def demo_classify(request_data:dict=None):
 
 # ── Vertical Landing Pages ──────────────────────────────────────────────────
 
-def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, step3, placements=None):
+def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, step3, placements=None, plural=None):
     """Generate a vertical landing page with integrated demo (matching main demo exactly)."""
     # Generate scenario chips HTML
     ex_chips_html = "".join(f'<div class="ex" onclick="tryEx(this)">{s}</div>' for s in scenarios)
@@ -3101,8 +3101,9 @@ function addB(c,cls,text,tier){const d=document.createElement('div');d.className
 async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
 history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;margin-bottom:6px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+concern_html+'<div style="margin:8px 0"><strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'</div><div style="margin-top:12px;font-size:12px;color:inherit">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1)}else if(d.tier===2){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;margin-bottom:6px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+concern_html+'<div style="margin:8px 0"><strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'</div><div style="margin-top:12px;font-size:12px;color:inherit">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2)}else if(d.tier===3){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;margin-bottom:6px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+concern_html;addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:600;margin-bottom:6px">✓ LOGGED ('+t+')</div>Category: '+cat;addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
-function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];document.getElementById('v-input').value=''}
-function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}"""
+function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value=''}
+function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
+function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
 
     steps_html = f'''<div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
@@ -3110,7 +3111,7 @@ function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').class
 <div class="hiw-step"><div class="hiw-num">3</div><div><strong>{step3[0]}</strong><p>{step3[1]}</p></div></div>
 </div>'''
 
-    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline for {label}s</title><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"><style>
+    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline for {plural or label+"s"}</title><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"><style>
 *{{box-sizing:border-box;margin:0;padding:0}}body{{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}}a{{color:#ea580c;text-decoration:none}}
 {NAV_CSS}
 .hero{{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}}.v-label{{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#ea580c;margin-bottom:10px}}
@@ -3120,7 +3121,7 @@ h1{{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-botto
 </style></head><body>
 {NAV_HTML}
 <div class="hero">
-<p class="v-label">Hotline for {label}s</p>
+<p class="v-label">Hotline for {plural or label+"s"}</p>
 <h1>{headline}</h1>
 <p class="sub">{sub}</p>
 <p class="urgency">No app. No software. No setup. Works by text.</p>
@@ -3151,7 +3152,7 @@ h1{{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-botto
 </div></div>
 </div>
 
-<div class="cta"><a href="/signup">Get Hotline for your {label.lower()}s →</a></div>
+<div class="cta"><a href="/signup">Get Hotline for your {(plural or label+"s").lower()} →</a></div>
 
 <div class="howitworks" style="margin-top:40px;border-top:1px solid #e0e0dc;padding-top:28px">
 <h2 style="font-size:20px;font-weight:700;margin-bottom:20px;text-align:center">Where to display your Hotline</h2>
@@ -3194,6 +3195,7 @@ VERTICAL_LAUNDROMAT_HTML = _make_vertical_page(
     step1=("Display your Hotline", "Takes 60 seconds. Works on every machine, door, and wall in your laundromat."),
     step2=("Customers text when something\'s wrong", "No app needed. They text the number on the sign. AI reads every message."),
     step3=("You get alerted instantly by text", "Critical issues go straight to your phone. You reply by text. Done."),
+    plural="Laundromats"
 )
 
 VERTICAL_CARWASH_HTML = _make_vertical_page(
@@ -3215,6 +3217,7 @@ VERTICAL_CARWASH_HTML = _make_vertical_page(
     step1=("Display your Hotline", "One sign at entry and one at each bay or tunnel entrance covers your facility."),
     step2=("Customers text equipment issues instantly", "No app. No phone call. They text. Hotline categorizes urgency."),
     step3=("You get a text the moment something breaks", "Know before a line forms. Fix it before you lose the revenue."),
+    plural="Car Washes"
 )
 
 VERTICAL_SELFSTORAGE_HTML = _make_vertical_page(
@@ -3236,6 +3239,7 @@ VERTICAL_SELFSTORAGE_HTML = _make_vertical_page(
     step1=("Display your Hotline", "One sign at the gate, one at the office, one in each hallway."),
     step2=("Tenants text issues directly to you", "No hold music. No ignored voicemails. A text you actually see."),
     step3=("You get alerted before it becomes a complaint", "Resolve access issues fast. Protect your retention."),
+    plural="Self Storage Facilities"
 )
 
 VERTICAL_PARKING_HTML = _make_vertical_page(
@@ -3257,6 +3261,7 @@ VERTICAL_PARKING_HTML = _make_vertical_page(
     step1=("Display your Hotline", "One sign at pay stations and gates. Customers know exactly what to do."),
     step2=("Customers text equipment failures instantly", "No app. No phone number to find. Just text. AI handles triage."),
     step3=("You get a text the moment something breaks", "Fix it fast. Recover the revenue you\'d otherwise lose."),
+    plural="Parking Lots"
 )
 
 VERTICAL_GYM_HTML = _make_vertical_page(
@@ -3278,10 +3283,262 @@ VERTICAL_GYM_HTML = _make_vertical_page(
     step1=("Display your Hotline", "One sign at the entrance, one near equipment, one in each locker room."),
     step2=("Members text issues the moment they happen", "No more angry reviews because no one to tell. They tell you."),
     step3=("You get alerted before it becomes a problem", "Fix equipment fast. Keep members happy. Protect your retention."),
+    plural="24/7 Gyms"
 )
 
 
-HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline — Real-Time Business Alerts</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f8f8f6;color:#333}.nav{display:flex;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto;position:relative}.nav .logo{flex:1;text-align:center}.nav .logo svg{height:36px}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}.nav a{text-decoration:none;color:#333;font-size:13px;font-weight:500}.nav a.signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}.container{max-width:700px;margin:40px auto;padding:0 24px}.hero{text-align:center;margin-bottom:50px}.hero h1{font-size:42px;font-weight:700;line-height:1.2;margin-bottom:16px;color:#1a1a1a}.hero p{font-size:18px;color:#666;margin-bottom:0}.features{max-width:700px;margin:40px auto;padding:0 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}@media(max-width:640px){.features{grid-template-columns:repeat(2,1fr)}}.feature{padding:14px 16px;background:#ea580c;border-radius:8px;text-align:left}.feature-title{font-weight:700;font-size:14px;margin-bottom:4px;color:#fff}.feature-desc{font-size:12px;color:rgba(255,255,255,0.88);line-height:1.4}.section-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.15em;color:#999;margin:50px 0 24px;text-align:center}.vertical-buttons{display:flex;flex-direction:column;gap:10px}.vertical-btn{display:block;padding:18px 20px;background:#fff;border:1px solid #e0e0dc;border-radius:8px;text-decoration:none;text-align:left;transition:all 0.2s ease;cursor:pointer}.vertical-btn:hover{border-color:#ea580c;background:#fafafa;box-shadow:0 4px 12px rgba(234,88,12,0.12)}.vertical-btn-title{font-weight:600;font-size:16px;color:#ea580c;margin-bottom:4px}.vertical-btn-desc{font-size:14px;color:#888;line-height:1.4}.cta-section{max-width:700px;margin:50px auto;padding:40px 24px;background:#fff7ed;border-radius:12px;text-align:center;border:1px solid #fed7aa}.cta-section h2{font-size:20px;font-weight:700;margin-bottom:8px;color:#1a1a1a}.cta-section p{font-size:14px;color:#888;margin-bottom:20px}.cta-section a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px;text-decoration:none}.footer{margin-top:80px;padding-top:24px;border-top:1px solid #e0e0dc;text-align:center;font-size:13px;color:#999}a{color:#ea580c;text-decoration:none}.dropdown{position:relative;display:inline-block}.dropdown-menu{display:none;position:absolute;min-width:180px;z-index:100;top:100%;right:0;padding-top:8px}.dropdown-menu-inner{display:flex;flex-direction:column;gap:4px;background:#fff;box-shadow:0 8px 16px rgba(0,0,0,0.1);border-radius:8px;padding:8px;border:1px solid #e0e0dc}.dropdown-menu a{display:block;padding:8px 12px;border-radius:4px;transition:background 0.2s}.dropdown-menu a:hover{background:#f5f5f5}.dropdown:hover .dropdown-menu{display:block}</style></head><body><nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" viewBox="0 0 224.87999 67.499998" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="d1"><path d="M 0.765625 9 L 48 9 L 48 57 L 0.765625 57 Z M 0.765625 9 " clip-rule="nonzero"/></clipPath><clipPath id="d2"><path d="M 208 20 L 223.992188 20 L 223.992188 45 L 208 45 Z M 208 20 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#d1)"><path fill="#ea580c" d="M 7.839844 9.40625 L 40.8125 9.40625 C 41.277344 9.40625 41.738281 9.449219 42.191406 9.542969 C 42.648438 9.632812 43.089844 9.765625 43.515625 9.945312 C 43.945312 10.121094 44.351562 10.339844 44.738281 10.597656 C 45.125 10.855469 45.480469 11.152344 45.808594 11.480469 C 46.136719 11.808594 46.429688 12.167969 46.6875 12.554688 C 46.945312 12.941406 47.164062 13.347656 47.339844 13.777344 C 47.519531 14.207031 47.652344 14.648438 47.742188 15.105469 C 47.832031 15.5625 47.878906 16.023438 47.878906 16.488281 L 47.878906 49.542969 C 47.878906 50.007812 47.832031 50.46875 47.742188 50.925781 C 47.652344 51.382812 47.519531 51.824219 47.339844 52.253906 C 47.164062 52.683594 46.945312 53.09375 46.6875 53.480469 C 46.429688 53.867188 46.136719 54.222656 45.808594 54.550781 C 45.480469 54.878906 45.125 55.175781 44.738281 55.433594 C 44.351562 55.691406 43.945312 55.910156 43.515625 56.085938 C 43.089844 56.265625 42.648438 56.398438 42.191406 56.492188 C 41.738281 56.582031 41.277344 56.625 40.8125 56.625 L 7.839844 56.625 C 7.378906 56.625 6.917969 56.582031 6.460938 56.492188 C 6.007812 56.398438 5.566406 56.265625 5.136719 56.085938 C 4.707031 55.910156 4.300781 55.691406 3.914062 55.433594 C 3.53125 55.175781 3.171875 54.878906 2.84375 54.550781 C 2.515625 54.222656 2.222656 53.867188 1.964844 53.480469 C 1.707031 53.09375 1.492188 52.683594 1.3125 52.253906 C 1.136719 51.824219 1 51.382812 0.910156 50.925781 C 0.820312 50.46875 0.777344 50.007812 0.777344 49.542969 L 0.777344 16.488281 C 0.777344 16.023438 0.820312 15.5625 0.910156 15.105469 C 1 14.648438 1.136719 14.207031 1.3125 13.777344 C 1.492188 13.347656 1.707031 12.941406 1.964844 12.554688 C 2.222656 12.167969 2.515625 11.808594 2.84375 11.480469 C 3.171875 11.152344 3.53125 10.855469 3.914062 10.597656 C 4.300781 10.339844 4.707031 10.121094 5.136719 9.945312 C 5.566406 9.765625 6.007812 9.632812 6.460938 9.542969 C 6.917969 9.449219 7.378906 9.40625 7.839844 9.40625 Z M 7.839844 9.40625 " fill-opacity="1" fill-rule="nonzero"/></g><g fill="#ffffff" fill-opacity="1"><g transform="translate(10.726965, 46.401259)"><path d="M 20.734375 -12.542969 L 8.230469 -12.542969 L 8.230469 0 L 3.109375 0 L 3.109375 -29.109375 L 8.175781 -29.109375 L 8.175781 -17.214844 L 20.734375 -17.214844 L 20.734375 -29.109375 L 25.816406 -29.109375 L 25.816406 0 L 20.734375 0 Z M 20.734375 -12.542969 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(62.007197, 44.82787)"><path d="M 17.277344 -10.453125 L 6.859375 -10.453125 L 6.859375 0 L 2.589844 0 L 2.589844 -24.257812 L 6.8125 -24.257812 L 6.8125 -14.34375 L 17.277344 -14.34375 L 17.277344 -24.257812 L 21.515625 -24.257812 L 21.515625 0 L 17.277344 0 Z M 17.277344 -10.453125 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(89.370287, 44.82787)"><path d="M 12.859375 -24.640625 C 16.707031 -24.640625 19.71875 -23.261719 21.894531 -20.5 L 22.734375 -19.265625 C 23.976562 -17.132812 24.597656 -14.632812 24.597656 -11.769531 C 24.597656 -8.511719 23.691406 -5.726562 21.882812 -3.402344 C 21.433594 -2.824219 20.945312 -2.308594 20.40625 -1.859375 C 18.375 -0.136719 15.867188 0.722656 12.886719 0.722656 C 9.1875 0.722656 6.246094 -0.585938 4.0625 -3.203125 C 2.140625 -5.503906 1.179688 -8.421875 1.179688 -11.953125 C 1.179688 -16 2.40625 -19.210938 4.859375 -21.585938 C 6.980469 -23.625 9.648438 -24.640625 12.859375 -24.640625 Z M 12.859375 -20.75 C 10.363281 -20.75 8.425781 -19.769531 7.046875 -17.816406 C 5.949219 -16.25 5.402344 -14.292969 5.402344 -11.953125 C 5.402344 -8.839844 6.324219 -6.480469 8.167969 -4.867188 C 9.445312 -3.738281 11.019531 -3.171875 12.886719 -3.171875 C 15.363281 -3.171875 17.292969 -4.132812 18.675781 -6.050781 C 19.796875 -7.585938 20.359375 -9.511719 20.359375 -11.828125 C 20.359375 -15.089844 19.414062 -17.527344 17.523438 -19.136719 C 16.257812 -20.210938 14.699219 -20.75 12.859375 -20.75 Z M 12.859375 -20.75 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(118.49594, 44.82787)"><path d="M 12.421875 -20.363281 L 12.421875 0 L 8.203125 0 L 8.203125 -20.363281 L 0.660156 -20.363281 L 0.660156 -24.257812 L 19.921875 -24.257812 L 19.921875 -20.363281 Z M 12.421875 -20.363281 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(142.379885, 44.82787)"><path d="M 6.71875 -24.257812 L 6.71875 -3.894531 L 18.035156 -3.894531 L 18.035156 0 L 2.5 0 L 2.5 -24.257812 Z M 6.71875 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(164.53192, 44.82787)"><path d="M 3.128906 -24.257812 L 7.394531 -24.257812 L 7.394531 0 L 3.128906 0 Z M 3.128906 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(177.963102, 44.82787)"><path d="M 21.574219 -24.257812 L 21.574219 0 L 17.265625 0 L 6.445312 -17.007812 L 6.445312 0 L 2.375 0 L 2.375 -24.257812 L 6.5625 -24.257812 L 17.507812 -7.082031 L 17.507812 -24.257812 Z M 21.574219 -24.257812 "/></g></g><g clip-path="url(#d2)"><g fill="#ea580c" fill-opacity="1"><g transform="translate(205.326192, 44.82787)"><path d="M 7.042969 -10.453125 L 7.042969 -3.894531 L 20.546875 -3.894531 L 20.546875 0 L 2.820312 0 L 2.820312 -24.257812 L 19.980469 -24.257812 L 19.980469 -20.363281 L 7.042969 -20.363281 L 7.042969 -14.34375 L 19.519531 -14.34375 L 19.519531 -10.453125 Z M 7.042969 -10.453125 "/></g></g></g></svg></a><div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav><div class="container"><div class="hero"><h1>Never miss a <span style="color:#ea580c">critical</span> issue again.</h1><p>Real-time SMS for absentee operators. Works for laundromats, car washes, self-storage, parking, and gyms.</p></div><div class="features"><div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div><div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div><div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div><div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div></div><div class="section-title">Choose your operation to demo live</div><div class="vertical-buttons"><a href="/laundromat" class="vertical-btn"><div class="vertical-btn-title">Laundromat</div><div class="vertical-btn-desc">For owners who aren't on-site</div></a><a href="/carwash" class="vertical-btn"><div class="vertical-btn-title">Car Wash</div><div class="vertical-btn-desc">For self-serve & attended operations</div></a><a href="/selfstorage" class="vertical-btn"><div class="vertical-btn-title">Self Storage</div><div class="vertical-btn-desc">For facility managers</div></a><a href="/parking" class="vertical-btn"><div class="vertical-btn-title">Parking</div><div class="vertical-btn-desc">For lot & garage operators</div></a><a href="/gym" class="vertical-btn"><div class="vertical-btn-title">24/7 Gym</div><div class="vertical-btn-desc">For gym operators</div></a></div></div><div class="cta-section"><h2>Try free for 14 days</h2><p>No credit card required.</p><a href="/signup">Get Started →</a></div><div class="footer"><p>No app. No software. No setup. Works by text.</p></div></body></html>"""
+HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hotline — Real-Time Alerts for Absentee Operators</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.hero{text-align:center;padding:32px 24px 16px;max-width:640px;margin:0 auto}
+.hero h1{font-size:clamp(28px,5vw,44px);font-weight:700;line-height:1.15;margin-bottom:10px;letter-spacing:-0.02em}
+.hero h1 em{font-style:normal;color:#ea580c}
+.hero p{font-size:16px;color:#888;margin-bottom:0}
+.industry-bar{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding:20px 20px 4px;max-width:700px;margin:0 auto}
+.ind-pill{padding:7px 16px;border-radius:99px;border:1.5px solid #e0e0dc;background:#fff;font-size:13px;font-weight:600;color:#888;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.ind-pill.active{background:#ea580c;border-color:#ea580c;color:#fff}
+.ind-pill:hover:not(.active){border-color:#ea580c;color:#ea580c}
+.try-label{text-align:center;font-size:12px;color:#bbb;padding:10px 0 4px;letter-spacing:0.04em}
+.phones{display:flex;gap:24px;margin:0 auto 16px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}
+.device{width:320px;flex-shrink:0}
+.frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
+.notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
+.statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
+.phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
+.phone-label-bar.customer{color:#2563eb}.phone-label-bar.operator{color:#ea580c}
+.filter-row{display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;flex-wrap:wrap}
+.filter-btn{font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s}
+.filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
+.msgs{height:300px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
+.bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
+.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
+.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
+.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}
+.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}
+.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}
+.bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}
+.bubble.cmd{background:#e8e8e4;color:#333;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
+.bubble.resp{background:#f5f5f0;color:#555;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
+.bubble .lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:3px}
+.meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.tag{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}
+.tag.t1{background:#fee2e2;color:#dc2626}.tag.t2{background:#fff7ed;color:#b45309}.tag.t3{background:#fef9c3;color:#a16207}.tag.t4{background:#f0f0ec;color:#888}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.input-area{padding:8px 12px 12px;border-top:1px solid #f0f0ec;background:#fff}
+.input-row{display:flex;gap:6px}.input-row input{flex:1;padding:10px 12px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:20px;font-size:14px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
+.input-row button{padding:10px 14px;border-radius:50%;border:none;font-size:16px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center}
+.input-row button.blue{background:#2563eb;color:#fff}.input-row button.orange{background:#ea580c;color:#fff}
+.input-row button:disabled{opacity:0.3;cursor:not-allowed}
+.operator-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}
+.cmd-btn{font-size:11px;padding:5px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;font-weight:600}.cmd-btn:hover{border-color:#ea580c;color:#1a1a1a}
+.operator-input{display:none}.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
+.ex-area{padding:0 20px 16px;max-width:700px;margin:0 auto}
+.ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.ex{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:border-color 0.15s}
+.ex:hover{border-color:#2563eb;color:#1a1a1a}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}@keyframes spin{to{transform:rotate(360deg)}}
+.features{max-width:700px;margin:32px auto;padding:0 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(max-width:640px){.features{grid-template-columns:repeat(2,1fr)}}
+.feature{padding:14px 16px;background:#ea580c;border-radius:8px;text-align:left}
+.feature-title{font-weight:700;font-size:14px;margin-bottom:4px;color:#fff}
+.feature-desc{font-size:12px;color:rgba(255,255,255,0.88);line-height:1.4}
+.cta-section{max-width:700px;margin:24px auto 40px;padding:32px 24px;background:#fff7ed;border-radius:12px;text-align:center;border:1px solid #fed7aa}
+.cta-section h2{font-size:18px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
+.cta-section p{font-size:13px;color:#888;margin-bottom:16px}
+.cta-section a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
+@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:360px}.industry-bar{gap:6px}}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="hero">
+<h1>Never miss a <em>critical</em> issue again.</h1>
+<p>Customers text. Hotline triages, tiers, and alerts you — automatically.</p>
+</div>
+<div class="industry-bar">
+<div class="ind-pill active" onclick="setIndustry('laundromat',this)">Laundromat</div>
+<div class="ind-pill" onclick="setIndustry('carwash',this)">Car Wash</div>
+<div class="ind-pill" onclick="setIndustry('selfstorage',this)">Self Storage</div>
+<div class="ind-pill" onclick="setIndustry('parking',this)">Parking</div>
+<div class="ind-pill" onclick="setIndustry('gym',this)">24/7 Gym</div>
+</div>
+<p class="try-label">Try a scenario or type your own</p>
+<div class="phones">
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 87%</span></div>
+<div class="phone-label-bar customer">Customer</div>
+<div class="msgs" id="m-cust"><div class="bubble system">Tap a scenario or type a message below</div></div>
+<div class="input-area"><div class="input-row">
+<input type="text" id="cust-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendDemo()">
+<button class="blue" id="cust-btn" onclick="sendDemo()">&#9650;</button>
+</div></div><div class="home-bar"></div>
+</div></div>
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
+<div class="phone-label-bar operator">Operator</div>
+<div class="filter-row"><span style="font-weight:600;color:#888;font-size:11px">Alert level:</span>
+<button class="filter-btn active" id="h-filt-crit" onclick="setFilter('critical')">Critical only</button>
+<button class="filter-btn" id="h-filt-all" onclick="setFilter('all')">All messages</button></div>
+<div class="msgs" id="m-operator"><div class="bubble system">Operator alerts appear here</div></div>
+<div class="operator-cmds" id="operator-cmds">
+<div class="cmd-btn" onclick="operatorCmd('REPLY')">REPLY</div>
+<div class="cmd-btn" onclick="operatorCmd('CLOSE')">CLOSE</div>
+<div class="cmd-btn" onclick="operatorCmd('MENU')">MENU</div>
+</div>
+<div class="input-area operator-input" id="operator-input"><div class="input-row">
+<input type="text" id="operator-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')operatorCmd(this.value)">
+<button class="orange" onclick="operatorCmd(document.getElementById('operator-inp').value)">&#9650;</button>
+</div></div><div class="home-bar"></div>
+</div></div>
+</div>
+<div class="ex-area">
+<div class="ex-row" id="ex-row"></div>
+<div style="text-align:center;margin-top:10px"><button onclick="resetDemo()" style="padding:5px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset</button></div>
+</div>
+<div class="features">
+<div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
+<div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
+<div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div>
+<div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div>
+</div>
+<div class="cta-section">
+<h2>Try free for 14 days</h2>
+<p>No credit card required.</p>
+<a href="/signup">Get Started &rarr;</a>
+</div>
+<footer>Hotline &middot; Real-time alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<script>
+const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+
+const CHIPS={
+  laundromat:["Washer #3 is leaking everywhere","Dryer ate my money and won't start","Bathroom is completely flooded","Change machine is jammed"],
+  carwash:["Bay 2 won't start and I already paid","My car is stuck in the tunnel","Card reader on bay 1 is broken","The vacuum isn't working at all"],
+  selfstorage:["Gate keypad isn't accepting my code","My unit lock is completely jammed","Water is dripping from the ceiling","Elevator is out of service"],
+  parking:["Pay station is showing an error","Exit gate is stuck, I can't leave","I paid but the gate won't open","Lights are out on level 3"],
+  gym:["Treadmill is making a loud grinding noise","My access fob stopped working","There's no hot water in the showers","The cable machine cable snapped"]
+};
+
+function setIndustry(key,el){
+  document.querySelectorAll('.ind-pill').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  renderChips(key);
+}
+
+function renderChips(key){
+  const row=document.getElementById('ex-row');
+  row.innerHTML=(CHIPS[key]||CHIPS.laundromat).map(t=>`<div class="ex" onclick="tryEx(this)">${t}</div>`).join('');
+}
+
+function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo();}
+
+function addB(cont,cls,html){
+  const d=document.createElement('div');d.className='bubble '+cls;
+  if(cls==='alert-red')d.setAttribute('data-tier','1');
+  else if(cls==='alert')d.setAttribute('data-tier','2');
+  else if(cls==='feedback')d.setAttribute('data-tier','3');
+  else if(cls==='info')d.setAttribute('data-tier','4');
+  d.innerHTML=html;cont.appendChild(d);cont.scrollTop=cont.scrollHeight;
+  if(cont===mo)applyFilter();
+}
+
+function applyFilter(){
+  mo.querySelectorAll('.bubble[data-tier]').forEach(b=>{
+    const t=parseInt(b.getAttribute('data-tier'));
+    b.style.display=(filterMode==='all'||t<=2)?'':'none';
+  });
+}
+
+function setFilter(m){
+  filterMode=m;
+  document.getElementById('h-filt-crit').className='filter-btn'+(m==='critical'?' active':'');
+  document.getElementById('h-filt-all').className='filter-btn'+(m==='all'?' active':'');
+  applyFilter();
+}
+
+function resetDemo(){
+  [mc,mo].forEach(c=>{while(c.firstChild)c.removeChild(c.firstChild)});
+  addB(mc,'system','Tap a scenario or type a message below');
+  addB(mo,'system','Operator alerts appear here');
+  demoCount=0;history=[];replyMode=false;lastData=null;
+  document.getElementById('cust-input').value='';
+  document.getElementById('operator-cmds').style.display='none';
+  document.getElementById('operator-input').style.display='none';
+}
+
+function operatorCmd(raw){
+  const cmd=(raw||'').trim().toUpperCase();
+  const inp=document.getElementById('operator-inp');
+  if(inp)inp.value='';
+  if(!cmd)return;
+  if(replyMode){
+    if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}
+    replyMode=false;
+    addB(mo,'cmd',raw.trim());
+    addB(mo,'resp','Reply sent. AI quiet for 15 min.');
+    addB(mc,'in',raw.trim());
+    if(inp)inp.placeholder='Type a command...';
+    return;
+  }
+  addB(mo,'cmd',raw.trim());
+  if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}
+  if(cmd==='REPLY'){
+    if(!lastData){addB(mo,'resp','No messages to reply to.');return}
+    replyMode=true;
+    const preview=(lastData.original_message||'last message').slice(0,50);
+    addB(mo,'resp',`Replying to: "${preview}"\\nType your reply now, or NEVERMIND.`);
+    document.getElementById('operator-input').style.display='block';
+    if(inp){inp.placeholder='Type your reply...';inp.focus();}
+    return;
+  }
+  if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('operator-input').style.display='none';return}
+  if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}
+  if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}
+  if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}
+  addB(mo,'resp','Unknown command. Reply MENU for help.');
+}
+
+async function sendDemo(){
+  const inp=document.getElementById('cust-input'),btn=document.getElementById('cust-btn');
+  const text=inp.value.trim();if(!text)return;
+  if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free &rarr;</a>');return}
+  inp.value='';btn.disabled=true;demoCount++;replyMode=false;
+  addB(mc,'out-blue',text);
+  addB(mo,'system','<span class="spinner"></span> Processing...');
+  try{
+    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});
+    const d=await r.json();lastData=d;
+    if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);
+    const reply=d.auto_reply||'Thanks for letting us know.';
+    const cat=(d.category||'general').replace(/_/g,' ');
+    const concern=d.concern||d.explanation||'';
+    history.push({customer:text,reply});if(history.length>6)history.shift();
+    await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);
+    await new Promise(r=>setTimeout(r,350));
+    const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+    if(d.tier===1){
+      const ch=concern?'Concern: '+concern+'<br><br>':'';
+      addB(mo,'alert-red','<div style="font-weight:600;margin-bottom:6px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:10px;font-size:12px">Reply REPLY to message customer back.</div>');
+      document.getElementById('operator-cmds').style.display='flex';
+    }else if(d.tier===2){
+      const ch=concern?'Concern: '+concern+'<br><br>':'';
+      addB(mo,'alert','<div style="font-weight:600;margin-bottom:6px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:10px;font-size:12px">Reply REPLY to message customer back.</div>');
+      document.getElementById('operator-cmds').style.display='flex';
+    }else if(d.tier===3){
+      const ch=concern?'Concern: '+concern+'<br><br>':'';
+      addB(mo,'feedback','<div style="font-weight:600;margin-bottom:6px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+ch);
+    }else{
+      addB(mo,'info','<div style="font-weight:600;margin-bottom:6px">✓ LOGGED ('+t+')</div>Category: '+cat);
+    }
+  }catch(e){if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);addB(mo,'system','Error: '+e.message)}
+  btn.disabled=false;inp.focus();
+}
+
+// Init
+renderChips('laundromat');
+</script></body></html>"""
 
 DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hotline — Stop losing customers to fixable problems</title>
