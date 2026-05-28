@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v9"
+VERSION = "v38"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -137,7 +137,7 @@ def init_db():
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
                          ("business_code","\'\'"),("trial_ends_at","\'\'"),
                          ("sub_status","\'trialing\'"),("stripe_customer_id","\'\'"),
-                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'")]:
+                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'"),("vertical","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
@@ -210,7 +210,7 @@ def _lookup_zip(zip_code):
         logger.warning(f"[ZIP LOOKUP] Failed for {zip_code}: {e}")
         return ("", "")
 
-def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code="", zip_code=""):
+def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code="", zip_code="", vertical=""):
     now = datetime.now(timezone.utc).isoformat()
     all_phones = ",".join([owner_phone] + [p.strip() for p in extra_phones.split(",") if p.strip()]) if extra_phones else owner_phone
     website_info = scrape_website_info(website_url) if website_url else ""
@@ -218,21 +218,21 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         business_code = _gen_business_code()
     trial_end = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
     city, state = _lookup_zip(zip_code) if zip_code else ("", "")
-    # Try full INSERT with zip/city/state; fall back without if columns don't exist yet
+    # Try full INSERT with zip/city/state/vertical; fall back without if columns don't exist yet
     for use_zip_cols in (True, False):
         try:
             with get_db() as c:
                 if use_zip_cols:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, now))
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, vertical or "", now))
                 else:
                     _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
             return business_code
         except Exception as e:
             err_msg = str(e).lower()
-            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "column" in err_msg):
-                logger.warning(f"create_business: zip/city/state columns missing, retrying without — {e}")
+            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "vertical" in err_msg or "column" in err_msg):
+                logger.warning(f"create_business: zip/city/state/vertical columns missing, retrying without — {e}")
                 continue
             logger.error(f"create_business failed for {biz_id}: {e}")
             return None
@@ -466,7 +466,7 @@ def send_trial_warnings():
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
         if days == 1:
-            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
+            link_part = f"\nSubscribe so you don't miss a critical issue from your customers &#9888;\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
             msg = f"Your free Hotline trial ends tomorrow.{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
@@ -474,7 +474,7 @@ def send_trial_warnings():
         elif days == 0:
             set_sub_status(biz["id"], "expired")
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
@@ -1330,7 +1330,7 @@ def handle_owner_command(text, business, sender_phone=""):
             return f"Trial active \u2014 {days} day(s) left.{link_part}"
         else:
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
-            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
 
     # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
     # level for 10DLC compliance, so we use MENU as the in-app command.
@@ -1400,7 +1400,7 @@ def build_digest_html(name, stats, period="week"):
 <div style="flex:1;background:#f5f5f0;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{t}</div><div style="font-size:12px;color:#888">messages</div></div>
 <div style="flex:1;background:#fff4e6;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{f}</div><div style="font-size:12px;color:#888">flagged</div></div>
 <div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
-{"<p style='color:#c0392b;font-size:14px'>\u26a0\ufe0f "+str(u)+" unacknowledged</p>" if u>0 else ""}
+{"<p style='color:#c0392b;font-size:14px'>&#9888; "+str(u)+" unacknowledged</p>" if u>0 else ""}
 {"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
 <p style="font-size:13px;color:#aaa;margin-top:24px">Reply MENU to your Hotline number for commands.</p></div>"""
 
@@ -1512,7 +1512,7 @@ Emergencies always get through."""
 # --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init(); return Response(content=_ga(DEMO_HTML), media_type="text/html")
+    _ensure_init(); return Response(content=_ga(HOMEPAGE_HTML), media_type="text/html")
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
@@ -1763,7 +1763,7 @@ async def admin_welcome(request: Request):
         base = os.getenv("BASE_URL", "https://hotlinetxt.com")
         asset_msg = (
             f"Your Hotline assets for {biz['name']}:\n"
-            f"Print-ready sign: {base}/signs/{code}.pdf\n"
+            f"Display your Hotline (PDF): {base}/signs/{code}.pdf\n"
             f"Plain QR image (custom signage): {base}/qr/{code}.png"
         )
         for p in phones: send_sms(p, asset_msg)
@@ -1962,7 +1962,7 @@ async def admin_billing(request: Request):
         if status == "active":
             msg = "\u2705 Your Hotline subscription is active."
         elif status in ("expired","canceled","past_due"):
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
         else:
             msg = f"\u23f0 Your Hotline trial has {days} day(s) left.{link_part}"
         phones = get_alert_phones(biz)
@@ -2006,7 +2006,8 @@ def admin_ui(request: Request):
         rows += (
             f'<tr id="row-{bid}">'
             f'<td style="padding:12px 16px;font-weight:600"><a href="#" onclick="openDrawer(\'{bid}\',\'{b["name"].replace("\'", "")}\');return false" style="color:#1a1a1a;text-decoration:none;border-bottom:1px solid #e0e0dc">{b["name"]}</a><br><span style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline" onclick="editPhones(\'{bid}\',\'{alert_phones_display.replace("\"","&quot;")}\');">{alert_phones_display}</span></td>'
-            f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>'
+            f'<td style="padding:12px 16px;font-family:monospace;font-size:13px;color:#ea580c;font-weight:600">{b.get("business_code","—")}</td>' \
+            f'<td style="padding:12px 16px">{("<span style=\'background:#f0fdf4;color:#166534;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;text-transform:uppercase\'>" + b.get("vertical","").replace("-"," ").title() + "</span>") if b.get("vertical") else "<span style=\'color:#ccc;font-size:11px\'>—</span>"}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["total_messages"]}</td>'
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
             f'<td style="padding:12px 16px">{badge_html}{trial_info}</td>'
@@ -2016,7 +2017,7 @@ def admin_ui(request: Request):
             f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:12px">Remove</a>'
             f'</td></tr>'
         )
-    if not rows: rows = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
+    if not rows: rows = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#999">No businesses yet.</td></tr>'
 
     # --- Metrics ---
     now_utc    = datetime.now(timezone.utc)
@@ -2060,6 +2061,15 @@ def admin_ui(request: Request):
     {stat_card("Churn Rate", churn_rate, "paid who left", "#991b1b" if churned_count else "#1a1a1a")}
     {stat_card("Messages (7d)", msg_7d, f"{tier1_7d} emergencies")}
     {stat_card("Top Issue (30d)", top_cat)}
+  </div>
+  <h2 style="font-size:16px;font-weight:700;margin:0 0 12px">Signups by Vertical</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:28px">
+    {"".join(
+      f'<div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:10px">' +
+      f'<span style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em">{label}</span>' +
+      f'<span style="font-size:20px;font-weight:700;color:#1a1a1a">{sum(1 for b in all_biz if (b.get("vertical") or "") == slug)}</span></div>'
+      for slug, label in [("laundromat","Laundromat"),("carwash","Car Wash"),("selfstorage","Self Storage"),("parking","Parking"),("gym","Gym"),("","Other / Direct")]
+    )}
   </div>'''
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title>
@@ -2799,7 +2809,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
             elif cat == "inquiry":
                 header = "\u2753 Customer question"
             elif tier == 2:
-                header = "\u26a0\ufe0f Issue"
+                header = "&#9888; Issue"
             else:
                 header = "\U0001f4ac Feedback"
             when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
@@ -2827,7 +2837,30 @@ def _process_customer_message(biz, sender, body, image_url=""):
 @app.post("/sms/incoming")
 async def incoming_sms(request: Request):
     _ensure_init()
-    form_data = await request.form()
+    # ── Twilio signature validation ─────────────────────────────────
+    # Prevents spoofed POST requests from triggering alerts
+    _twilio_auth = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if _twilio_auth:
+        try:
+            from twilio.request_validator import RequestValidator as _TwilioValidator
+            _tv = _TwilioValidator(_twilio_auth)
+            _url = str(request.url)
+            _sig = request.headers.get("X-Twilio-Signature", "")
+            _post = dict(await request.form())
+            if not _tv.validate(_url, _post, _sig):
+                logger.warning("[SMS] Invalid Twilio signature — request rejected")
+                from twilio.twiml.messaging_response import MessagingResponse as _MR
+                return Response(content=str(_MR()), media_type="application/xml", status_code=200)
+            form_data = _post
+        except ImportError:
+            logger.warning("[SMS] twilio.request_validator not available — skipping sig check")
+            form_data = await request.form()
+        except Exception as _e:
+            logger.error(f"[SMS] Signature validation error: {_e}")
+            form_data = await request.form()
+    else:
+        form_data = await request.form()
+    # ── End Twilio validation ───────────────────────────────────────
     sender = (form_data.get("From") or "").strip()
     body = (form_data.get("Body") or "").strip()
     media_url = (form_data.get("MediaUrl0") or "").strip()
@@ -2957,21 +2990,28 @@ def _twiml(msg):
 
 # --- Shared nav + styles ---
 NAV_CSS = """
-.nav{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto}
-.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center}
-.nav .logo svg{height:28px;width:auto}
+body{background:#f8f8f6}
+.nav{display:flex;align-items:center;justify-content:center;padding:12px 24px;max-width:100%;margin:0 auto;position:relative}.nav .logo{flex:0 0 auto}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}
+.nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;display:flex;align-items:center}
+.nav .logo svg{height:36px;width:auto}
 .nav-links{display:flex;gap:20px;align-items:center;margin-left:auto}
 .nav-links a{font-size:14px;color:#666;text-decoration:none;font-weight:500}
 .nav-links a:hover{color:#1a1a1a}
 .nav-links .signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}
 .nav-links .signup-btn:hover{background:#dc2626;color:#fff}
+.dropdown{position:relative}
+.dropdown>a::after{content:" ▾";font-size:10px;opacity:0.6}
+.dropdown-menu{display:none;position:absolute;top:100%;left:50%;transform:translateX(-50%);background:transparent;min-width:180px;z-index:100;padding-top:6px}.dropdown-menu-inner{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.1)}
+.dropdown-menu-inner a{display:block;padding:8px 14px;font-size:13px;color:#444;border-radius:6px;white-space:nowrap}
+.dropdown-menu-inner a:hover{background:#fff7ed;color:#ea580c}
+.dropdown:hover .dropdown-menu{display:block}
 .hamburger{display:none;cursor:pointer;font-size:22px;color:#666}
-@media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;flex:0 0 auto}.nav .logo svg{height:22px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
+@media(max-width:600px){.nav{flex-wrap:wrap;padding:8px 16px}.nav .logo{position:static;transform:none;flex:0 0 auto}.nav .logo svg{height:36px}.nav-links{display:none;position:absolute;top:48px;right:16px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px;flex-direction:column;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:10;margin-left:0}.nav-links.open{display:flex}.hamburger{display:block;margin-left:auto}}
 """
 
-NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 70" font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif"><rect x="0" y="5" width="60" height="60" rx="9" fill="#ea580c"/><text x="30" y="52" font-size="48" font-weight="700" fill="#fff" text-anchor="middle">H</text><text x="78" y="50" font-size="40" font-weight="700" fill="#ea580c" letter-spacing="6">HOTLINE</text></svg></a>
+NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" viewBox="0 0 224.87999 67.499998" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="d1n"><path d="M 0.765625 9 L 48 9 L 48 57 L 0.765625 57 Z M 0.765625 9 " clip-rule="nonzero"/></clipPath><clipPath id="d2n"><path d="M 208 20 L 223.992188 20 L 223.992188 45 L 208 45 Z M 208 20 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#d1n)"><path fill="#ea580c" d="M 7.839844 9.40625 L 40.8125 9.40625 C 44.589844 9.40625 47.878906 12.699219 47.878906 16.488281 L 47.878906 49.542969 C 47.878906 53.332031 44.589844 56.625 40.8125 56.625 L 7.839844 56.625 C 4.0625 56.625 0.777344 53.332031 0.777344 49.542969 L 0.777344 16.488281 C 0.777344 12.699219 4.0625 9.40625 7.839844 9.40625 Z " fill-opacity="1" fill-rule="nonzero"/></g><g fill="#ffffff" fill-opacity="1"><g transform="translate(10.726965, 46.401259)"><path d="M 20.734375 -12.542969 L 8.230469 -12.542969 L 8.230469 0 L 3.109375 0 L 3.109375 -29.109375 L 8.175781 -29.109375 L 8.175781 -17.214844 L 20.734375 -17.214844 L 20.734375 -29.109375 L 25.816406 -29.109375 L 25.816406 0 L 20.734375 0 Z M 20.734375 -12.542969 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(62.007197, 44.82787)"><path d="M 17.277344 -10.453125 L 6.859375 -10.453125 L 6.859375 0 L 2.589844 0 L 2.589844 -24.257812 L 6.8125 -24.257812 L 6.8125 -14.34375 L 17.277344 -14.34375 L 17.277344 -24.257812 L 21.515625 -24.257812 L 21.515625 0 L 17.277344 0 Z M 17.277344 -10.453125 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(89.370287, 44.82787)"><path d="M 12.859375 -24.640625 C 16.707031 -24.640625 19.71875 -23.261719 21.894531 -20.5 L 22.734375 -19.265625 C 23.976562 -17.132812 24.597656 -14.632812 24.597656 -11.769531 C 24.597656 -8.511719 23.691406 -5.726562 21.882812 -3.402344 C 18.375 -0.136719 15.867188 0.722656 12.886719 0.722656 C 9.1875 0.722656 6.246094 -0.585938 4.0625 -3.203125 C 2.140625 -5.503906 1.179688 -8.421875 1.179688 -11.953125 C 1.179688 -16 2.40625 -19.210938 4.859375 -21.585938 C 6.980469 -23.625 9.648438 -24.640625 12.859375 -24.640625 Z M 12.859375 -20.75 C 10.363281 -20.75 8.425781 -19.769531 7.046875 -17.816406 C 5.949219 -16.25 5.402344 -14.292969 5.402344 -11.953125 C 5.402344 -8.839844 6.324219 -6.480469 8.167969 -4.867188 C 9.445312 -3.738281 11.019531 -3.171875 12.886719 -3.171875 C 15.363281 -3.171875 17.292969 -4.132812 18.675781 -6.050781 C 19.796875 -7.585938 20.359375 -9.511719 20.359375 -11.828125 C 20.359375 -15.089844 19.414062 -17.527344 17.523438 -19.136719 C 16.257812 -20.210938 14.699219 -20.75 12.859375 -20.75 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(118.49594, 44.82787)"><path d="M 12.421875 -20.363281 L 12.421875 0 L 8.203125 0 L 8.203125 -20.363281 L 0.660156 -20.363281 L 0.660156 -24.257812 L 19.921875 -24.257812 L 19.921875 -20.363281 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(142.379885, 44.82787)"><path d="M 6.71875 -24.257812 L 6.71875 -3.894531 L 18.035156 -3.894531 L 18.035156 0 L 2.5 0 L 2.5 -24.257812 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(164.53192, 44.82787)"><path d="M 3.128906 -24.257812 L 7.394531 -24.257812 L 7.394531 0 L 3.128906 0 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(177.963102, 44.82787)"><path d="M 21.574219 -24.257812 L 21.574219 0 L 17.265625 0 L 6.445312 -17.007812 L 6.445312 0 L 2.375 0 L 2.375 -24.257812 L 6.5625 -24.257812 L 17.507812 -7.082031 L 17.507812 -24.257812 Z "/></g></g><g clip-path="url(#d2n)"><g fill="#ea580c" fill-opacity="1"><g transform="translate(205.326192, 44.82787)"><path d="M 7.042969 -10.453125 L 7.042969 -3.894531 L 20.546875 -3.894531 L 20.546875 0 L 2.820312 0 L 2.820312 -24.257812 L 19.980469 -24.257812 L 19.980469 -20.363281 L 7.042969 -20.363281 L 7.042969 -14.34375 L 19.519531 -14.34375 L 19.519531 -10.453125 Z "/></g></g></g></svg></a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
-<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><a href="/industries">Who We Support</a><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
 
 # --- Demo page (homepage) ---
@@ -3064,8 +3104,502 @@ async def demo_classify(request_data:dict=None):
             "would_alert":c["tier"]==1 or (c["tier"]==2 and c["confidence"]>0.7)}
 
 
+
+# ── Vertical Landing Pages ──────────────────────────────────────────────────
+
+def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, step3, placements=None, plural=None):
+    """Generate a vertical landing page with integrated demo (matching main demo exactly)."""
+    # Generate scenario chips HTML
+    ex_chips_html = "".join(f'<div class="ex" onclick="tryEx(this)">{s}</div>' for s in scenarios)
+    
+    # Generate placements grid HTML
+    if placements is None:
+        placements = []
+    placements_html = "".join(f'<div style="padding:14px;background:#fff;border:1px solid #e0e0dc;border-radius:8px;text-align:center;font-size:13px;color:#666">{p}</div>' for p in placements)
+    
+    # Demo JS (adapted from main demo - uses v-cust and v-oper IDs)
+    DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
+function addB(c,cls,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
+async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
+history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1)}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2)}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
+function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
+function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value=''}
+function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
+function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
+
+    steps_html = f'''<div class="hiw-steps">
+<div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
+<div class="hiw-step"><div class="hiw-num">2</div><div><strong>{step2[0]}</strong><p>{step2[1]}</p></div></div>
+<div class="hiw-step"><div class="hiw-num">3</div><div><strong>{step3[0]}</strong><p>{step3[1]}</p></div></div>
+</div>'''
+
+    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline for {plural or label+"s"}</title><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"><style>
+*{{box-sizing:border-box;margin:0;padding:0}}body{{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}}a{{color:#ea580c;text-decoration:none}}
+{NAV_CSS}
+.hero{{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}}.v-label{{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#ea580c;margin-bottom:10px}}
+h1{{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}}h1 em{{font-style:normal;color:#ea580c}}.sub{{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}}.urgency{{font-size:13px;color:#aaa;margin-bottom:8px}}.panel-label{{font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em}}
+.phones{{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}}.device{{width:320px;flex-shrink:0}}.frame{{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}}.notch{{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}}.notch::before{{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}}.statusbar{{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}}.phone-label-bar{{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}}.phone-label-bar.customer{{color:#2563eb}}.phone-label-bar.operator{{color:#ea580c}}.pref-bar{{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;flex-wrap:wrap}}.pref-label{{font-size:13px;color:#888;font-weight:500}}.filter-btn{{font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.2s}}.filter-btn.active{{background:#ea580c;color:#fff;border-color:#ea580c}}
+.msgs{{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}}.bubble{{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}}.bubble.in{{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}}.bubble.out-blue{{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}}.bubble.alert{{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}}.bubble.alert-red{{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}}.bubble.feedback{{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}}.bubble.info{{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}}.bubble.system{{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}}.bubble .lbl{{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:3px}}.meta{{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}}.tag{{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}}.tag.t1{{background:#fee2e2;color:#dc2626}}.tag.t2{{background:#fff7ed;color:#b45309}}.tag.t3{{background:#fef9c3;color:#a16207}}.tag.t4{{background:#f0f0ec;color:#888}}@keyframes fadeUp{{from{{opacity:0;transform:translateY(6px)}}to{{opacity:1;transform:none}}}}.input-area{{padding:8px 12px 12px;border-top:1px solid #f0f0ec;background:#fff}}.input-row{{display:flex;gap:6px}}.input-row input{{flex:1;padding:10px 12px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:20px;font-size:14px;color:#1a1a1a;font-family:inherit}}.input-row input::placeholder{{color:#bbb}}.input-row input:focus{{outline:none;border-color:#ea580c}}.input-row button{{padding:10px 14px;border-radius:50%;border:none;font-size:16px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center}}.input-row button.blue{{background:#2563eb;color:#fff}}.input-row button.orange{{background:#ea580c;color:#fff}}.input-row button:disabled{{opacity:0.3;cursor:not-allowed}}.operator-cmds{{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}}.home-bar{{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}}.examples{{margin-bottom:20px;padding:0 20px}}.examples p{{font-size:12px;color:#aaa;margin-bottom:6px;text-align:center}}.ex-row{{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:700px;margin:0 auto}}.ex{{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04)}}.ex:hover{{border-color:#2563eb;color:#1a1a1a}}.cta{{text-align:center;margin:24px 0;padding:0 20px}}.cta a{{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}}footer{{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}}.spinner{{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}}@keyframes spin{{to{{transform:rotate(360deg)}}}}.howitworks{{max-width:640px;margin:0 auto;padding:0 20px 28px}}.hiw-steps{{display:flex;flex-direction:column;gap:14px}}.hiw-step{{display:flex;align-items:flex-start;gap:14px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px}}.hiw-num{{width:28px;height:28px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:13px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}}.hiw-step strong{{font-size:14px;display:block;margin-bottom:2px}}.hiw-step p{{font-size:13px;color:#888;margin:0;line-height:1.4}}@media(max-width:700px){{.phones{{flex-direction:column;align-items:center}}.device{{width:100%;max-width:360px}}}}
+</style></head><body>
+{NAV_HTML}
+<div class="hero">
+<p class="v-label">Hotline for {plural or label+"s"}</p>
+<h1>{headline}</h1>
+<p class="sub">{sub}</p>
+<p class="urgency">No app. No software. No setup. Works by text.</p>
+</div>
+
+<div class="examples">
+<p class="panel-label">See it in action — try a scenario</p>
+<div class="ex-row">{ex_chips_html}</div>
+<div style="text-align:center;margin-top:16px"><button onclick="resetDemo()" style="padding:6px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset</button></div>
+</div>
+
+<div class="phones">
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;88%</span></div>
+<div class="phone-label-bar customer">Customer</div>
+<div class="msgs" id="v-cust"><div class="bubble system">Customer messages appear here</div></div>
+<div class="input-area"><div class="input-row"><input id="v-input" type="text" placeholder="Type a message..."><button id="v-btn" class="blue" onclick="sendDemo()" style="margin:0">▲</button></div></div>
+<div class="home-bar"></div>
+</div></div>
+
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;92%</span></div>
+<div class="phone-label-bar operator">Operator</div>
+<div class="pref-bar"><div class="pref-label">Alert level:</div><button class="filter-btn active" id="m-filt-crit" onclick="filterDemo('critical')">Critical only</button><button class="filter-btn" id="m-filt-all" onclick="filterDemo('all')">All messages</button></div>
+<div class="msgs" id="v-oper"><div class="bubble system">Operator alerts appear here</div></div>
+<div class="input-area"><div class="input-row"><input style="flex:1" type="text" placeholder="Type a message..."><button class="blue" style="margin:0">▲</button></div></div>
+<div class="home-bar"></div>
+</div></div>
+</div>
+
+<div class="cta"><a href="/signup">Get Hotline for your {(plural or label+"s").lower()} →</a></div>
+
+<div class="howitworks" style="margin-top:40px;border-top:1px solid #e0e0dc;padding-top:28px">
+<h2 style="font-size:20px;font-weight:700;margin-bottom:20px;text-align:center">Where to display your Hotline</h2>
+<p style="text-align:center;font-size:14px;color:#888;margin-bottom:16px">Customers scan from any location — choose what works best for your operation.</p>
+<div class="placement-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
+{placements_html}
+</div>
+</div>
+
+<div class="howitworks">
+{steps_html}
+</div>
+
+<footer>8405 Siskin CV, Austin TX 78745 · <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+
+<script>
+{DEMO_JS}
+</script>
+</body></html>'''
+    
+    return html
+
+
+VERTICAL_LAUNDROMAT_HTML = _make_vertical_page(
+    slug="laundromat",
+    label="Laundromat",
+    headline="Your machines break. Your customers leave. You find out tomorrow.",
+    sub="Hotline alerts you the moment something goes wrong — broken washers, flooded floors, locked doors — before it costs you.",
+    scenarios=[
+        "Washer #4 is leaking all over the floor",
+        "Dryer 7 took my money but won\'t start",
+        "The front door is locked, I can\'t get in",
+        "Change machine won\'t accept my bill",
+        "The bathroom is flooding",
+        "Washer 2 won\'t spin — clothes soaking wet",
+        "All the soap dispensers are empty",
+        "Parking lot exit is blocked",
+    ],
+    placements=["Washer", "Dryer", "Coin dispenser", "Wall by entrance"],
+    step1=("Display your Hotline", "Takes 60 seconds. Works on every machine, door, and wall in your laundromat."),
+    step2=("Customers text when something\'s wrong", "No app needed. They text the number on the sign. Every message is read automatically."),
+    step3=("You get alerted instantly by text", "Critical issues go straight to your phone. You reply by text. Done."),
+    plural="Laundromats"
+)
+
+VERTICAL_CARWASH_HTML = _make_vertical_page(
+    slug="carwash",
+    label="Car Wash",
+    headline="Your wash is down. Customers are leaving. You have no idea.",
+    sub="Whether you run self-serve bays or an unattended tunnel — Hotline tells you the moment payment fails, equipment jams, or a customer is stuck.",
+    scenarios=[
+        "Bay 2 won\'t start after I paid",
+        "Tunnel stopped with my car still inside",
+        "Card reader on bay 3 isn\'t working",
+        "Car is stuck, exit door won\'t open",
+        "Vacuum on the right side is broken",
+        "Exit gate is stuck closed",
+        "Dryer at the end of the tunnel isn\'t working",
+        "Touchscreen is frozen, can\'t select a wash",
+    ],
+    placements=["Payment booth", "Tunnel entrance", "Lane entrance", "Waiting area"],
+    step1=("Display your Hotline", "One sign at entry and one at each bay or tunnel entrance covers your facility."),
+    step2=("Customers text equipment issues instantly", "No app. No phone call. They text. Hotline categorizes urgency."),
+    step3=("You get a text the moment something breaks", "Know before a line forms. Fix it before you lose the revenue."),
+    plural="Car Washes"
+)
+
+VERTICAL_SELFSTORAGE_HTML = _make_vertical_page(
+    slug="selfstorage",
+    label="Self Storage",
+    headline="Your gate is broken. Your tenant is locked out. You\'re the last to know.",
+    sub="Hotline puts a direct line between your tenants and you — so access issues, lock problems, and facility failures don\'t spiral.",
+    scenarios=[
+        "Gate keypad isn\'t accepting my code",
+        "My unit lock is jammed, I can\'t get in",
+        "Elevator is out of service",
+        "Hallway lights are out in building C",
+        "There\'s water dripping from the ceiling near unit 42",
+        "Security camera is visibly broken",
+        "After-hours intercom isn\'t working",
+        "Dumpster area is completely blocked",
+    ],
+    placements=["Gate entrance", "Office door", "Unit entrance", "Access kiosk"],
+    step1=("Display your Hotline", "One sign at the gate, one at the office, one in each hallway."),
+    step2=("Tenants text issues directly to you", "No hold music. No ignored voicemails. A text you actually see."),
+    step3=("You get alerted before it becomes a complaint", "Resolve access issues fast. Protect your retention."),
+    plural="Self Storage Facilities"
+)
+
+VERTICAL_PARKING_HTML = _make_vertical_page(
+    slug="parking",
+    label="Parking",
+    headline="Your kiosk is down. Revenue is walking away. You won\'t know until tonight.",
+    sub="Hotline alerts you instantly when payment fails, gates jam, or customers are blocked — no staff required.",
+    scenarios=[
+        "Pay station is showing an error, won\'t take payment",
+        "Entry gate is stuck closed, can\'t get in",
+        "Exit gate is stuck open",
+        "Ticket machine is jammed",
+        "Lights are out in section B",
+        "Someone is blocking two spaces and won\'t move",
+        "Entry intercom isn\'t responding",
+        "I paid but the gate still won\'t open",
+    ],
+    placements=["Gate booth", "Lot entrance sign", "Barrier", "Kiosk"],
+    step1=("Display your Hotline", "One sign at pay stations and gates. Customers know exactly what to do."),
+    step2=("Customers text equipment failures instantly", "No app. No phone number to find. Just text. AI handles triage."),
+    step3=("You get a text the moment something breaks", "Fix it fast. Recover the revenue you\'d otherwise lose."),
+    plural="Parking Lots"
+)
+
+VERTICAL_GYM_HTML = _make_vertical_page(
+    slug="gym",
+    label="24/7 Gym",
+    headline="Your equipment is down. Your members are frustrated. You\'re not there.",
+    sub="Hotline gives your members a direct line to you — so broken equipment, access failures, and safety issues don\'t go unreported.",
+    scenarios=[
+        "Treadmill 4 is making a loud grinding noise",
+        "My access fob isn\'t working at the front door",
+        "Men\'s bathroom has water on the floor",
+        "AC hasn\'t been working all morning",
+        "Cable machine is broken, nobody fixed it",
+        "Locker 22 is stuck and won\'t open",
+        "Front door isn\'t locking after entry",
+        "No hot water in the showers",
+    ],
+    placements=["Front desk", "Entrance", "Locker room", "Equipment area"],
+    step1=("Display your Hotline", "One sign at the entrance, one near equipment, one in each locker room."),
+    step2=("Members text issues the moment they happen", "No more angry reviews because no one to tell. They tell you."),
+    step3=("You get alerted before it becomes a problem", "Fix equipment fast. Keep members happy. Protect your retention."),
+    plural="24/7 Gyms"
+)
+
+
+HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hotline — Real-Time Alerts for Absentee Operators</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
+""" + NAV_CSS + """
+.hero{text-align:center;padding:32px 24px 16px;max-width:640px;margin:0 auto}
+.hero h1{font-size:clamp(28px,5vw,44px);font-weight:700;line-height:1.15;margin-bottom:10px;letter-spacing:-0.02em}
+.hero h1 em{font-style:normal;color:#ea580c}
+.hero p{font-size:16px;color:#888;margin-bottom:0}
+.industry-bar{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding:20px 20px 4px;max-width:700px;margin:0 auto}
+.ind-pill{padding:7px 16px;border-radius:99px;border:1.5px solid #e0e0dc;background:#fff;font-size:13px;font-weight:600;color:#888;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.ind-pill.active{background:#ea580c;border-color:#ea580c;color:#fff}
+.ind-pill:hover:not(.active){border-color:#ea580c;color:#ea580c}
+.try-label{text-align:center;font-size:12px;color:#bbb;padding:10px 0 4px;letter-spacing:0.04em}
+.phones{display:flex;gap:20px;margin:0 auto 16px;justify-content:center;align-items:flex-start;max-width:960px;padding:0 16px}
+.device{width:380px;flex-shrink:0}
+.frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
+.notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
+.statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
+.phone-label-bar{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
+.phone-label-bar.customer{color:#2563eb}.phone-label-bar.operator{color:#ea580c}
+.filter-row{display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;flex-wrap:wrap}
+.filter-btn{font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s}
+.filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
+.msgs{height:310px;overflow-y:auto;padding:10px 12px;background:#fafaf8}
+.bubble{padding:8px 12px;border-radius:14px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both}
+.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
+.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
+.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}
+.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}
+.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}
+.bubble.system{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}
+.bubble.cmd{background:#e8e8e4;color:#333;margin-left:auto;border-bottom-right-radius:4px;font-family:monospace;font-weight:500}
+.bubble.resp{background:#f5f5f0;color:#555;border-bottom-left-radius:4px;font-size:12px;white-space:pre-line;line-height:1.5}
+.bubble .lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:3px}
+.meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.tag{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}
+.tag.t1{background:#fee2e2;color:#dc2626}.tag.t2{background:#fff7ed;color:#b45309}.tag.t3{background:#fef9c3;color:#a16207}.tag.t4{background:#f0f0ec;color:#888}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.input-area{padding:8px 12px 12px;border-top:1px solid #f0f0ec;background:#fff}
+.input-row{display:flex;gap:6px}.input-row input{flex:1;padding:10px 12px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:20px;font-size:14px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
+.input-row button{padding:10px 14px;border-radius:50%;border:none;font-size:16px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center}
+.input-row button.blue{background:#2563eb;color:#fff}.input-row button.orange{background:#ea580c;color:#fff}
+.input-row button:disabled{opacity:0.3;cursor:not-allowed}
+.operator-cmds{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}
+.cmd-btn{font-size:11px;padding:5px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;font-weight:600}.cmd-btn:hover{border-color:#ea580c;color:#1a1a1a}
+.operator-input{display:none}.home-bar{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}
+.ex-area{padding:0 20px 16px;max-width:700px;margin:0 auto}
+.ex-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.ex{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:border-color 0.15s}
+.ex:hover{border-color:#2563eb;color:#1a1a1a}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}@keyframes spin{to{transform:rotate(360deg)}}
+.features{max-width:700px;margin:32px auto;padding:0 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(max-width:640px){.features{grid-template-columns:repeat(2,1fr)}}
+.feature{padding:14px 16px;background:#ea580c;border-radius:8px;text-align:left}
+.feature-title{font-weight:700;font-size:14px;margin-bottom:4px;color:#fff}
+.feature-desc{font-size:12px;color:rgba(255,255,255,0.88);line-height:1.4}
+.cta-section{max-width:700px;margin:24px auto 40px;padding:32px 24px;background:#fff7ed;border-radius:12px;text-align:center;border:1px solid #fed7aa}
+.cta-section h2{font-size:18px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
+.cta-section p{font-size:13px;color:#888;margin-bottom:16px}
+.cta-section a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
+footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
+@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:420px}.industry-bar{gap:6px}}
+</style></head><body>
+""" + NAV_HTML + """
+<div class="hero">
+<h1>Never miss a <em>critical</em> issue again.</h1>
+<p>Customers text. Hotline triages and alerts you — automatically.</p>
+</div>
+<div class="industry-bar">
+<div class="ind-pill active" onclick="setIndustry('laundromat',this)">Laundromat</div>
+<div class="ind-pill" onclick="setIndustry('carwash',this)">Car Wash</div>
+<div class="ind-pill" onclick="setIndustry('selfstorage',this)">Self Storage</div>
+<div class="ind-pill" onclick="setIndustry('parking',this)">Parking</div>
+<div class="ind-pill" onclick="setIndustry('gym',this)">24/7 Gym</div>
+</div>
+<div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 0 4px"><p class="try-label" style="padding:0;margin:0">Try a scenario or type your own</p><button onclick="resetDemo()" style="padding:4px 10px;background:#f0f0f0;color:#999;border:1px solid #e0e0dc;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">Reset</button></div>
+<div class="ex-area" style="padding-bottom:12px">
+<div class="ex-row" id="ex-row"></div>
+</div>
+<div class="phones">
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 87%</span></div>
+<div class="phone-label-bar customer">Customer</div>
+<div class="msgs" id="m-cust"><div class="bubble system">Tap a scenario or type a message below</div></div>
+<div class="input-area"><div class="input-row">
+<input type="text" id="cust-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendDemo()">
+<button class="blue" id="cust-btn" onclick="sendDemo()">&#9650;</button>
+</div></div><div class="home-bar"></div>
+</div></div>
+<div class="device"><div class="frame">
+<div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 92%</span></div>
+<div class="phone-label-bar operator">Operator</div>
+<div class="filter-row"><span style="font-weight:600;color:#888;font-size:11px">Alert level:</span>
+<button class="filter-btn active" id="h-filt-crit" onclick="setFilter('critical')">Critical only</button>
+<button class="filter-btn" id="h-filt-all" onclick="setFilter('all')">All messages</button></div>
+<div class="msgs" id="m-operator"><div class="bubble system">Operator alerts appear here</div></div>
+<div class="operator-cmds" id="operator-cmds">
+<div class="cmd-btn" onclick="operatorCmd('REPLY')">REPLY</div>
+<div class="cmd-btn" onclick="operatorCmd('CLOSE')">CLOSE</div>
+<div class="cmd-btn" onclick="operatorCmd('MENU')">MENU</div>
+</div>
+<div class="input-area operator-input" id="operator-input"><div class="input-row">
+<input type="text" id="operator-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')operatorCmd(this.value)">
+<button class="orange" onclick="operatorCmd(document.getElementById('operator-inp').value)">&#9650;</button>
+</div></div><div class="home-bar"></div>
+</div></div>
+</div>
+
+<div class="features">
+<div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
+<div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
+<div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div>
+<div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div>
+</div>
+<div class="cta-section">
+<h2>Try free for 14 days</h2>
+<p>No credit card required.</p>
+<a href="/signup">Get Started &rarr;</a>
+</div>
+<footer>Hotline &middot; Real-time alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<script>
+const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+
+const CHIPS={
+  laundromat:[
+    "Water is pouring out from under washer #4",
+    "Dryer 7 took my money and won't start",
+    "The change machine is out of quarters",
+    "Door lock is broken and won't open",
+    "Soap dispenser is empty on machine 2",
+    "The TV in the waiting area is really loud"
+  ],
+  carwash:[
+    "My car is stuck inside the tunnel right now",
+    "Bay 2 won't start and I already paid",
+    "The card reader isn't working on any bay",
+    "Vacuum hose on bay 4 is completely broken",
+    "There's no soap coming out in bay 1",
+    "The trash can out front is overflowing"
+  ],
+  selfstorage:[
+    "Water is actively leaking into my unit",
+    "Gate keypad won't accept my access code",
+    "The elevator has been out of service all day",
+    "My unit door lock is jammed and won't open",
+    "Hallway lights on floor 2 are all out",
+    "Could you add a bench near the entrance?"
+  ],
+  parking:[
+    "Exit gate is stuck closed and I can't leave",
+    "Pay station on level 2 is showing an error",
+    "I paid at the kiosk but the gate won't open",
+    "Level 3 lights are completely out",
+    "Someone is parked in a handicap spot without a placard",
+    "The trash near the elevator is overflowing"
+  ],
+  gym:[
+    "Someone is having a medical emergency near the squat rack",
+    "My access fob stopped working at the front door",
+    "Treadmill 3 is making a loud grinding noise",
+    "There's no hot water in the men's showers",
+    "The cable on the lat pulldown machine snapped",
+    "Can you add more paper towels near the free weights?"
+  ]
+};
+
+function setIndustry(key,el){
+  document.querySelectorAll('.ind-pill').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  renderChips(key);
+}
+
+function renderChips(key){
+  const row=document.getElementById('ex-row');
+  row.innerHTML=(CHIPS[key]||CHIPS.laundromat).map(t=>`<div class="ex" onclick="tryEx(this)">${t}</div>`).join('');
+}
+
+function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo();}
+
+function addB(cont,cls,html){
+  const d=document.createElement('div');d.className='bubble '+cls;
+  if(cls==='alert-red')d.setAttribute('data-tier','1');
+  else if(cls==='alert')d.setAttribute('data-tier','2');
+  else if(cls==='feedback')d.setAttribute('data-tier','3');
+  else if(cls==='info')d.setAttribute('data-tier','4');
+  d.innerHTML=html;cont.appendChild(d);cont.scrollTop=cont.scrollHeight;
+  if(cont===mo)applyFilter();
+}
+
+function applyFilter(){
+  mo.querySelectorAll('.bubble[data-tier]').forEach(b=>{
+    const t=parseInt(b.getAttribute('data-tier'));
+    b.style.display=(filterMode==='all'||t<=2)?'':'none';
+  });
+}
+
+function setFilter(m){
+  filterMode=m;
+  document.getElementById('h-filt-crit').className='filter-btn'+(m==='critical'?' active':'');
+  document.getElementById('h-filt-all').className='filter-btn'+(m==='all'?' active':'');
+  applyFilter();
+}
+
+function resetDemo(){
+  [mc,mo].forEach(c=>{while(c.firstChild)c.removeChild(c.firstChild)});
+  addB(mc,'system','Tap a scenario or type a message below');
+  addB(mo,'system','Operator alerts appear here');
+  demoCount=0;history=[];replyMode=false;lastData=null;
+  document.getElementById('cust-input').value='';
+  document.getElementById('operator-cmds').style.display='none';
+  document.getElementById('operator-input').style.display='none';
+}
+
+function operatorCmd(raw){
+  const cmd=(raw||'').trim().toUpperCase();
+  const inp=document.getElementById('operator-inp');
+  if(inp)inp.value='';
+  if(!cmd)return;
+  if(replyMode){
+    if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}
+    replyMode=false;
+    addB(mo,'cmd',raw.trim());
+    addB(mo,'resp','Reply sent. AI quiet for 15 min.');
+    addB(mc,'in',raw.trim());
+    if(inp)inp.placeholder='Type a command...';
+    return;
+  }
+  addB(mo,'cmd',raw.trim());
+  if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}
+  if(cmd==='REPLY'){
+    if(!lastData){addB(mo,'resp','No messages to reply to.');return}
+    replyMode=true;
+    const preview=(lastData.original_message||'last message').slice(0,50);
+    addB(mo,'resp',`Replying to: "${preview}"\\nType your reply now, or NEVERMIND.`);
+    document.getElementById('operator-input').style.display='block';
+    if(inp){inp.placeholder='Type your reply...';inp.focus();}
+    return;
+  }
+  if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('operator-input').style.display='none';return}
+  if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}
+  if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}
+  if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}
+  addB(mo,'resp','Unknown command. Reply MENU for help.');
+}
+
+async function sendDemo(){
+  const inp=document.getElementById('cust-input'),btn=document.getElementById('cust-btn');
+  const text=inp.value.trim();if(!text)return;
+  if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free &rarr;</a>');return}
+  inp.value='';btn.disabled=true;demoCount++;replyMode=false;
+  addB(mc,'out-blue',text);
+  addB(mo,'system','<span class="spinner"></span> Processing...');
+  try{
+    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});
+    const d=await r.json();lastData=d;
+    if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);
+    const reply=d.auto_reply||'Thanks for letting us know.';
+    const cat=(d.category||'general').replace(/_/g,' ');
+    const concern=d.concern||d.explanation||'';
+    history.push({customer:text,reply});if(history.length>6)history.shift();
+    await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);
+    await new Promise(r=>setTimeout(r,350));
+    const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+    if(d.tier===1){
+      const ch=concern?'Concern: '+concern+'<br><br>':'';
+      addB(mo,'alert-red','<div style="font-weight:600;font-size:11px;margin-bottom:4px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:6px;font-size:10px;opacity:0.8">Reply REPLY to message customer back.</div>');
+      document.getElementById('operator-cmds').style.display='flex';
+    }else if(d.tier===2){
+      const ch=concern?'Concern: '+concern+'<br><br>':'';
+      addB(mo,'alert','<div style="font-weight:600;font-size:11px;margin-bottom:4px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:6px;font-size:10px;opacity:0.8">Reply REPLY to message customer back.</div>');
+      document.getElementById('operator-cmds').style.display='flex';
+    }else if(d.tier===3){
+      const ch=concern?'Concern: '+concern+'<br><br>':'';
+      addB(mo,'feedback','<div style="font-weight:600;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+ch);
+    }else{
+      addB(mo,'info','<div style="font-weight:600;font-size:11px;margin-bottom:4px">✓ LOGGED ('+t+')</div>Category: '+cat);
+    }
+  }catch(e){if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);addB(mo,'system','Error: '+e.message)}
+  btn.disabled=false;inp.focus();
+}
+
+// Init
+renderChips('laundromat');
+</script></body></html>"""
+
 DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hotline \u2014 Stop losing customers to fixable problems</title>
+<title>Hotline — Stop losing customers to fixable problems</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
@@ -3074,7 +3608,7 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}
 .sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}
 .phones{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}
-.device{width:320px;flex-shrink:0}
+.device{width:380px;flex-shrink:0}
 .frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
 .notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
 .statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
@@ -3086,7 +3620,7 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
 
 .msgs{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
-.bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
+.bubble{padding:8px 12px;border-radius:14px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
 .bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
 .bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
@@ -3125,8 +3659,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1 style="max-width:800px;margin:0 auto 12px;font-size:clamp(28px,4vw,44px);line-height:1.15">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
-<p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
+<h1 style="max-width:800px;margin:0 auto 12px;font-size:clamp(28px,4vw,44px);line-height:1.15">Know when your business needs you.<br><em>Hotline handles the rest.</em></h1>
+<p class="sub">Customers text. Hotline alerts you when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
 <p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p>
 <div class="examples">
@@ -3173,7 +3707,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
+<footer>Hotline &middot; Real-time SMS alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
 let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
@@ -3268,139 +3802,9 @@ def demo_page(): _ensure_init(); return Response(content=_ga(DEMO_HTML), media_t
 
 
 # --- How It Works page ---
-HOW_IT_WORKS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>How It Works \u2014 Hotline</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
-""" + NAV_CSS + """
-.hero{text-align:center;padding:48px 24px 24px;max-width:680px;margin:0 auto}
-h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:14px}
-.sub{font-size:17px;color:#666;line-height:1.5}
-section{max-width:720px;margin:0 auto;padding:32px 24px}
-h2{font-size:22px;font-weight:700;margin-bottom:8px;text-align:center}
-.section-sub{font-size:15px;color:#888;text-align:center;margin-bottom:28px}
-.steps{display:flex;flex-direction:column;gap:14px}
-.step{display:flex;align-items:flex-start;gap:16px;background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:22px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.step-num{width:34px;height:34px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:15px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
-.step strong{font-size:16px;display:block;margin-bottom:6px}
-.step p{font-size:14px;color:#666;line-height:1.55;margin:0}
-.places{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:24px;margin-top:8px}
-.places-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
-.place{background:#f8f8f6;border:1px solid #ececea;border-radius:8px;padding:10px 8px;font-size:13px;text-align:center;color:#333}
-.note{font-size:13px;color:#888;margin-top:14px;text-align:center;font-style:italic}
-.filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
-.filter-col{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:18px}
-.filter-col h3{font-size:14px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:6px}
-.filter-col ul{list-style:none;padding:0;margin:0}
-.filter-col li{font-size:13px;color:#555;padding:4px 0;line-height:1.4}
-.in h3{color:#15803d}
-.out h3{color:#888}
-.commands{background:#1a1a1a;color:#fff;border-radius:12px;padding:24px;margin-top:8px}
-.cmd{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #2a2a2a;font-size:14px}
-.cmd:last-child{border-bottom:none}
-.cmd code{background:#ea580c;color:#fff;padding:3px 10px;border-radius:4px;font-family:monospace;font-weight:700;font-size:13px;flex-shrink:0;min-width:70px;text-align:center}
-.cmd span{color:#ccc;line-height:1.5}
-.faq{margin-top:8px}
-.q{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px;margin-bottom:10px}
-.q strong{display:block;font-size:15px;margin-bottom:6px}
-.q p{font-size:14px;color:#666;line-height:1.5;margin:0}
-.cta{text-align:center;padding:24px 24px 16px}
-.cta a{display:inline-block;padding:16px 36px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:17px}
-.cta .fine{display:block;margin-top:10px;font-size:13px;color:#888}
-footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:32px}
-.sign-preview{max-width:280px;margin:20px auto 0;text-align:center}.sign-preview img{width:100%;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.08);border:1px solid #e0e0dc}@media(max-width:600px){.filter-grid{grid-template-columns:1fr}.places-grid{grid-template-columns:repeat(2,1fr)}.sign-preview{max-width:240px}}
-</style></head><body>
-""" + NAV_HTML + """
-<div class="hero">
-<h1>Your customers already know what's broken.<br>Now you will too.</h1>
-<p class="sub">A QR code on the wall. A text to you when it matters. That's the whole product.</p>
-</div>
+HOW_IT_WORKS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>How It Works — Hotline</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f8f8f6;color:#333}.nav{display:flex;align-items:center;padding:12px 24px;position:relative}.nav .logo{flex:1;text-align:center}.nav .logo svg{height:36px}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}.nav a{text-decoration:none;color:#333;font-size:13px;font-weight:500}.nav a.signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}.container{max-width:700px;margin:40px auto;padding:0 24px}.hero{text-align:center;margin-bottom:40px}.hero h1{font-size:42px;font-weight:700;line-height:1.2;margin-bottom:16px;color:#1a1a1a}.hero p{font-size:16px;color:#666}.steps{display:flex;flex-direction:column;gap:30px;margin:50px 0}.step{display:flex;gap:20px}.step-num{flex-shrink:0;width:40px;height:40px;background:#ea580c;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}.step-content h3{font-weight:600;font-size:16px;margin-bottom:8px;color:#1a1a1a}.step-content p{font-size:14px;color:#666;line-height:1.5}.section-divider{margin:40px 0;padding:40px 0;border-top:1px solid #e0e0dc}.placement-title{font-size:18px;font-weight:700;margin-bottom:24px;color:#1a1a1a;text-align:center}.placement-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:0}@media(max-width:700px){.placement-grid{grid-template-columns:repeat(2,1fr)}}.placement-card{padding:18px 20px;background:#fff;border-radius:8px;border:1px solid #e0e0dc}.placement-card h4{font-weight:700;font-size:14px;margin-bottom:6px}.placement-card p{font-size:13px;color:#666;margin:0;line-height:1.5}.placement-list{display:flex;flex-direction:column;gap:0;margin-bottom:40px;border:1px solid #e0e0dc;border-radius:10px;overflow:hidden}.placement-row{display:flex;align-items:baseline;padding:14px 20px;border-bottom:1px solid #e0e0dc;background:#fff}.placement-row:last-child{border-bottom:none}.placement-row:hover{background:#fff7ed;text-decoration:none}.placement-row{text-decoration:none;color:inherit}.placement-arrow{margin-left:auto;color:#ea580c;font-size:18px;font-weight:300;opacity:0.6}.placement-label{font-weight:700;font-size:14px;color:#ea580c;min-width:140px;flex-shrink:0}.placement-spots{font-size:13px;color:#666;line-height:1.5}.cta{text-align:center;padding:40px 24px;background:#fff7ed;border-radius:12px;border:1px solid #fed7aa}.cta h2{font-size:20px;font-weight:700;margin-bottom:8px;color:#1a1a1a}.cta p{font-size:14px;color:#888;margin-bottom:20px}.cta a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:6px;font-weight:700;text-decoration:none}.footer{margin-top:60px;padding-top:24px;border-top:1px solid #e0e0dc;text-align:center;font-size:13px;color:#999}a{color:#ea580c;text-decoration:none}.dropdown{position:relative;display:inline-block}.dropdown-menu{display:none;position:absolute;min-width:180px;z-index:100;top:100%;right:0;padding-top:8px}.dropdown-menu-inner{display:flex;flex-direction:column;gap:4px;background:#fff;box-shadow:0 8px 16px rgba(0,0,0,0.1);border-radius:8px;padding:8px;border:1px solid #e0e0dc}.dropdown-menu a{display:block;padding:8px 12px;border-radius:4px;transition:background 0.2s}.dropdown-menu a:hover{background:#f5f5f5}.dropdown:hover .dropdown-menu{display:block}</style></head><body><nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" viewBox="0 0 224.87999 67.499998" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="d1h"><path d="M 0.765625 9 L 48 9 L 48 57 L 0.765625 57 Z M 0.765625 9 " clip-rule="nonzero"/></clipPath><clipPath id="d2h"><path d="M 208 20 L 223.992188 20 L 223.992188 45 L 208 45 Z M 208 20 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#d1h)"><path fill="#ea580c" d="M 7.839844 9.40625 L 40.8125 9.40625 C 41.277344 9.40625 41.738281 9.449219 42.191406 9.542969 C 42.648438 9.632812 43.089844 9.765625 43.515625 9.945312 C 43.945312 10.121094 44.351562 10.339844 44.738281 10.597656 C 45.125 10.855469 45.480469 11.152344 45.808594 11.480469 C 46.136719 11.808594 46.429688 12.167969 46.6875 12.554688 C 46.945312 12.941406 47.164062 13.347656 47.339844 13.777344 C 47.519531 14.207031 47.652344 14.648438 47.742188 15.105469 C 47.832031 15.5625 47.878906 16.023438 47.878906 16.488281 L 47.878906 49.542969 C 47.878906 50.007812 47.832031 50.46875 47.742188 50.925781 C 47.652344 51.382812 47.519531 51.824219 47.339844 52.253906 C 47.164062 52.683594 46.945312 53.09375 46.6875 53.480469 C 46.429688 53.867188 46.136719 54.222656 45.808594 54.550781 C 45.480469 54.878906 45.125 55.175781 44.738281 55.433594 C 44.351562 55.691406 43.945312 55.910156 43.515625 56.085938 C 43.089844 56.265625 42.648438 56.398438 42.191406 56.492188 C 41.738281 56.582031 41.277344 56.625 40.8125 56.625 L 7.839844 56.625 C 7.378906 56.625 6.917969 56.582031 6.460938 56.492188 C 6.007812 56.398438 5.566406 56.265625 5.136719 56.085938 C 4.707031 55.910156 4.300781 55.691406 3.914062 55.433594 C 3.53125 55.175781 3.171875 54.878906 2.84375 54.550781 C 2.515625 54.222656 2.222656 53.867188 1.964844 53.480469 C 1.707031 53.09375 1.492188 52.683594 1.3125 52.253906 C 1.136719 51.824219 1 51.382812 0.910156 50.925781 C 0.820312 50.46875 0.777344 50.007812 0.777344 49.542969 L 0.777344 16.488281 C 0.777344 16.023438 0.820312 15.5625 0.910156 15.105469 C 1 14.648438 1.136719 14.207031 1.3125 13.777344 C 1.492188 13.347656 1.707031 12.941406 1.964844 12.554688 C 2.222656 12.167969 2.515625 11.808594 2.84375 11.480469 C 3.171875 11.152344 3.53125 10.855469 3.914062 10.597656 C 4.300781 10.339844 4.707031 10.121094 5.136719 9.945312 C 5.566406 9.765625 6.007812 9.632812 6.460938 9.542969 C 6.917969 9.449219 7.378906 9.40625 7.839844 9.40625 Z M 7.839844 9.40625 " fill-opacity="1" fill-rule="nonzero"/></g><g fill="#ffffff" fill-opacity="1"><g transform="translate(10.726965, 46.401259)"><path d="M 20.734375 -12.542969 L 8.230469 -12.542969 L 8.230469 0 L 3.109375 0 L 3.109375 -29.109375 L 8.175781 -29.109375 L 8.175781 -17.214844 L 20.734375 -17.214844 L 20.734375 -29.109375 L 25.816406 -29.109375 L 25.816406 0 L 20.734375 0 Z M 20.734375 -12.542969 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(62.007197, 44.82787)"><path d="M 17.277344 -10.453125 L 6.859375 -10.453125 L 6.859375 0 L 2.589844 0 L 2.589844 -24.257812 L 6.8125 -24.257812 L 6.8125 -14.34375 L 17.277344 -14.34375 L 17.277344 -24.257812 L 21.515625 -24.257812 L 21.515625 0 L 17.277344 0 Z M 17.277344 -10.453125 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(89.370287, 44.82787)"><path d="M 12.859375 -24.640625 C 16.707031 -24.640625 19.71875 -23.261719 21.894531 -20.5 L 22.734375 -19.265625 C 23.976562 -17.132812 24.597656 -14.632812 24.597656 -11.769531 C 24.597656 -8.511719 23.691406 -5.726562 21.882812 -3.402344 C 21.433594 -2.824219 20.945312 -2.308594 20.40625 -1.859375 C 18.375 -0.136719 15.867188 0.722656 12.886719 0.722656 C 9.1875 0.722656 6.246094 -0.585938 4.0625 -3.203125 C 2.140625 -5.503906 1.179688 -8.421875 1.179688 -11.953125 C 1.179688 -16 2.40625 -19.210938 4.859375 -21.585938 C 6.980469 -23.625 9.648438 -24.640625 12.859375 -24.640625 Z M 12.859375 -20.75 C 10.363281 -20.75 8.425781 -19.769531 7.046875 -17.816406 C 5.949219 -16.25 5.402344 -14.292969 5.402344 -11.953125 C 5.402344 -8.839844 6.324219 -6.480469 8.167969 -4.867188 C 9.445312 -3.738281 11.019531 -3.171875 12.886719 -3.171875 C 15.363281 -3.171875 17.292969 -4.132812 18.675781 -6.050781 C 19.796875 -7.585938 20.359375 -9.511719 20.359375 -11.828125 C 20.359375 -15.089844 19.414062 -17.527344 17.523438 -19.136719 C 16.257812 -20.210938 14.699219 -20.75 12.859375 -20.75 Z M 12.859375 -20.75 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(118.49594, 44.82787)"><path d="M 12.421875 -20.363281 L 12.421875 0 L 8.203125 0 L 8.203125 -20.363281 L 0.660156 -20.363281 L 0.660156 -24.257812 L 19.921875 -24.257812 L 19.921875 -20.363281 Z M 12.421875 -20.363281 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(142.379885, 44.82787)"><path d="M 6.71875 -24.257812 L 6.71875 -3.894531 L 18.035156 -3.894531 L 18.035156 0 L 2.5 0 L 2.5 -24.257812 Z M 6.71875 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(164.53192, 44.82787)"><path d="M 3.128906 -24.257812 L 7.394531 -24.257812 L 7.394531 0 L 3.128906 0 Z M 3.128906 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(177.963102, 44.82787)"><path d="M 21.574219 -24.257812 L 21.574219 0 L 17.265625 0 L 6.445312 -17.007812 L 6.445312 0 L 2.375 0 L 2.375 -24.257812 L 6.5625 -24.257812 L 17.507812 -7.082031 L 17.507812 -24.257812 Z M 21.574219 -24.257812 "/></g></g><g clip-path="url(#d2h)"><g fill="#ea580c" fill-opacity="1"><g transform="translate(205.326192, 44.82787)"><path d="M 7.042969 -10.453125 L 7.042969 -3.894531 L 20.546875 -3.894531 L 20.546875 0 L 2.820312 0 L 2.820312 -24.257812 L 19.980469 -24.257812 L 19.980469 -20.363281 L 7.042969 -20.363281 L 7.042969 -14.34375 L 19.519531 -14.34375 L 19.519531 -10.453125 Z M 7.042969 -10.453125 "/></g></g></g></svg></a><div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav><div class="container"><div class="hero"><h1>How It Works</h1><p>Hotline reads, triages, and tiers every message automatically — so only what matters reaches you, instantly.</p></div><div class="steps"><div class="step"><div class="step-num">1</div><div class="step-content"><h3>Display your Hotline</h3><p>Put your Hotline where customers can find it — a QR code or text number, right where problems happen.</p></div></div><div class="step"><div class="step-num">2</div><div class="step-content"><h3>Customer texts — and gets an instant reply</h3><p>The moment something's wrong, they text. Hotline responds automatically in seconds, so the customer knows they've been heard.</p></div></div><div class="step"><div class="step-num">3</div><div class="step-content"><h3>Hotline triages and tiers it — automatically</h3><p>Every message is read and sorted in real time. A flooding bathroom (Tier 1) is not the same as a vending machine out of snacks (Tier 4) — and Hotline knows the difference.</p></div></div><div class="step"><div class="step-num">4</div><div class="step-content"><h3>You hear only what matters</h3><p>Critical issues reach you instantly with the customer's words and the tier. Low-priority feedback is logged, not pushed. No noise, no app, no dashboard.</p></div></div></div><div class="section-divider" style="border-top:none;padding-top:0;margin-top:0"><h2 class="placement-title">Manage everything by text.</h2><p style="text-align:center;font-size:14px;color:#888;margin:-16px 0 28px">No app. No dashboard. No login. Your phone is the dashboard.</p><div style="background:#1a1a1a;border-radius:14px;overflow:hidden"><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">REPLY</span><span style="font-size:14px;color:#ccc">Open a direct line to the last customer</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">CLOSE</span><span style="font-size:14px;color:#ccc">End the conversation, auto-replies resume</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">STATUS</span><span style="font-size:14px;color:#ccc">See your current alert settings</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">PAUSE&nbsp;/&nbsp;RESUME</span><span style="font-size:14px;color:#ccc">Stop or restart alerts</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">TIER2&nbsp;/&nbsp;TIER3</span><span style="font-size:14px;color:#ccc">Switch between critical-only or all alerts</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">MENU</span><span style="font-size:14px;color:#ccc">See all commands</span></div></div></div><div class="section-divider"><h2 class="placement-title" style="margin-bottom:16px">The four tiers</h2><div class="placement-grid" style="margin-bottom:48px"><div class="placement-card" style="border-left:3px solid #dc2626"><h4 style="color:#dc2626">Tier 1 · Urgent</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Safety, flooding, break-ins. Reaches you instantly.</p></div><div class="placement-card" style="border-left:3px solid #ea580c"><h4 style="color:#ea580c">Tier 2 · Issue</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Broken equipment, access problems. Sent right away.</p></div><div class="placement-card" style="border-left:3px solid #ca8a04"><h4 style="color:#ca8a04">Tier 3 · Feedback</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Complaints, suggestions. Logged for your digest.</p></div><div class="placement-card" style="border-left:3px solid #9ca3af"><h4 style="color:#6b7280">Tier 4 · Logged</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Minor notes, spam filtered. Recorded quietly.</p></div></div><h2 class="placement-title">Where to Display Your Hotline</h2><div class="placement-list"><a href="/laundromat" class="placement-row"><span class="placement-label">Laundromat</span><span class="placement-spots">Next to washers &nbsp;·&nbsp; By dryers &nbsp;·&nbsp; Coin dispenser &nbsp;·&nbsp; Entrance wall</span><span class="placement-arrow">&rsaquo;</span></a><a href="/carwash" class="placement-row"><span class="placement-label">Car Wash</span><span class="placement-spots">Payment booth &nbsp;·&nbsp; Tunnel entrance &nbsp;·&nbsp; Lane entrance &nbsp;·&nbsp; Waiting area</span><span class="placement-arrow">&rsaquo;</span></a><a href="/selfstorage" class="placement-row"><span class="placement-label">Self Storage</span><span class="placement-spots">Gate entrance &nbsp;·&nbsp; Office door &nbsp;·&nbsp; Unit entrance &nbsp;·&nbsp; Access kiosk</span><span class="placement-arrow">&rsaquo;</span></a><a href="/parking" class="placement-row"><span class="placement-label">Parking</span><span class="placement-spots">Gate booth &nbsp;·&nbsp; Lot entrance &nbsp;·&nbsp; Barrier gate &nbsp;·&nbsp; Info kiosk</span><span class="placement-arrow">&rsaquo;</span></a><a href="/gym" class="placement-row"><span class="placement-label">24/7 Gym</span><span class="placement-spots">Front desk &nbsp;·&nbsp; Main entrance &nbsp;·&nbsp; Locker room &nbsp;·&nbsp; Equipment area</span><span class="placement-arrow">&rsaquo;</span></a></div></div><div class="cta"><h2>Ready to get started?</h2><p>14-day free trial. No credit card required.</p><a href="/signup">Sign Up Now</a></div></div><div class="footer"><p>© Hotline. All rights reserved.</p></div></body></html>"""
 
-<section>
-<h2>Three steps. No software.</h2>
-<p class="section-sub">Setup takes 2 minutes. Then it just runs.</p>
-<div class="steps">
-<div class="step"><div class="step-num">1</div><div><strong>Get your hotline.</strong><p>Sign up and instantly receive your unique QR code plus a print-ready sign \u2014 delivered digitally, ready to use right away. Yours forever.</p></div></div>
-<div class="step"><div class="step-num">2</div><div><strong>Put it anywhere customers look.</strong><p>The QR is yours to use anywhere. Bathroom mirror. Menu. Receipt. Front door. Wherever they might need you.</p></div></div>
-<div class="step"><div class="step-num">3</div><div><strong>You get a text \u2014 only when it matters.</strong><p>AI filters every message. Emergencies and critical issues reach you in seconds with the customer's exact words and our auto-reply. Reply REPLY to talk directly to the customer.</p></div></div>
-</div>
-</section>
 
-<section>
-<h2>One QR. Many homes.</h2>
-<p class="section-sub">It's not a sign. It's a hotline. Put it everywhere customers might need you.</p>
-<div class="places">
-<div class="places-grid">
-<div class="place">Bathroom mirror</div>
-<div class="place">Table tent</div>
-<div class="place">Receipt</div>
-<div class="place">Menu</div>
-<div class="place">Front door</div>
-<div class="place">Staff badge</div>
-<div class="place">Window decal</div>
-<div class="place">Drive-thru</div>
-<div class="place">Locker room</div>
-<div class="place">Hotel key card</div>
-<div class="place">Invoice footer</div>
-<div class="place">Anywhere else</div>
-</div>
-<p class="note">We give you a sign to start. The QR is yours to drop into any signage you want.</p>
-</div>
-<div class="sign-preview">
-<img src="data:image/jpeg;base64,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i3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm55Xi3/npoP/AH6n/wAaPK8W/wDPTQf+/U/+NYf/AAqbRf8AoIa3/wCBh/wo/wCFTaL/ANBDW/8AwMP+FFq/8v8A5N/wAvhv5/8AyT/gm4YfFpGPN0FffyZzj8N1U7mGx0ORdZ8T60lxcQAmHzFEccJI58qIZJbtk5P0rP8A+FTaL/0ENb/8DD/hVrTvhh4ZsJxcPazX0y8hryUy4/DgfnS5az+yvnJtfdYOfDR+2/lFJ/ffQytIivPHviKDxHcQyW2j6ef+JdFKMNM2RmQj8P5Dsa9BpAAoCqAABgAdAKa8QkxkuMf3WI/lXVQo+zTu7t6tnFicR7WSsrRWiXZf1ux9FRC3UEHdLx6yH/Gpa2OcKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigD/2Q==" alt="Hotline QR sign example" />
-</div>
-</section>
-
-<section>
-<h2>High signal. Low noise.</h2>
-<p class="section-sub">AI decides what reaches your phone.</p>
-<div class="filter-grid">
-<div class="filter-col in"><h3>\u2705 You get</h3><ul>
-<li>Emergencies (injury, fire, hazards)</li>
-<li>Broken equipment or supplies</li>
-<li>Angry customers about to leave</li>
-<li>Anything that needs you now</li>
-</ul></div>
-<div class="filter-col out"><h3>\u2715 Filtered out</h3><ul>
-<li>Routine compliments</li>
-<li>Spam and gibberish</li>
-<li>Vague complaints with no detail</li>
-<li>Anything that can wait</li>
-</ul></div>
-</div>
-</section>
-
-<section>
-<h2>Manage everything by text.</h2>
-<p class="section-sub">No app. No dashboard. No login. Your phone is the dashboard.</p>
-<div class="commands">
-<div class="cmd"><code>REPLY</code><span>Open a direct line to the last customer</span></div>
-<div class="cmd"><code>CLOSE</code><span>End the conversation, AI auto-replies resume</span></div>
-<div class="cmd"><code>STATUS</code><span>See your current alert settings</span></div>
-<div class="cmd"><code>PAUSE / RESUME</code><span>Stop or restart alerts</span></div>
-<div class="cmd"><code>TIER2 / TIER3</code><span>Switch between critical-only or all alerts</span></div>
-<div class="cmd"><code>MENU</code><span>See all commands</span></div>
-</div>
-</section>
-
-<section>
-<h2>Common questions</h2>
-<div class="faq">
-<div class="q"><strong>Will I get spammed?</strong><p>No. AI filters every message. Most never reach you. You only hear about things that need you.</p></div>
-<div class="q"><strong>Do customers need an app?</strong><p>No. They scan or text. Works on any phone. No download, no account.</p></div>
-<div class="q"><strong>What if the AI gets it wrong?</strong><p>Every alert includes the customer's exact words verbatim. You always see what they actually said, not a summary. You stay in control.</p></div>
-<div class="q"><strong>How long does setup take?</strong><p>2 minutes. Sign up, print your sign, you're live.</p></div>
-</div>
-</section>
-
-<div class="cta">
-<a href="/signup">Get your hotline \u2192</a>
-<span class="fine">No card. No app. Cancel by text.</span>
-</div>
-
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
-</body></html>"""
 
 @app.get("/how-it-works")
 def how_it_works_page():
@@ -3410,86 +3814,114 @@ def how_it_works_page():
 
 # --- Industries page ---
 INDUSTRIES_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Who We Support \u2014 Hotline</title>
+<title>Who We Support — Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
 """ + NAV_CSS + """
-.hero{text-align:center;padding:40px 24px 32px;max-width:600px;margin:0 auto}
-h1{font-size:clamp(24px,4vw,36px);font-weight:700;margin-bottom:12px}
-.sub{font-size:16px;color:#888;margin-bottom:32px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;max-width:800px;margin:0 auto 48px;padding:0 24px}
-.card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.card-top{padding:18px 20px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
-.card-top h3{font-size:16px;font-weight:600;margin:0}
-.card-top .icon{font-size:20px;margin-right:10px}
-.card-top .arrow{font-size:14px;color:#bbb;transition:transform 0.2s}
-.card.open .arrow{transform:rotate(90deg)}
-.card-body{display:none;padding:0 20px 16px;font-size:13px;color:#666;line-height:1.5}
-.card.open .card-body{display:block}
-.tag-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
-.tag-sm{font-size:11px;padding:3px 8px;background:#f5f5f0;border-radius:4px;color:#888}
-.cta{text-align:center;padding:0 24px 48px}
-.cta a{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+.hero{text-align:center;padding:52px 24px 40px;max-width:680px;margin:0 auto}
+h1{font-size:clamp(26px,4.5vw,40px);font-weight:700;margin-bottom:14px;line-height:1.18;letter-spacing:-0.02em}
+h1 em{font-style:normal;color:#ea580c}
+.sub{font-size:16px;color:#666;line-height:1.6;max-width:560px;margin:0 auto}
+.problem{max-width:720px;margin:0 auto;padding:0 24px 48px}
+.problem-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:40px}
+@media(max-width:600px){.problem-grid{grid-template-columns:1fr}}
+.prob-card{background:#fff;border:1px solid #e0e0dc;border-radius:12px;padding:20px 22px}
+.prob-card .icon{font-size:22px;margin-bottom:10px}
+.prob-card h3{font-size:15px;font-weight:700;margin-bottom:6px}
+.prob-card p{font-size:13px;color:#666;line-height:1.55;margin:0}
+.solution{background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:28px;margin-bottom:40px}
+.solution h2{font-size:18px;font-weight:700;color:#c2410c;margin-bottom:14px}
+.solution-steps{display:flex;flex-direction:column;gap:10px}
+.sol-step{display:flex;align-items:flex-start;gap:12px}
+.sol-num{width:24px;height:24px;border-radius:50%;background:#ea580c;color:#fff;font-weight:700;font-size:11px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;margin-top:1px}
+.sol-step p{font-size:14px;color:#7c2d12;line-height:1.5;margin:0}
+.sol-step strong{color:#9a3412}
+.multi{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:20px 22px;margin-bottom:40px}
+.multi h3{font-size:14px;font-weight:700;color:#166534;margin-bottom:6px}
+.multi p{font-size:13px;color:#15803d;line-height:1.5;margin:0}
+h2.sect{font-size:20px;font-weight:700;margin-bottom:6px;text-align:center}
+.sect-sub{font-size:14px;color:#888;text-align:center;margin-bottom:20px}
+.verticals{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:48px}
+@media(max-width:700px){.verticals{grid-template-columns:1fr 1fr}}
+.v-card{background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:18px 14px;text-align:left;transition:border-color 0.15s,box-shadow 0.15s;display:block;color:#1a1a1a}
+.v-card:hover{border-color:#ea580c;box-shadow:0 3px 12px rgba(234,88,12,0.1);color:#1a1a1a}
+.v-card h3{font-size:14px;font-weight:700;margin-bottom:5px;color:#1a1a1a}
+.v-card p{font-size:12px;color:#888;line-height:1.4;margin:0}
+.v-card .v-cta{display:inline-block;margin-top:10px;font-size:11px;font-weight:700;color:#ea580c;text-transform:uppercase;letter-spacing:0.05em}
+.cta-block{text-align:center;padding:0 24px 56px}
+.cta-block a{display:inline-block;padding:15px 36px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}
+.cta-block .fine{display:block;margin-top:10px;font-size:13px;color:#aaa}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>Know what's happening before it costs you</h1>
-<p class="sub">Hotline alerts operators and senior management to the things that matter most: safety risks, operational failures, and the moments that make or break your reputation.</p>
-</div>
-<div class="grid">
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128664;</span><h3 style="display:inline">Car Washes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The pressure washer isn't working on bay 2."</em> A customer tries to pay, can't complete the transaction, and leaves. You're losing revenue every minute until you find out. Hotline makes sure you know about equipment failures, payment jams, and service issues before the next customer walks away.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">payment issues</span><span class="tag-sm">service disruptions</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#129499;</span><h3 style="display:inline">Laundromats</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Machine #4 is leaking water all over the floor."</em> A broken dryer or washer is silent revenue loss—every 30 minutes without it, you're losing a customer transaction. Hotline tells you when it starts, not after you find standing water and potential liability issues.<div class="tag-row"><span class="tag-sm">equipment leaks</span><span class="tag-sm">safety hazards</span><span class="tag-sm">capacity loss</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127918;</span><h3 style="display:inline">Arcades & Gaming</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The pinball machine is stuck and won't take coins."</em> A broken cabinet is lost revenue, not just now but forever—that kid goes to the arcade down the street instead. Hotline alerts you to jams, payment failures, and malfunctions so you can fix them before your customers find a competitor.<div class="tag-row"><span class="tag-sm">payment jams</span><span class="tag-sm">machine failures</span><span class="tag-sm">revenue loss</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128472;</span><h3 style="display:inline">Parking Garages & Lots</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The gate is stuck closed and won't open."</em> A broken gate = zero revenue that hour and frustrated customers. Payment systems down, ticket machines jammed, access cards failing—you need to know instantly, not when you check the cameras tomorrow.<div class="tag-row"><span class="tag-sm">gate failures</span><span class="tag-sm">payment system down</span><span class="tag-sm">access issues</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9981;</span><h3 style="display:inline">Gas Stations</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Pump 3 is showing an error and won't accept my card."</em> A broken pump drives customers away mid-transaction. Payment readers fail, nozzles jam, systems go offline—each minute of downtime is lost gallons and frustrated drivers heading elsewhere.<div class="tag-row"><span class="tag-sm">pump failures</span><span class="tag-sm">payment reader issues</span><span class="tag-sm">system outages</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128273;</span><h3 style="display:inline">Car Rental Kiosks</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The kiosk won't read my license."</em> A down kiosk means customers can't rent, access vehicles, or complete transactions. License readers fail, touch screens freeze, payment systems timeout—your revenue stream stops instantly. Hotline gets you the alert before you miss a single rental.<div class="tag-row"><span class="tag-sm">kiosk outages</span><span class="tag-sm">reader failures</span><span class="tag-sm">payment downtime</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9749;</span><h3 style="display:inline">Restaurants & Cafes</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"There's no one at the register and the bathroom is flooded."</em> You're across town. Without Hotline, this becomes a 1-star review. With it, you know in seconds—whether it's a no-show, an equipment failure, or an angry customer.<div class="tag-row"><span class="tag-sm">staffing issues</span><span class="tag-sm">food safety</span><span class="tag-sm">customer experience</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128722;</span><h3 style="display:inline">Retail Stores</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The self-checkout is down"</em> or <em>"Fitting room door is broken."</em> You hear about it when sales are already lost. Hotline connects you to what customers see the moment it matters.<div class="tag-row"><span class="tag-sm">equipment downtime</span><span class="tag-sm">customer friction</span><span class="tag-sm">safety issues</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127947;</span><h3 style="display:inline">Gyms & Fitness Studios</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The treadmill isn't working"</em> or <em>"Access card reader is down."</em> Members pay for working equipment. A broken machine or locked building means lost member trust and churn.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">access issues</span><span class="tag-sm">member satisfaction</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#9986;</span><h3 style="display:inline">Salons & Barbershops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"A customer got a chemical burn"</em> or <em>"Appointment system crashed."</em> Safety issues and booking problems hit reputation and liability instantly. Hotline makes sure you know before damage spreads.<div class="tag-row"><span class="tag-sm">safety incidents</span><span class="tag-sm">system failures</span><span class="tag-sm">customer injury</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128295;</span><h3 style="display:inline">Auto Repair Shops</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Your shop damaged my car"</em> or <em>"I've been waiting 4 hours."</em> Customers tell you how they feel the moment it happens. Hotline ensures you can respond to issues before they become bad reviews.<div class="tag-row"><span class="tag-sm">quality complaints</span><span class="tag-sm">wait time issues</span><span class="tag-sm">damage claims</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127976;</span><h3 style="display:inline">Hotels & Airbnbs</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The AC in room 205 stopped working and it's midnight."</em> A guest complaint is a potential bad review. Hotline gets you the alert while the guest is still there, not after they post about it online.<div class="tag-row"><span class="tag-sm">equipment failures</span><span class="tag-sm">guest complaints</span><span class="tag-sm">reputation risk</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127973;</span><h3 style="display:inline">Medical & Dental Offices</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Your equipment isn't sterilized"</em> or <em>"No one's answering the phone."</em> Patient safety and trust are non-negotiable. Hotline keeps you alert to operational and safety issues in real-time.<div class="tag-row"><span class="tag-sm">safety protocols</span><span class="tag-sm">equipment issues</span><span class="tag-sm">staff gaps</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128187;</span><h3 style="display:inline">Coworking Spaces</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"WiFi is down"</em> or <em>"The bathroom is unusable."</em> Members are paying for a working environment. Know about disruptions before members lose their workspace and consider leaving.<div class="tag-row"><span class="tag-sm">connectivity issues</span><span class="tag-sm">facility problems</span><span class="tag-sm">member experience</span></div></div></div>
-
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#128230;</span><h3 style="display:inline">Self-Storage Facilities</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"The gate code isn't working"</em> or <em>"There's water coming into my unit."</em> Customers only visit occasionally — when something goes wrong, they need to reach you fast. Hotline puts a direct line on every unit door so you hear about gate failures, leaks, break-ins, and climate control issues before they become liability claims or lost renewals.<div class="tag-row"><span class="tag-sm">gate & access issues</span><span class="tag-sm">water intrusion</span><span class="tag-sm">climate control</span><span class="tag-sm">security concerns</span></div></div></div>
-<div class="card" onclick="this.classList.toggle('open')"><div class="card-top"><div><span class="icon">&#127970;</span><h3 style="display:inline">Franchise Operators</h3></div><span class="arrow">&#9654;</span></div>
-<div class="card-body"><em>"Nobody at the register"</em> or <em>"The equipment at location 3 has been down all morning."</em> You can't be everywhere. Franchise operators managing multiple locations are flying blind without a direct line from each site. Hotline gives every location its own customer text line so issues surface instantly — no matter which location, no matter what time.<div class="tag-row"><span class="tag-sm">multi-location visibility</span><span class="tag-sm">operational blind spots</span><span class="tag-sm">staff accountability</span><span class="tag-sm">revenue protection</span></div></div></div>
+<h1>Built for owners who operate from a distance.</h1>
+<p class="sub">You built your business to run lean. The problem is when it breaks down at 7pm on a Saturday, your customers have no one to tell — and you have no way to know.</p>
 </div>
 
-<div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
+<div class="problem">
+
+<h2 class="sect">The problem with absentee operations</h2>
+<p class="sect-sub" style="margin-bottom:20px">Equipment fails silently. Customers leave frustrated. You find out too late.</p>
+
+<div class="problem-grid">
+<div class="prob-card">
+<div class="icon">&#128683;</div>
+<h3>No one to tell</h3>
+<p>When there's no staff on site, customers who hit a problem have nowhere to go. Most don't call. They leave, post a review, and don't come back.</p>
+</div>
+<div class="prob-card">
+<div class="icon">&#9201;</div>
+<h3>You find out too late</h3>
+<p>A jammed machine, a broken gate, a flooded bathroom — every minute you don't know is lost revenue and a worsening situation.</p>
+</div>
+<div class="prob-card">
+<div class="icon">&#128247;</div>
+<h3>Reviews before you can respond</h3>
+<p>The first time you hear about a problem is often a 1-star review. By then the customer is gone and the damage is done.</p>
+</div>
+<div class="prob-card">
+<div class="icon">&#128181;</div>
+<h3>Silent revenue loss</h3>
+<p>A broken pay kiosk or downed gate doesn't announce itself. You just notice the numbers look off at the end of the week.</p>
+</div>
+</div>
+
+<div class="solution">
+<h2>How Hotline fixes this</h2>
+<div class="solution-steps">
+<div class="sol-step"><div class="sol-num">1</div><p><strong>Display your Hotline.</strong> Put it up in 60 seconds. It gives customers a direct text line to you — right where they need it.</p></div>
+<div class="sol-step"><div class="sol-num">2</div><p><strong>Customers text when something's wrong.</strong> No app. No account. They text the number on the sign. Every message gets read by AI.</p></div>
+<div class="sol-step"><div class="sol-num">3</div><p><strong>Smart categorizations every message.</strong> Emergencies and equipment failures reach you within seconds. Routine feedback gets logged. Spam is filtered. You only hear what actually needs you.</p></div>
+<div class="sol-step"><div class="sol-num">4</div><p><strong>You take action from anywhere.</strong> Get the alert, assess the situation, and act \u2014 call a vendor, reply to the customer, or head over yourself. No app, no dashboard, no login required.</p></div>
+</div>
+</div>
+
+<div class="multi">
+<h3>&#127970; Running multiple locations?</h3>
+<p>Sign up each location separately — each gets its own sign and business code. All alerts route to the same phone number. One inbox, full visibility across every location.</p>
+</div>
+
+<h2 class="sect">Operations We Serve</h2>
+<div class="verticals">
+<a href="/laundromat" class="v-card"><h3>Laundromat</h3><p>Machine failures, leaks, access issues, coin jams</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/carwash" class="v-card"><h3>Car Wash</h3><p>Bay jams, tunnel stops, payment failures, stuck gates</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/selfstorage" class="v-card"><h3>Self Storage</h3><p>Gate access, unit locks, leaks, after-hours issues</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/parking" class="v-card"><h3>Parking</h3><p>Kiosk outages, stuck gates, payment failures</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/gym" class="v-card"><h3>24/7 Gym</h3><p>Broken equipment, access fobs, safety issues</p><span class="v-cta">See it &rarr;</span></a>
+</div>
+
+</div>
+
+<div class="cta-block">
+<a href="/signup">Start your free trial &rarr;</a>
+<span class="fine">14-day free trial. No credit card. Cancel by text.</span>
+</div>
+
+<footer>Hotline &middot; Real-time alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 </body></html>"""
+
 
 @app.get("/industries")
 def industries_page(): _ensure_init(); return Response(content=_ga(INDUSTRIES_HTML), media_type="text/html")
@@ -3544,7 +3976,7 @@ article ul li::before{content:'*';position:absolute;left:0;color:#ea580c;font-we
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
 """
 
-_ARTICLE_FOOT = """<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>"""
+_ARTICLE_FOOT = """<footer>Hotline &middot; Real-time SMS alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>"""
 
 _ARTICLE_CTA = """<div class="article-cta"><h3>Set up your Hotline today.</h3><a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up &rarr;</a></div>"""
 
@@ -3673,7 +4105,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">How does setup work? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Sign up at hotlinetxt.com/signup. You'll get a print-ready sign PDF and a plain QR image texted to you within minutes. Post your sign, and the service starts working. The whole process takes under five minutes.</p></div>
+<div class="faq-a"><p>Sign up at hotlinetxt.com/signup. You'll get a print-ready PDF and a plain QR image texted to you within minutes. Display your Hotline, and the service starts working. The whole process takes under five minutes.</p></div>
 </div>
 
 <div class="faq-item">
@@ -3931,7 +4363,7 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p class="lead">The QR code only works if a customer sees it at the right moment. That moment is when the problem is in front of them, not after they've already walked out.</p>
 
-<p>Most operators post a sign near the entrance and call it done. That's the least effective spot. By the time someone's at the exit, the problem is behind them. They're already deciding whether to leave a review.</p>
+<p>Most operators display their Hotline near the entrance and call it done. That's the least effective spot. By the time someone's at the exit, the problem is behind them. They're already deciding whether to leave a review.</p>
 
 <p>Put it at the problem, not at the door.</p>
 
@@ -4196,7 +4628,7 @@ h1{font-size:24px;font-weight:700;margin-bottom:8px}
 .card{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.04)}
 .trial{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:20px;text-align:center}
 label{display:block;font-size:13px;font-weight:500;color:#888;margin-bottom:4px;margin-top:14px}label:first-of-type{margin-top:0}
-input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;padding:12px 14px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:16px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
+input[type=text],input[type=tel],input[type=email],input[type=url],select{width:100%;padding:12px 14px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:16px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus,select:focus{outline:none;border-color:#ea580c}select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
 .btn{width:100%;padding:14px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-top:20px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
 .result{padding:14px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
 .spinner{display:inline-block;width:16px;height:16px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}@keyframes spin{to{transform:rotate(360deg)}}
@@ -4216,8 +4648,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
-<h1>Get your QR code</h1>
-<p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready sign instantly.</p>
+<h1>Start getting alerts today</h1>
+<p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready Hotline instantly.</p>
 <div class="card">
 <div class="trial">14-day free trial &middot; No credit card required</div>
 <div style="text-align:center;font-size:13px;color:#888;margin:-8px 0 16px">Then $19.99/month. Cancel anytime.</div>
@@ -4228,6 +4660,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
 <label>Business zip code</label><input type="text" id="f-zip" placeholder="78745" maxlength="5" pattern="[0-9]{5}" inputmode="numeric" required>
+<label>Type of operation</label><select id="f-vertical"><option value="">Select your operation...</option><option value="laundromat">Laundromat</option><option value="carwash">Car Wash</option><option value="selfstorage">Self Storage</option><option value="parking">Parking / Garage</option><option value="gym">24/7 Gym</option><option value="other">Other</option></select>
 
 
 <!-- ============================================================
@@ -4246,15 +4679,15 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
      END TWILIO COMPLIANCE BLOCK
      ============================================================ -->
 
-<button class="btn" id="f-btn" onclick="signup()">Get my QR code &rarr;</button>
+<button class="btn" id="f-btn" onclick="signup()">Start my free trial &rarr;</button>
 </div>
 <div class="steps">
 <div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get your QR code and sign in seconds</p></div>
-<div class="step"><div class="step-num">2</div><h3>Display it</h3><p>Print your sign and post it in your business</p></div>
-<div class="step"><div class="step-num">3</div><h3>Get alerts</h3><p>Customers scan, AI filters, you get alerted</p></div>
+<div class="step"><div class="step-num">2</div><h3>Display your Hotline</h3><p>Place it anywhere customers look.</p></div>
+<div class="step"><div class="step-num">3</div><h3>Get alerted</h3><p>Know the moment something needs your attention</p></div>
 </div>
 </div>
-<footer>Hotline &middot; AI-powered customer alerts for small businesses &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
+<footer>Hotline &middot; Real-time SMS alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
 async function signup(){
   const name=document.getElementById('f-name').value.trim();
@@ -4278,7 +4711,7 @@ async function signup(){
   if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
   if(!zip||!/^\\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
-  try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip})});const d=await r.json();
+  try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip,vertical:document.getElementById('f-vertical').value})});const d=await r.json();
   if(d.success){
     res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your texts for your sign PDF and QR code image.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign &rarr;</a>';
     res.style.display='block';btn.textContent='Done!'}
@@ -4289,6 +4722,21 @@ async function signup(){
 
 @app.get("/signup")
 def signup_page(): _ensure_init(); return Response(content=_ga(SIGNUP_HTML), media_type="text/html")
+
+@app.get("/laundromat")
+def vertical_laundromat(): _ensure_init(); return Response(content=_ga(VERTICAL_LAUNDROMAT_HTML), media_type="text/html")
+
+@app.get("/carwash")
+def vertical_carwash(): _ensure_init(); return Response(content=_ga(VERTICAL_CARWASH_HTML), media_type="text/html")
+
+@app.get("/selfstorage")
+def vertical_selfstorage(): _ensure_init(); return Response(content=_ga(VERTICAL_SELFSTORAGE_HTML), media_type="text/html")
+
+@app.get("/parking")
+def vertical_parking(): _ensure_init(); return Response(content=_ga(VERTICAL_PARKING_HTML), media_type="text/html")
+
+@app.get("/gym")
+def vertical_gym(): _ensure_init(); return Response(content=_ga(VERTICAL_GYM_HTML), media_type="text/html")
 
 
 # --- Privacy Policy page ---
@@ -4513,7 +4961,7 @@ async def stripe_webhook(request: Request):
             PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
             link_part = f"\nUpdate payment: {PAYMENT_LINK}" if PAYMENT_LINK else ""
             for p in get_alert_phones(biz):
-                send_sms(p, f"\u26a0\ufe0f Hotline payment failed. Alerts may stop soon.{link_part}")
+                send_sms(p, f"&#9888; Hotline payment failed. Alerts may stop soon.{link_part}")
 
     elif event_type == "customer.subscription.updated":
         status_map = {"active": "active", "past_due": "past_due", "canceled": "canceled",
@@ -4552,6 +5000,7 @@ async def signup_create(request_data:dict=None):
     email = (request_data.get("email") or "").strip()
     website_url = (request_data.get("website_url") or "").strip()
     zip_code = (request_data.get("zip") or "").strip()
+    vertical = (request_data.get("vertical") or "").strip().lower()
     if not name: return {"error":"Business name required"}
     if not phone or not phone.startswith("+"): return {"error":"Valid phone with country code required"}
 
@@ -4566,7 +5015,7 @@ async def signup_create(request_data:dict=None):
         with get_db() as c:
             if _fetchone(c,_q("SELECT id FROM businesses WHERE id=?"), (biz_id,)):
                 biz_id = base_biz_id[:20]+"-"+datetime.now(timezone.utc).strftime("%H%M%S")+"-"+"".join(__import__("random").choices("0123456789",k=4))
-        business_code = create_business(biz_id, name, phone, SHARED_NUMBER, extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code)
+        business_code = create_business(biz_id, name, phone, SHARED_NUMBER, extra_phones=extra, email=email, website_url=website_url, zip_code=zip_code, vertical=vertical)
         if business_code:
             break
         logger.warning(f"create_business attempt {attempt+1} failed for {name} ({phone}) biz_id={biz_id}")
@@ -4606,7 +5055,7 @@ async def signup_create(request_data:dict=None):
 
     asset_msg = (
         f"Your Hotline assets for {name}:\n"
-        f"Print-ready sign: {base}/signs/{business_code}.pdf\n"
+        f"Display your Hotline (PDF): {base}/signs/{business_code}.pdf\n"
         f"Plain QR image (custom signage): {base}/qr/{business_code}.png"
     )
     send_sms(phone, asset_msg)
