@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v15"
+VERSION = "v16"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -1512,7 +1512,7 @@ Emergencies always get through."""
 # --- Routes ---
 @app.get("/")
 def root():
-    _ensure_init(); return Response(content=_ga(DEMO_HTML), media_type="text/html")
+    _ensure_init(); return Response(content=_ga(HOMEPAGE_HTML), media_type="text/html")
 
 @app.get("/health")
 def health(): _ensure_init(); return {"status":"ok"}
@@ -3262,8 +3262,10 @@ VERTICAL_GYM_HTML = _make_vertical_page(
 )
 
 
+HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline — Real-Time Business Alerts</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#fafafa;color:#333}.nav{display:flex;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto;position:relative}.nav .logo{flex:1;text-align:center}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}.nav a{text-decoration:none;color:#333;font-size:13px;font-weight:500}.nav a.signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}.container{max-width:800px;margin:60px auto;padding:0 24px;text-align:center}.hero{margin-bottom:40px}.hero h1{font-size:48px;font-weight:700;line-height:1.2;margin-bottom:12px;color:#1a1a1a}.hero p{font-size:18px;color:#666;margin-bottom:24px}.section-title{font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:#999;margin:40px 0 24px}.vertical-buttons{display:flex;flex-direction:column;gap:12px}.vertical-btn{display:block;padding:16px 20px;background:#fff;border:1px solid #e0e0dc;border-radius:8px;text-decoration:none;text-align:left;transition:all 0.2s ease;cursor:pointer}.vertical-btn:hover{border-color:#ea580c;background:#fafafa;box-shadow:0 2px 8px rgba(234,88,12,0.1)}.vertical-btn-title{font-weight:600;font-size:16px;color:#ea580c;margin-bottom:4px}.vertical-btn-desc{font-size:14px;color:#666}.footer{margin-top:60px;padding-top:20px;border-top:1px solid #e0e0dc;font-size:12px;color:#999}a{color:#ea580c;text-decoration:none}.dropdown{position:relative;display:inline-block}.dropdown-menu{display:none;position:absolute;background-color:#fff;min-width:180px;box-shadow:0 8px 16px rgba(0,0,0,0.1);border-radius:8px;padding:8px;z-index:1;border:1px solid #e0e0dc;top:100%;right:0;margin-top:6px}.dropdown-menu-inner{display:flex;flex-direction:column;gap:4px}.dropdown-menu a{display:block;padding:8px 12px;border-radius:4px;transition:background 0.2s}.dropdown-menu a:hover{background:#f5f5f5}.dropdown:hover .dropdown-menu{display:block}</style></head><body><nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 70" font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif"><rect x="0" y="5" width="60" height="60" rx="9" fill="#ea580c"/><text x="30" y="52" font-size="48" font-weight="700" text-anchor="middle" fill="#fff">H</text><text x="75" y="50" font-size="32" font-weight="700" letter-spacing="0.15em" fill="#ea580c">HOTLINE</text></svg></a><div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav><div class="container"><div class="hero"><h1>Know when your business needs you.</h1><p>Real-time alerts for operators who aren't on-site.</p></div><div class="section-title">Which operation is yours?</div><div class="vertical-buttons"><a href="/laundromat" class="vertical-btn"><div class="vertical-btn-title">Laundromat</div><div class="vertical-btn-desc">For owners who aren't on-site</div></a><a href="/carwash" class="vertical-btn"><div class="vertical-btn-title">Car Wash</div><div class="vertical-btn-desc">For self-serve & attended operations</div></a><a href="/selfstorage" class="vertical-btn"><div class="vertical-btn-title">Self Storage</div><div class="vertical-btn-desc">For facility managers</div></a><a href="/parking" class="vertical-btn"><div class="vertical-btn-title">Parking</div><div class="vertical-btn-desc">For lot & garage operators</div></a><a href="/gym" class="vertical-btn"><div class="vertical-btn-title">24/7 Gym</div><div class="vertical-btn-desc">For gym operators</div></a></div><div class="footer"><p>No app. No software. No setup. Works by text.</p></div></div></body></html>"""
+
 DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hotline \u2014 Stop losing customers to fixable problems</title>
+<title>Hotline — Stop losing customers to fixable problems</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
