@@ -3084,199 +3084,81 @@ async def demo_classify(request_data:dict=None):
 # ── Vertical Landing Pages ──────────────────────────────────────────────────
 
 def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, step3):
-    """Generate a complete vertical landing page with two-phone demo + embedded signup."""
-    ex_chips = "".join(f'<div class="ex" onclick="tryEx(this)">{s}</div>' for s in scenarios)
-    steps_html = f"""
+    """Generate a vertical landing page with integrated demo (matching main demo exactly)."""
+    # Generate scenario chips HTML
+    ex_chips_html = "".join(f'<div class="ex" onclick="tryEx(this)">{s}</div>' for s in scenarios)
+    
+    # Demo JS (adapted from main demo - uses v-cust and v-oper IDs)
+    DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
+function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
+async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','<span class="spinner"></span>');addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free.</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const html='<div class="lbl">URGENT ('+t+')</div>Category: '+cat+'<div class="meta"><span class="tag t1">Critical</span></div><div style="margin-top:8px"><strong>Customer:</strong><br>'+text+'<br><br><strong>Our reply:</strong><br>'+reply+'</div>';addB(mo,'alert-red',html,1)}else if(d.tier===2){const html='<div class="lbl">ISSUE ('+t+')</div>Category: '+cat+'<div class="meta"><span class="tag t2">Important</span></div><div style="margin-top:8px"><strong>Customer:</strong><br>'+text+'<br><br><strong>Our reply:</strong><br>'+reply+'</div>';addB(mo,'alert',html,2)}else if(d.tier===3){const html='<div class="lbl">Feedback ('+t+')</div>'+(d.explanation||d.summary||cat);addB(mo,'feedback',html,3)}else{addB(mo,'info','<div class="lbl">Logged</div>'+(d.summary||''),4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
+function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
+function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];document.getElementById('v-input').value=''}
+function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}"""
+
+    steps_html = f'''<div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
 <div class="hiw-step"><div class="hiw-num">2</div><div><strong>{step2[0]}</strong><p>{step2[1]}</p></div></div>
-<div class="hiw-step"><div class="hiw-num">3</div><div><strong>{step3[0]}</strong><p>{step3[1]}</p></div></div>"""
-    return """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>""" + label + """ Alert System — Hotline</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
-""" + NAV_CSS + """
-.hero{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}.v-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#ea580c;margin-bottom:10px}
-h1{font-size:clamp(24px,4vw,38px);font-weight:700;line-height:1.18;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}
-.sub{font-size:15px;color:#666;max-width:560px;margin:0 auto 8px;line-height:1.55}
-.urgency{font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:20px}
-/* Demo section - full width two phones */
-.demo-section{max-width:960px;margin:0 auto;padding:0 24px 20px}
-.panel-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#aaa;margin-bottom:8px;text-align:center}
-.ex-row{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;justify-content:center}
-.ex{font-size:11px;padding:5px 9px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer}.ex:hover{border-color:#2563eb;color:#1a1a1a}
-.phones{display:flex;gap:16px;justify-content:center}
-@media(max-width:640px){.phones{flex-direction:column;align-items:center}.phones .device{width:100%;max-width:340px}}
-.device{flex:1;max-width:340px}
-.frame{background:#fff;border-radius:24px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
-.notch{width:70px;height:20px;background:#fff;border-radius:0 0 10px 10px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:5px;height:5px;background:#e8e8e4;border-radius:50%;position:absolute;right:14px;top:5px}
-.statusbar{display:flex;justify-content:space-between;padding:2px 14px 4px;font-size:10px;color:#aaa;margin-top:-6px}
-.phone-label-bar{text-align:center;padding:5px 0 7px;font-size:11px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}
-.phone-label-bar.cust{color:#2563eb}.phone-label-bar.oper{color:#ea580c}
-.msgs{height:240px;overflow-y:auto;padding:8px 10px;background:#fafaf8}
-.bubble{padding:7px 11px;border-radius:13px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both;white-space:pre-line}
-.bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:3px}
-.bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:3px}
-.bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:3px}
-.bubble.alert-red{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:3px}
-.bubble.feedback{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:3px}
-.bubble.info{background:#f0f0ec;color:#666;border-bottom-left-radius:3px}
-.bubble.system{background:#f0f0ec;color:#999;font-size:10px;text-align:center;max-width:100%;border-radius:7px;padding:4px 8px}
-.oper-filter{display:flex;align-items:center;justify-content:space-between;padding:5px 12px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:10px;color:#aaa;gap:4px}
-.filter-btn{font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-weight:600}
-.filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
-.input-area{padding:5px 8px 8px;border-top:1px solid #f0f0ec;background:#fff}
-.input-row{display:flex;gap:4px}.input-row input{flex:1;padding:8px 10px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:16px;font-size:12px;color:#1a1a1a;font-family:inherit}.input-row input::placeholder{color:#bbb}.input-row input:focus{outline:none;border-color:#ea580c}
-.input-row button{border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:12px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.input-row button:disabled{opacity:0.3;cursor:not-allowed}
-.home-bar{width:80px;height:3px;background:#ddd;border-radius:2px;margin:5px auto 6px}
-@keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-.spinner{display:inline-block;width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:3px}@keyframes spin{to{transform:rotate(360deg)}}
-/* Signup form */
-.form-section{max-width:520px;margin:0 auto;padding:0 24px 32px}
-.form-panel{background:#fff;border:1px solid #e0e0dc;border-radius:14px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,0.04)}
-.trial-badge{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:14px;text-align:center}
-.form-sub{font-size:12px;color:#aaa;text-align:center;margin:-6px 0 14px}
-label{display:block;font-size:12px;font-weight:600;color:#888;margin-bottom:3px;margin-top:10px}label:first-of-type{margin-top:0}
-input[type=text],input[type=tel],input[type=email],input[type=url]{width:100%;padding:11px 13px;background:#fafaf8;border:1px solid #e0e0dc;border-radius:8px;font-size:14px;color:#1a1a1a;font-family:inherit}input::placeholder{color:#bbb}input:focus{outline:none;border-color:#ea580c}
-.btn{width:100%;padding:13px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;margin-top:14px;font-family:inherit}.btn:hover{background:#dc2626}.btn:disabled{opacity:0.4}
-.result{padding:12px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;line-height:1.5;display:none}.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
-.btn-spinner{display:inline-block;width:14px;height:14px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:5px}
-.optin-wrap{display:flex;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 12px;background:#f8f8f6;border:1px solid #e0e0dc;border-radius:8px}
-.optin-wrap input[type=checkbox]{width:16px;height:16px;min-width:16px;margin-top:2px;accent-color:#ea580c;cursor:pointer}
-.optin-wrap label{font-size:11px;color:#555;line-height:1.5;margin:0;font-weight:400}
-.optin-wrap label a{color:#ea580c;text-decoration:underline}
-.optin-err{display:none;color:#991b1b;font-size:11px;margin-top:5px}
-/* How it works */
-.hiw{max-width:600px;margin:0 auto;padding:0 24px 40px}
-.hiw h2{font-size:18px;font-weight:700;margin-bottom:14px;text-align:center}
-.hiw-steps{display:flex;flex-direction:column;gap:10px}
-.hiw-step{display:flex;align-items:flex-start;gap:12px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px 14px}
-.hiw-num{width:24px;height:24px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:11px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
-.hiw-step strong{font-size:13px;display:block;margin-bottom:2px}.hiw-step p{font-size:12px;color:#888;margin:0;line-height:1.35}
-footer{text-align:center;padding:24px;color:#aaa;font-size:12px;border-top:1px solid #e0e0dc}
+<div class="hiw-step"><div class="hiw-num">3</div><div><strong>{step3[0]}</strong><p>{step3[1]}</p></div></div>
+</div>'''
+
+    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline for {label}s</title><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"><style>
+*{{box-sizing:border-box;margin:0;padding:0}}body{{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}}a{{color:#ea580c;text-decoration:none}}
+{NAV_CSS}
+.hero{{text-align:center;padding:40px 24px 20px;max-width:700px;margin:0 auto}}.v-label{{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#ea580c;margin-bottom:10px}}
+h1{{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}}h1 em{{font-style:normal;color:#ea580c}}.sub{{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}}.urgency{{font-size:13px;color:#aaa;margin-bottom:8px}}.panel-label{{font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em}}
+.phones{{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}}.device{{width:320px;flex-shrink:0}}.frame{{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}}.notch{{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}}.notch::before{{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}}.statusbar{{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}}.phone-label-bar{{text-align:center;padding:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:0.06em;border-bottom:1px solid #f0f0ec}}.phone-label-bar.customer{{color:#2563eb}}.phone-label-bar.operator{{color:#ea580c}}.pref-bar{{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;flex-wrap:wrap}}.pref-label{{font-size:13px;color:#888;font-weight:500}}.filter-btn{{font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.2s}}.filter-btn.active{{background:#ea580c;color:#fff;border-color:#ea580c}}
+.msgs{{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}}.bubble{{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}}.bubble.in{{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}}.bubble.out-blue{{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}}.bubble.alert{{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}}.bubble.alert-red{{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-bottom-left-radius:4px}}.bubble.feedback{{background:#fefce8;border:1px solid #fef08a;color:#a16207;border-bottom-left-radius:4px}}.bubble.info{{background:#f0f0ec;color:#666;border-bottom-left-radius:4px}}.bubble.system{{background:#f0f0ec;color:#999;font-size:11px;text-align:center;max-width:100%;border-radius:8px;padding:6px 10px}}.bubble .lbl{{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#aaa;margin-bottom:3px}}.meta{{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}}.tag{{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}}.tag.t1{{background:#fee2e2;color:#dc2626}}.tag.t2{{background:#fff7ed;color:#b45309}}.tag.t3{{background:#fef9c3;color:#a16207}}.tag.t4{{background:#f0f0ec;color:#888}}@keyframes fadeUp{{from{{opacity:0;transform:translateY(6px)}}to{{opacity:1;transform:none}}}}.input-area{{padding:8px 12px 12px;border-top:1px solid #f0f0ec;background:#fff}}.input-row{{display:flex;gap:6px}}.input-row input{{flex:1;padding:10px 12px;background:#f5f5f0;border:1px solid #e0e0dc;border-radius:20px;font-size:14px;color:#1a1a1a;font-family:inherit}}.input-row input::placeholder{{color:#bbb}}.input-row input:focus{{outline:none;border-color:#ea580c}}.input-row button{{padding:10px 14px;border-radius:50%;border:none;font-size:16px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center}}.input-row button.blue{{background:#2563eb;color:#fff}}.input-row button.orange{{background:#ea580c;color:#fff}}.input-row button:disabled{{opacity:0.3;cursor:not-allowed}}.operator-cmds{{display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff}}.home-bar{{width:120px;height:4px;background:#ddd;border-radius:2px;margin:8px auto 10px}}.examples{{margin-bottom:20px;padding:0 20px}}.examples p{{font-size:12px;color:#aaa;margin-bottom:6px;text-align:center}}.ex-row{{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}}.ex{{font-size:12px;padding:6px 10px;background:#fff;border:1px solid #e0e0dc;border-radius:6px;color:#666;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04)}}.ex:hover{{border-color:#2563eb;color:#1a1a1a}}.cta{{text-align:center;margin:24px 0;padding:0 20px}}.cta a{{display:inline-block;padding:14px 32px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:16px}}footer{{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}}.spinner{{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:4px}}@keyframes spin{{to{{transform:rotate(360deg)}}}}.howitworks{{max-width:640px;margin:0 auto;padding:0 20px 28px}}.hiw-steps{{display:flex;flex-direction:column;gap:14px}}.hiw-step{{display:flex;align-items:flex-start;gap:14px;background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:16px 18px}}.hiw-num{{width:28px;height:28px;border-radius:50%;background:#fff7ed;color:#ea580c;font-weight:700;font-size:13px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}}.hiw-step strong{{font-size:14px;display:block;margin-bottom:2px}}.hiw-step p{{font-size:13px;color:#888;margin:0;line-height:1.4}}@media(max-width:700px){{.phones{{flex-direction:column;align-items:center}}.device{{width:100%;max-width:360px}}}}
 </style></head><body>
-""" + NAV_HTML + f"""
+{NAV_HTML}
 <div class="hero">
 <p class="v-label">Hotline for {label}s</p>
 <h1>{headline}</h1>
 <p class="sub">{sub}</p>
 <p class="urgency">No app. No software. No setup. Works by text.</p>
 </div>
-<div class="demo-section">
+
+<div class="examples">
 <p class="panel-label">See it in action — try a scenario</p>
-<div class="ex-row">{ex_chips}</div>
+<div class="ex-row">{ex_chips_html}</div>
+<div style="margin-top:12px"><button onclick="resetDemo()" style="padding:6px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset</button></div>
+</div>
+
 <div class="phones">
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;88%</span></div>
-<div class="phone-label-bar cust">Customer</div>
-<div class="msgs" id="v-cust"><div class="bubble system">Tap a scenario above or type below</div></div>
-<div class="input-area"><div class="input-row">
-<input type="text" id="v-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendV()">
-<button id="v-btn" onclick="sendV()">&#9650;</button>
-</div></div>
+<div class="phone-label-bar customer">Customer</div>
+<div class="msgs" id="v-cust"><div class="bubble system">Customer messages appear here</div></div>
+<div class="input-area"><div class="input-row"><input id="v-input" type="text" placeholder="Type a message..."><button id="v-btn" class="blue" onclick="sendDemo()" style="margin:0">▲</button></div></div>
 <div class="home-bar"></div>
 </div></div>
+
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G&nbsp;92%</span></div>
-<div class="phone-label-bar oper">Your Phone</div>
-<div class="oper-filter">
-<span style="font-weight:600;color:#888">Alert level:</span>
-<div style="display:flex;gap:3px">
-<button class="filter-btn active" id="v-filt-crit" onclick="setVFilter('critical')">🔴 Critical</button>
-<button class="filter-btn" id="v-filt-all" onclick="setVFilter('all')">📋 All</button>
-</div></div>
-<div class="msgs" id="v-oper"><div class="bubble system">Your alerts appear here</div></div>
+<div class="phone-label-bar operator">Operator</div>
+<div class="pref-bar"><div class="pref-label">Alert level:</div><button class="filter-btn active" id="m-filt-crit" onclick="filterDemo('critical')">Critical only</button><button class="filter-btn" id="m-filt-all" onclick="filterDemo('all')">All messages</button></div>
+<div class="msgs" id="v-oper"><div class="bubble system">Operator alerts appear here</div></div>
+<div class="input-area"><div class="input-row"><input style="flex:1" type="text" placeholder="Type a message..."><button class="blue" style="margin:0">▲</button></div></div>
 <div class="home-bar"></div>
 </div></div>
 </div>
-</div>
-<div class="form-section">
-<div class="form-panel">
-<div class="trial-badge">14-day free trial &middot; No credit card required</div>
-<div class="form-sub">Then $19.99/month. Cancel anytime.</div>
-<div class="result" id="v-result"></div>
-<label>Business name</label><input type="text" id="v-name" placeholder="Joe's {label}">
-<label>Your cell phone</label><input type="tel" id="v-phone" placeholder="(512) 555-1234">
-<label>Partner or manager phone (optional)</label><input type="tel" id="v-phone2" placeholder="(512) 555-5678">
-<label>Email (for weekly digest reports)</label><input type="email" id="v-email" placeholder="you@example.com">
-<label>Business zip code</label><input type="text" id="v-zip" placeholder="78745" maxlength="5" inputmode="numeric">
-<!-- TWILIO COMPLIANCE — SMS OPT-IN DISCLOSURE — DO NOT REMOVE -->
-<div class="optin-wrap">
-  <input type="checkbox" id="v-optin">
-  <label for="v-optin">By checking this box, you agree to receive recurring SMS alerts from Hotline (the Hotline business alert service). Msg &amp; data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to cancel, <strong>HELP</strong> for help. View our <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</label>
-</div>
-<div class="optin-err" id="v-optin-err">&#9888; You must agree to receive SMS messages to continue.</div>
-<!-- END TWILIO COMPLIANCE BLOCK -->
-<button class="btn" id="v-submit" onclick="submitV()">Start my free trial &rarr;</button>
-</div>
-</div>
-<div class="hiw">
-<h2>How it works</h2>
-<div class="hiw-steps">""" + steps_html + """
-</div>
-</div>
-<footer>Hotline &middot; AI-powered alerts for """ + label + """s &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
-<script>
-var vHist=[],vCnt=0,vMax=8,vFilter='critical';
-var mc=document.getElementById('v-cust');
-var mo=document.getElementById('v-oper');
-function addC(cls,txt){var b=document.createElement('div');b.className='bubble '+cls;b.innerHTML=txt;mc.appendChild(b);mc.scrollTop=mc.scrollHeight}
-function addO(cls,txt,tier){var b=document.createElement('div');b.className='bubble '+cls;if(tier)b.setAttribute('data-tier',tier);b.innerHTML=txt;mo.appendChild(b);mo.scrollTop=mo.scrollHeight;doFilter()}
-function doFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=(vFilter==='all'||t<=2)?'':'none'})}
-function setVFilter(m){vFilter=m;document.getElementById('v-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('v-filt-all').className='filter-btn'+(m==='all'?' active':'');doFilter()}
-function tryEx(el){var inp=document.getElementById('v-input');inp.value=el.textContent;inp.focus();sendV()}
-function fmtT(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
-async function sendV(){
-  var inp=document.getElementById('v-input'),btn=document.getElementById('v-btn');
-  var text=inp.value.trim();
-  if(!text)return;
-  if(vCnt>=vMax){addC('system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free.</a>');return}
-  inp.value='';btn.disabled=true;vCnt++;
-  addC('out-blue',text);
-  addO('system','<span class="spinner"></span> AI reading...');
-  try{
-    var resp=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:vHist})});
-    var data=await resp.json();
-    mo.lastChild.remove();
-    var reply=(data.auto_reply||'Thanks, we are looking into it.');
-    var cat=((data.category||'general')+'').replace(/_/g,' ');
-    vHist.push({customer:text,reply:reply});
-    if(vHist.length>6)vHist.shift();
-    addC('in',reply);
-    var t=fmtT();
-    if(data.tier===1){addO('alert-red','&#128680; URGENT ('+t+')\\nCategory: '+cat+'\\n\\nCustomer: '+text+'\\n\\nWe replied: '+reply,1)}
-    else if(data.tier===2){addO('alert','&#9888; Issue ('+t+')\\nCategory: '+cat+'\\n\\nCustomer: '+text+'\\n\\nWe replied: '+reply,2)}
-    else if(data.tier===3){addO('feedback','&#128172; Feedback ('+t+')\\n'+(data.explanation||data.summary||cat),3)}
-    else{addO('info','&#128172; '+(data.summary||'Logged.'),4)}
-  }catch(ex){if(mo.lastChild)mo.lastChild.remove();addO('system','Error: '+ex.message)}
-  btn.disabled=false;
-}
-async function submitV(){
-  var name=document.getElementById('v-name').value.trim();
-  var phone=document.getElementById('v-phone').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
-  var phone2=document.getElementById('v-phone2').value.trim().replace(/[\\s\\-\\(\\)]/g,'');
-  var email=document.getElementById('v-email').value.trim();
-  var zip=document.getElementById('v-zip').value.trim();
-  var res=document.getElementById('v-result'),btn=document.getElementById('v-submit');
-  var optin=document.getElementById('v-optin'),optinErr=document.getElementById('v-optin-err');
-  if(!optin.checked){optinErr.style.display='block';optinErr.scrollIntoView({behavior:'smooth',block:'nearest'});return}
-  optinErr.style.display='none';
-  if(!phone.startsWith('+')){if(phone.startsWith('1')&&phone.length===11)phone='+'+phone;else if(phone.length===10)phone='+1'+phone;else{res.className='result err';res.style.display='block';res.textContent='Please enter a valid US phone number.';return}}
-  if(phone2&&!phone2.startsWith('+')){if(phone2.startsWith('1')&&phone2.length===11)phone2='+'+phone2;else if(phone2.length===10)phone2='+1'+phone2}
-  if(!name){res.className='result err';res.style.display='block';res.textContent='Please enter your business name.';return}
-  if(!zip||!/^\\d{5}$/.test(zip)){res.className='result err';res.style.display='block';res.textContent='Please enter a valid 5-digit zip code.';return}
-  btn.disabled=true;btn.innerHTML='<span class="btn-spinner"></span>Setting up...';res.style.display='none';
-  try{
-    var r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,zip,vertical:'""" + slug + """'})});
-    var d=await r.json();
-    if(d.success){res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your phone for your sign PDF and QR code.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign &rarr;</a>';res.style.display='block';btn.textContent='Done!'}
-    else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Start my free trial &rarr;'}
-  }catch(e){res.className='result err';res.textContent='Connection error.';res.style.display='block';btn.disabled=false;btn.innerHTML='Start my free trial &rarr;'}
-}
-</script></body></html>"""
 
-# ── Vertical page definitions ────────────────────────────────────────────────
+<div class="cta"><a href="/signup">Get Hotline for your {label.lower()}s →</a></div>
+
+<div class="howitworks">
+{steps_html}
+</div>
+
+<footer>8405 Siskin CV, Austin TX 78745 · <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+
+<script>
+{DEMO_JS}
+</script>
+</body></html>'''
+    
+    return html
+
 
 VERTICAL_LAUNDROMAT_HTML = _make_vertical_page(
     slug="laundromat",
@@ -3314,7 +3196,7 @@ VERTICAL_CARWASH_HTML = _make_vertical_page(
         "Touchscreen is frozen, can\'t select a wash",
     ],
     step1=("Sign up and post your sign", "One sign at entry and one at each bay or tunnel entrance covers your facility."),
-    step2=("Customers text equipment issues instantly", "No app. No phone call. They text. AI classifies urgency."),
+    step2=("Customers text equipment issues instantly", "No app. No phone call. They text. Hotline categorizes urgency."),
     step3=("You get a text the moment something breaks", "Know before a line forms. Fix it before you lose the revenue."),
 )
 
@@ -3440,8 +3322,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="top">
-<h1 style="max-width:800px;margin:0 auto 12px;font-size:clamp(28px,4vw,44px);line-height:1.15">Know when your business needs you.<br><em>AI handles the rest.</em></h1>
-<p class="sub">Customers text. AI filters. You get alerted when something actually needs your attention.</p>
+<h1 style="max-width:800px;margin:0 auto 12px;font-size:clamp(28px,4vw,44px);line-height:1.15">Know when your business needs you.<br><em>Hotline handles the rest.</em></h1>
+<p class="sub">Customers text. Hotline alerts you when something actually needs your attention.</p>
 <p style="font-size:13px;color:#aaa;margin-bottom:8px"><strong style="color:#1a1a1a;font-weight:700">No app. No software. No setup. No training.</strong></p>
 <p style="font-size:12px;font-weight:500;color:#bbb;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Try a scenario or type your own</p>
 <div class="examples">
@@ -3804,7 +3686,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="solution-steps">
 <div class="sol-step"><div class="sol-num">1</div><p><strong>Post one sign.</strong> Your print-ready sign goes up in 60 seconds. It gives customers a direct text line to you — right where they need it.</p></div>
 <div class="sol-step"><div class="sol-num">2</div><p><strong>Customers text when something's wrong.</strong> No app. No account. They text the number on the sign. Every message gets read by AI.</p></div>
-<div class="sol-step"><div class="sol-num">3</div><p><strong>AI triages every message.</strong> Emergencies and equipment failures reach you within seconds. Routine feedback gets logged. Spam is filtered. You only hear what actually needs you.</p></div>
+<div class="sol-step"><div class="sol-num">3</div><p><strong>Smart categorizations every message.</strong> Emergencies and equipment failures reach you within seconds. Routine feedback gets logged. Spam is filtered. You only hear what actually needs you.</p></div>
 <div class="sol-step"><div class="sol-num">4</div><p><strong>You take action from anywhere.</strong> Get the alert, assess the situation, and act \u2014 call a vendor, reply to the customer, or head over yourself. No app, no dashboard, no login required.</p></div>
 </div>
 </div>
