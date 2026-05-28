@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v26"
+VERSION = "v27"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3099,7 +3099,7 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
 const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
 function addB(c,cls,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
 async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
-history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;margin-bottom:6px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+concern_html+'<div style="margin:8px 0"><strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'</div><div style="margin-top:12px;font-size:12px;color:inherit">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1)}else if(d.tier===2){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;margin-bottom:6px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+concern_html+'<div style="margin:8px 0"><strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'</div><div style="margin-top:12px;font-size:12px;color:inherit">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2)}else if(d.tier===3){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;margin-bottom:6px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+concern_html;addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:600;margin-bottom:6px">✓ LOGGED ('+t+')</div>Category: '+cat;addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
+history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;font-size:11px;margin-bottom:4px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+concern_html+'<div style="margin:8px 0"><strong style=\"font-size:11px\">Customer:</strong><br>'+text+'<br><br><strong style=\"font-size:11px\">We replied:</strong><br>'+reply+'</div><div style="margin-top:12px;font-size:12px;color:inherit">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1)}else if(d.tier===2){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;font-size:11px;margin-bottom:4px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+concern_html+'<div style="margin:8px 0"><strong style=\"font-size:11px\">Customer:</strong><br>'+text+'<br><br><strong style=\"font-size:11px\">We replied:</strong><br>'+reply+'</div><div style="margin-top:12px;font-size:12px;color:inherit">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2)}else if(d.tier===3){const concern_html=concern?'Concern: '+concern+'<br><br>':'';const msg='<div style="font-weight:600;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+concern_html;addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:600;font-size:11px;margin-bottom:4px">✓ LOGGED ('+t+')</div>Category: '+cat;addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
 function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value=''}
 function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
@@ -3312,8 +3312,8 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .filter-row{display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;flex-wrap:wrap}
 .filter-btn{font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s}
 .filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
-.msgs{height:300px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
-.bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
+.msgs{height:260px;overflow-y:auto;padding:10px 12px;background:#fafaf8}
+.bubble{padding:7px 11px;border-radius:14px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
 .bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
 .bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
@@ -3364,7 +3364,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="ind-pill" onclick="setIndustry('parking',this)">Parking</div>
 <div class="ind-pill" onclick="setIndustry('gym',this)">24/7 Gym</div>
 </div>
-<p class="try-label">Try a scenario or type your own</p>
+<div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 0 4px"><p class="try-label" style="padding:0;margin:0">Try a scenario or type your own</p><button onclick="resetDemo()" style="padding:4px 10px;background:#f0f0f0;color:#999;border:1px solid #e0e0dc;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">Reset</button></div>
 <div class="ex-area" style="padding-bottom:12px">
 <div class="ex-row" id="ex-row"></div>
 </div>
@@ -3396,7 +3396,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div><div class="home-bar"></div>
 </div></div>
 </div>
-<div style="text-align:center;margin:8px 0 16px"><button onclick="resetDemo()" style="padding:5px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset demo</button></div>
+
 <div class="features">
 <div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
 <div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
@@ -3555,17 +3555,17 @@ async function sendDemo(){
     const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
     if(d.tier===1){
       const ch=concern?'Concern: '+concern+'<br><br>':'';
-      addB(mo,'alert-red','<div style="font-weight:600;margin-bottom:6px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:10px;font-size:12px">Reply REPLY to message customer back.</div>');
+      addB(mo,'alert-red','<div style="font-weight:600;font-size:11px;margin-bottom:4px">🚨 URGENT ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:6px;font-size:10px;opacity:0.8">Reply REPLY to message customer back.</div>');
       document.getElementById('operator-cmds').style.display='flex';
     }else if(d.tier===2){
       const ch=concern?'Concern: '+concern+'<br><br>':'';
-      addB(mo,'alert','<div style="font-weight:600;margin-bottom:6px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:10px;font-size:12px">Reply REPLY to message customer back.</div>');
+      addB(mo,'alert','<div style="font-weight:600;font-size:11px;margin-bottom:4px">⚠️ ISSUE ('+t+')</div>Category: '+cat+'<br><br>'+ch+'<strong>Customer:</strong><br>'+text+'<br><br><strong>We replied:</strong><br>'+reply+'<div style="margin-top:6px;font-size:10px;opacity:0.8">Reply REPLY to message customer back.</div>');
       document.getElementById('operator-cmds').style.display='flex';
     }else if(d.tier===3){
       const ch=concern?'Concern: '+concern+'<br><br>':'';
-      addB(mo,'feedback','<div style="font-weight:600;margin-bottom:6px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+ch);
+      addB(mo,'feedback','<div style="font-weight:600;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK ('+t+')</div>Category: '+cat+'<br><br>'+ch);
     }else{
-      addB(mo,'info','<div style="font-weight:600;margin-bottom:6px">✓ LOGGED ('+t+')</div>Category: '+cat);
+      addB(mo,'info','<div style="font-weight:600;font-size:11px;margin-bottom:4px">✓ LOGGED ('+t+')</div>Category: '+cat);
     }
   }catch(e){if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);addB(mo,'system','Error: '+e.message)}
   btn.disabled=false;inp.focus();
@@ -3597,7 +3597,7 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
 
 .msgs{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
-.bubble{padding:9px 13px;border-radius:16px;font-size:13px;margin-bottom:7px;max-width:88%;line-height:1.45;animation:fadeUp 0.3s ease both}
+.bubble{padding:7px 11px;border-radius:14px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
 .bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
 .bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
