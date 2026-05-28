@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v29"
+VERSION = "v30"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3302,8 +3302,8 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .ind-pill.active{background:#ea580c;border-color:#ea580c;color:#fff}
 .ind-pill:hover:not(.active){border-color:#ea580c;color:#ea580c}
 .try-label{text-align:center;font-size:12px;color:#bbb;padding:10px 0 4px;letter-spacing:0.04em}
-.phones{display:flex;gap:20px;margin:0 auto 16px;justify-content:center;align-items:flex-start;max-width:900px;padding:0 16px}
-.device{width:340px;flex-shrink:0}
+.phones{display:flex;gap:20px;margin:0 auto 16px;justify-content:center;align-items:flex-start;max-width:960px;padding:0 16px}
+.device{width:380px;flex-shrink:0}
 .frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
 .notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
 .statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
@@ -3312,8 +3312,8 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .filter-row{display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 14px 4px;background:#fff8f5;border-bottom:1px solid #f0f0ec;font-size:11px;flex-wrap:wrap}
 .filter-btn{font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s}
 .filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
-.msgs{height:220px;overflow-y:auto;padding:8px 10px;background:#fafaf8}
-.bubble{padding:6px 10px;border-radius:12px;font-size:11px;margin-bottom:4px;max-width:92%;line-height:1.35;animation:fadeUp 0.3s ease both}
+.msgs{height:310px;overflow-y:auto;padding:10px 12px;background:#fafaf8}
+.bubble{padding:8px 12px;border-radius:14px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
 .bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
 .bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
@@ -3350,7 +3350,7 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .cta-section p{font-size:13px;color:#888;margin-bottom:16px}
 .cta-section a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
-@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:380px}.industry-bar{gap:6px}}
+@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:420px}.industry-bar{gap:6px}}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
@@ -3585,7 +3585,7 @@ DEMO_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="view
 h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom:12px;letter-spacing:-0.02em;color:#1a1a1a}h1 em{font-style:normal;color:#ea580c}
 .sub{font-size:16px;color:#888;max-width:480px;margin:0 auto 20px}
 .phones{display:flex;gap:24px;margin:0 auto 20px;justify-content:center;align-items:flex-start;max-width:860px;padding:0 20px}
-.device{width:340px;flex-shrink:0}
+.device{width:380px;flex-shrink:0}
 .frame{background:#fff;border-radius:36px;border:3px solid #e0e0dc;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08)}
 .notch{width:100px;height:28px;background:#fff;border-radius:0 0 16px 16px;margin:0 auto;position:relative;z-index:2}.notch::before{content:'';width:8px;height:8px;background:#e8e8e4;border-radius:50%;position:absolute;right:20px;top:8px}
 .statusbar{display:flex;justify-content:space-between;padding:2px 20px 6px;font-size:11px;color:#aaa;margin-top:-10px}
@@ -3597,7 +3597,7 @@ h1{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-bottom
 .filter-btn.active{background:#ea580c;color:#fff;border-color:#ea580c}
 
 .msgs{height:320px;overflow-y:auto;padding:12px 14px;background:#fafaf8}
-.bubble{padding:6px 10px;border-radius:12px;font-size:11px;margin-bottom:4px;max-width:92%;line-height:1.35;animation:fadeUp 0.3s ease both}
+.bubble{padding:8px 12px;border-radius:14px;font-size:12px;margin-bottom:5px;max-width:90%;line-height:1.4;animation:fadeUp 0.3s ease both}
 .bubble.in{background:#e8e8e4;color:#333;border-bottom-left-radius:4px}
 .bubble.out-blue{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:4px}
 .bubble.alert{background:#fff7ed;border:1px solid #fed7aa;color:#b45309;border-bottom-left-radius:4px}
