@@ -2967,7 +2967,7 @@ def _twiml(msg):
 
 # --- Shared nav + styles ---
 NAV_CSS = """
-.nav{display:flex;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto;gap:20px}.nav .logo{order:1}.nav-links{margin-left:auto;display:flex;gap:20px;align-items:center}
+.nav{display:flex;align-items:center;padding:12px 24px;max-width:100%;margin:0 auto;position:relative}.nav .logo{flex:1;text-align:center}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}
 .nav .logo{font-size:13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#ea580c;text-decoration:none;display:flex;align-items:center}
 .nav .logo svg{height:28px;width:auto}
 .nav-links{display:flex;gap:20px;align-items:center;margin-left:auto}
