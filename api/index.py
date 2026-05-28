@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v25"
+VERSION = "v26"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3365,6 +3365,9 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="ind-pill" onclick="setIndustry('gym',this)">24/7 Gym</div>
 </div>
 <p class="try-label">Try a scenario or type your own</p>
+<div class="ex-area" style="padding-bottom:12px">
+<div class="ex-row" id="ex-row"></div>
+</div>
 <div class="phones">
 <div class="device"><div class="frame">
 <div class="notch"></div><div class="statusbar"><span>9:41</span><span>5G &nbsp; 87%</span></div>
@@ -3393,10 +3396,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div><div class="home-bar"></div>
 </div></div>
 </div>
-<div class="ex-area">
-<div class="ex-row" id="ex-row"></div>
-<div style="text-align:center;margin-top:10px"><button onclick="resetDemo()" style="padding:5px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset</button></div>
-</div>
+<div style="text-align:center;margin:8px 0 16px"><button onclick="resetDemo()" style="padding:5px 12px;background:#f0f0f0;color:#666;border:1px solid #e0e0dc;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Reset demo</button></div>
 <div class="features">
 <div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
 <div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
@@ -3414,11 +3414,46 @@ const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operato
 let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 
 const CHIPS={
-  laundromat:["Washer #3 is leaking everywhere","Dryer ate my money and won't start","Bathroom is completely flooded","Change machine is jammed"],
-  carwash:["Bay 2 won't start and I already paid","My car is stuck in the tunnel","Card reader on bay 1 is broken","The vacuum isn't working at all"],
-  selfstorage:["Gate keypad isn't accepting my code","My unit lock is completely jammed","Water is dripping from the ceiling","Elevator is out of service"],
-  parking:["Pay station is showing an error","Exit gate is stuck, I can't leave","I paid but the gate won't open","Lights are out on level 3"],
-  gym:["Treadmill is making a loud grinding noise","My access fob stopped working","There's no hot water in the showers","The cable machine cable snapped"]
+  laundromat:[
+    "Water is pouring out from under washer #4",
+    "Dryer 7 took my money and won't start",
+    "The change machine is out of quarters",
+    "Door lock is broken and won't open",
+    "Soap dispenser is empty on machine 2",
+    "The TV in the waiting area is really loud"
+  ],
+  carwash:[
+    "My car is stuck inside the tunnel right now",
+    "Bay 2 won't start and I already paid",
+    "The card reader isn't working on any bay",
+    "Vacuum hose on bay 4 is completely broken",
+    "There's no soap coming out in bay 1",
+    "The trash can out front is overflowing"
+  ],
+  selfstorage:[
+    "Water is actively leaking into my unit",
+    "Gate keypad won't accept my access code",
+    "The elevator has been out of service all day",
+    "My unit door lock is jammed and won't open",
+    "Hallway lights on floor 2 are all out",
+    "Could you add a bench near the entrance?"
+  ],
+  parking:[
+    "Exit gate is stuck closed and I can't leave",
+    "Pay station on level 2 is showing an error",
+    "I paid at the kiosk but the gate won't open",
+    "Level 3 lights are completely out",
+    "Someone is parked in a handicap spot without a placard",
+    "The trash near the elevator is overflowing"
+  ],
+  gym:[
+    "Someone is having a medical emergency near the squat rack",
+    "My access fob stopped working at the front door",
+    "Treadmill 3 is making a loud grinding noise",
+    "There's no hot water in the men's showers",
+    "The cable on the lat pulldown machine snapped",
+    "Can you add more paper towels near the free weights?"
+  ]
 };
 
 function setIndustry(key,el){
