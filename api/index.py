@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v38"
+VERSION = "v39"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3377,7 +3377,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>Never miss a <em>critical</em> issue again.</h1>
+<h1>Operate from a distance &amp; never miss a <em>critical issue</em> again.</h1>
 <p>Customers text. Hotline triages and alerts you — automatically.</p>
 </div>
 <div class="industry-bar">
