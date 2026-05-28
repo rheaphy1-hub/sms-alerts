@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v33"
+VERSION = "v35"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -1763,7 +1763,7 @@ async def admin_welcome(request: Request):
         base = os.getenv("BASE_URL", "https://hotlinetxt.com")
         asset_msg = (
             f"Your Hotline assets for {biz['name']}:\n"
-            f"Print-ready sign: {base}/signs/{code}.pdf\n"
+            f"Display your Hotline (PDF): {base}/signs/{code}.pdf\n"
             f"Plain QR image (custom signage): {base}/qr/{code}.png"
         )
         for p in phones: send_sms(p, asset_msg)
@@ -2837,7 +2837,30 @@ def _process_customer_message(biz, sender, body, image_url=""):
 @app.post("/sms/incoming")
 async def incoming_sms(request: Request):
     _ensure_init()
-    form_data = await request.form()
+    # ── Twilio signature validation ─────────────────────────────────
+    # Prevents spoofed POST requests from triggering alerts
+    _twilio_auth = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if _twilio_auth:
+        try:
+            from twilio.request_validator import RequestValidator as _TwilioValidator
+            _tv = _TwilioValidator(_twilio_auth)
+            _url = str(request.url)
+            _sig = request.headers.get("X-Twilio-Signature", "")
+            _post = dict(await request.form())
+            if not _tv.validate(_url, _post, _sig):
+                logger.warning("[SMS] Invalid Twilio signature — request rejected")
+                from twilio.twiml.messaging_response import MessagingResponse as _MR
+                return Response(content=str(_MR()), media_type="application/xml", status_code=200)
+            form_data = _post
+        except ImportError:
+            logger.warning("[SMS] twilio.request_validator not available — skipping sig check")
+            form_data = await request.form()
+        except Exception as _e:
+            logger.error(f"[SMS] Signature validation error: {_e}")
+            form_data = await request.form()
+    else:
+        form_data = await request.form()
+    # ── End Twilio validation ───────────────────────────────────────
     sender = (form_data.get("From") or "").strip()
     body = (form_data.get("Body") or "").strip()
     media_url = (form_data.get("MediaUrl0") or "").strip()
@@ -3193,7 +3216,7 @@ VERTICAL_LAUNDROMAT_HTML = _make_vertical_page(
     ],
     placements=["Washer", "Dryer", "Coin dispenser", "Wall by entrance"],
     step1=("Display your Hotline", "Takes 60 seconds. Works on every machine, door, and wall in your laundromat."),
-    step2=("Customers text when something\'s wrong", "No app needed. They text the number on the sign. AI reads every message."),
+    step2=("Customers text when something\'s wrong", "No app needed. They text the number on the sign. Every message is read automatically."),
     step3=("You get alerted instantly by text", "Critical issues go straight to your phone. You reply by text. Done."),
     plural="Laundromats"
 )
@@ -3354,8 +3377,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>For owners who operate from a distance.</h1>
-<p>Customers text when something breaks. Hotline triages it and gets you the right alert — automatically.</p>
+<h1>Never miss a <em>critical</em> issue again.</h1>
+<p>Customers text. Hotline triages and alerts you — automatically.</p>
 </div>
 <div class="industry-bar">
 <div class="ind-pill active" onclick="setIndustry('laundromat',this)">Laundromat</div>
@@ -3833,7 +3856,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>Built for operators<br>who <em>can't always be there.</em></h1>
+<h1>Built for owners who operate from a distance.</h1>
 <p class="sub">You built your business to run lean. The problem is when it breaks down at 7pm on a Saturday, your customers have no one to tell — and you have no way to know.</p>
 </div>
 
@@ -3896,7 +3919,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <span class="fine">14-day free trial. No credit card. Cancel by text.</span>
 </div>
 
-<footer>Hotline &middot; AI-powered alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; Real-time alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 </body></html>"""
 
 
@@ -5032,7 +5055,7 @@ async def signup_create(request_data:dict=None):
 
     asset_msg = (
         f"Your Hotline assets for {name}:\n"
-        f"Print-ready sign: {base}/signs/{business_code}.pdf\n"
+        f"Display your Hotline (PDF): {base}/signs/{business_code}.pdf\n"
         f"Plain QR image (custom signage): {base}/qr/{business_code}.png"
     )
     send_sms(phone, asset_msg)
