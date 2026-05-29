@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v41"
+VERSION = "v42"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -2075,7 +2075,7 @@ def admin_ui(request: Request):
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title>
 <style>
-#drawer{{position:fixed;top:0;right:-520px;width:min(520px,100vw);height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px}}@media(max-width:600px){{#drawer{{width:100vw;right:-100vw}}}}
+#drawer{{position:fixed;top:0;right:-500px;width:500px;height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px 28px}}#drawer.open{{right:0}}@media(max-width:560px){{#drawer{{width:100%;right:-100%}}}}
 #drawer.open{{right:0}}
 #drawer-overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:199}}
 #drawer-overlay.open{{display:block}}
@@ -2299,6 +2299,7 @@ async function openDrawer(bizId, bizName){{
     if(!r.ok){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Failed to load.</p>";return;}}
     const d=await r.json();
     const b=d.business; const s=d.stats; const msgs=d.messages;
+    window._drawerBiz=b; window._drawerBizId=bizId;
     const loc=b.city&&b.state?b.city+", "+b.state:b.zip||"—";
     const signed=b.created_at?b.created_at.slice(0,10):"—";
     const days_ago=b.created_at?Math.floor((Date.now()-new Date(b.created_at))/86400000)+" days ago":"";
@@ -2347,7 +2348,7 @@ async function openDrawer(bizId, bizName){{
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
       <div>${{msg_rows}}</div>
       <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
-        <button onclick="openEditModal(bizId,b);return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+        <button onclick="openEditModal(window._drawerBizId,window._drawerBiz);return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
       </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
