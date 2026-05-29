@@ -3330,7 +3330,7 @@ VERTICAL_MHC_HTML = _make_vertical_page(
 VERTICAL_RVPARK_HTML = _make_vertical_page(
     slug="rvpark",
     label="RV Parks",
-    headline="A hookup fails at site 22. Your guest is stranded. You\'re across the property.",
+    headline="The hookup at site 22 fails. Your guest has no one to tell. You find out at checkout — with the bad review already written.",
     sub="Hotline gives every site a direct line to you — so power, water, sewer, and gate problems get reported the moment they happen, not at checkout.",
     scenarios=[
         "No power at my site — breaker won\'t reset",
