@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v51"
+VERSION = "v52"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -663,8 +663,8 @@ AUTO-REPLY TONE:
 
 FOLLOW-UP QUESTIONS (clarify a MISSING actionable detail):
 - If the message is missing a critical detail the operator needs to act on — above all WHICH site / unit / space / machine / location — append ONE short question to your reply, e.g. "Which site is this?" or "Which machine?".
-- This applies to Tier 1, 2, and 3. It NEVER delays or replaces the alert: you still classify and the operator is alerted right away. The question only gathers the missing detail.
-- For Tier 1, keep the call-911 guidance FIRST, then add the location question if location is missing.
+- This applies to Tier 2 and Tier 3 only. It NEVER delays or replaces the alert: you still classify and the operator is alerted right away. The question only gathers the missing detail.
+- NEVER ask a follow-up question on a Tier 1 emergency. The Tier 1 reply is ONLY the thank-you and the call-911 guidance — nothing may compete with the customer calling 911.
 - Tier 4 vague inquiry: ask one clarifying question since you cannot answer without details.
 - Do NOT ask if the detail is already given (e.g. they already named the site/unit/machine), or if no specific detail would change what the operator does. Never ask Tier 4 positive feedback to clarify. One question maximum.
 
@@ -673,7 +673,7 @@ HARD RULES:
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
 - NEVER use words like "immediately", "shortly", "soon", "right away", "quickly", "asap", "will get back to you". Avoid all urgency language about timing.
-- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify.
+- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify. NEVER ask any follow-up question on a Tier 1 emergency.
 - Keep auto_reply under 160 characters.
 - Vary responses naturally. Don't repeat same template. Sound conversational, not corporate.
 - ALWAYS thank customer first in every response.
@@ -2907,7 +2907,9 @@ def _process_customer_message(biz, sender, body, image_url=""):
                      f"Customer:\n{body}\n\n"
                      f"{reply_block}"
                      f"Reply REPLY to message customer back.")
-            if auto_reply and auto_reply.rstrip().endswith("?"):
+            if tier == 1:
+                alert += "\n\U0001f4cd Confirm location with caller if needed."
+            elif auto_reply and auto_reply.rstrip().endswith("?"):
                 alert += "\n\u23f3 Asked customer to confirm details."
             if public_media_url and biz.get("alert_include_images"):
                 alert += "\n📷 Photo attached"
@@ -3127,8 +3129,8 @@ AUTO-REPLY TONE:
 
 FOLLOW-UP QUESTIONS (clarify a MISSING actionable detail):
 - If the message is missing a critical detail the operator needs to act on — above all WHICH site / unit / space / machine / location — append ONE short question to your reply, e.g. "Which site?" or "Which machine?".
-- Applies to Tier 1, 2, and 3. It NEVER delays or replaces the alert — you still classify and the operator is alerted right away. The question only gathers the missing detail.
-- For Tier 1, keep the call-911 guidance FIRST, then add the location question if location is missing.
+- Applies to Tier 2 and Tier 3 only. It NEVER delays or replaces the alert — you still classify and the operator is alerted right away. The question only gathers the missing detail.
+- NEVER ask a follow-up question on a Tier 1 emergency. The Tier 1 reply is ONLY the thank-you and the call-911 guidance — nothing may compete with the customer calling 911.
 - Tier 4 vague inquiry: ask one clarifying question.
 - Do NOT ask if the detail is already given, or if no detail would change what the operator does. Never ask Tier 4 positive feedback. One question maximum.
 
@@ -3136,7 +3138,7 @@ HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken.
 - NEVER claim to have contacted emergency services.
-- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify.
+- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify. NEVER ask any follow-up question on a Tier 1 emergency.
 - Keep auto_reply under 160 characters.
 - Vary responses. Don't repeat templates.
 - ALWAYS thank customer first.
