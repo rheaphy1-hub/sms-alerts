@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v39"
+VERSION = "v41"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -1823,6 +1823,7 @@ async def admin_update_business(request: Request):
     website_url = body.get("website_url","").strip()
     digest_freq = body.get("digest_freq","weekly").strip().lower()
     alert_tier = body.get("alert_tier","tier2").strip().lower()
+    vertical = body.get("vertical","").strip().lower()
     
     # Validation
     errors = []
@@ -1858,11 +1859,11 @@ async def admin_update_business(request: Request):
     
     # Update database
     with get_db() as c:
-        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=? WHERE id=?"),
-                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, biz_id))
+        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=?, vertical=? WHERE id=?"),
+                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, vertical, biz_id))
     
     # Log the changes
-    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}")
+    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}, vertical={vertical}")
     
     # Fetch updated business to return
     with get_db() as c:
@@ -2074,7 +2075,7 @@ def admin_ui(request: Request):
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title>
 <style>
-#drawer{{position:fixed;top:0;right:-480px;width:480px;max-width:100vw;height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px}}
+#drawer{{position:fixed;top:0;right:-520px;width:min(520px,100vw);height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px}}@media(max-width:600px){{#drawer{{width:100vw;right:-100vw}}}}
 #drawer.open{{right:0}}
 #drawer-overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:199}}
 #drawer-overlay.open{{display:block}}
@@ -2201,6 +2202,18 @@ def admin_ui(request: Request):
           <select id="em-digest" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:#888;margin-bottom:4px">Vertical</label>
+          <select id="em-vertical" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+            <option value="">— Not set —</option>
+            <option value="laundromat">Laundromat</option>
+            <option value="carwash">Car Wash</option>
+            <option value="selfstorage">Self Storage</option>
+            <option value="parking">Parking</option>
+            <option value="gym">24/7 Gym</option>
+            <option value="other">Other</option>
           </select>
         </div>
         <div>
@@ -2334,7 +2347,7 @@ async function openDrawer(bizId, bizName){{
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
       <div>${{msg_rows}}</div>
       <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
-        <button onclick="openEditModal('{bid}',{{'name':'{b['name'].replace("'","").replace("\"","&quot;")}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+        <button onclick="openEditModal(bizId,b);return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
       </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
@@ -2348,7 +2361,8 @@ function openEditModal(bizId,data){{
   document.getElementById("em-email").value=data.email||"";
   document.getElementById("em-website").value=data.website_url||"";
   document.getElementById("em-digest").value=data.digest_freq||"weekly";
-  document.getElementById("em-tier").value=data.alert_tier||"tier2";
+  document.getElementById("em-tier").value=(data.alert_tier3?"tier3":(data.alert_tier||"tier2"));
+  document.getElementById("em-vertical").value=data.vertical||data.vertical_slug||"";
   document.getElementById("edit-error").style.display="none";
   document.getElementById("edit-modal").style.display="flex";
 }}
@@ -2366,8 +2380,9 @@ async function saveBusinessEdit(){{
   const tier=document.getElementById("em-tier").value;
   const errEl=document.getElementById("edit-error");
   if(!name||!phone){{errEl.textContent="Name and phone are required";errEl.style.display="block";return;}}
+  const vertical=document.getElementById("em-vertical").value;
   try{{
-    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier}})}});
+    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier,vertical:vertical}})}});
     const d=await r.json();
     if(!d.success){{errEl.textContent=d.error||"Failed to save";errEl.style.display="block";return;}}
     toast("Business updated",true);
