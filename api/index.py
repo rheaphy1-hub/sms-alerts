@@ -223,7 +223,7 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         try:
             with get_db() as c:
                 if use_zip_cols:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, vertical or "", now))
                 else:
                     _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
