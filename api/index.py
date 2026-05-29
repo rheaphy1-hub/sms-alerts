@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v52"
+VERSION = "v54"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -816,7 +816,7 @@ def _check_emergency_keywords(text):
         # If fire/burning appears with a location word, it's clearly literal → ALWAYS Tier 1
         location_words = ["building","kitchen","store","office","room","bathroom","ceiling",
                           "wall","floor","roof","basement","garage","warehouse","lobby",
-                          "house","apartment","unit","suite","hallway","restaurant","shop"]
+                          "house","apartment","unit","suite","hallway","restaurant","shop","machine","dryer","washer","pump","panel","outlet","vehicle","car","equipment","kiosk","bay","tunnel","vacuum"]
         if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in location_words):
             return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
                     "summary":"Fire/burning reported at location",
@@ -838,7 +838,7 @@ def _check_emergency_keywords(text):
         # Generic "flooding" without context → maybe emergency (clarify)
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
                 "summary":"Possible flooding reported",
-                "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
+                "auto_reply":"Thank you for alerting us. If anyone is in immediate danger, call 911 now. We're notifying the team right away.",
                 "_maybe_emergency": True}
     
     # --- MAYBE Tier 1: Could be literal or figurative ---
@@ -849,7 +849,7 @@ def _check_emergency_keywords(text):
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in maybe_emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
                 "summary":"Possible emergency reported",
-                "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
+                "auto_reply":"Thank you for alerting us. If anyone is in immediate danger, call 911 now. We're notifying the team right away.",
                 "_maybe_emergency": True}
     
     return None
@@ -3498,6 +3498,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h1>Operate from a distance &amp; never miss a <em>critical issue</em> again.</h1>
 <p>Customers text. Hotline triages and alerts you — automatically.</p>
 </div>
+<div class="features">
+<div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
+<div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
+<div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div>
+<div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div>
+</div>
 <div class="industry-bar">
 <div class="ind-pill active" onclick="setIndustry('laundromat',this)">Laundromat</div>
 <div class="ind-pill" onclick="setIndustry('selfstorage',this)">Self Storage</div>
@@ -3539,12 +3545,6 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div>
 </div>
 
-<div class="features">
-<div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
-<div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
-<div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div>
-<div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div>
-</div>
 <div class="cta-section">
 <h2>Start a free 14-day pilot</h2>
 <p>No credit card required.</p>
