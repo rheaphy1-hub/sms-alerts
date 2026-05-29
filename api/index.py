@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v42"
+VERSION = "v51"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3107,9 +3107,9 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness.
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness. Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
-- Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues.
+- Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues. Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
 - Tier 4: Routine — Positive feedback, compliments, questions, neutral.
 
@@ -3125,17 +3125,18 @@ AUTO-REPLY TONE:
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer business questions. If vague, ask follow-up. Forward to management.
 
-FOLLOW-UP QUESTIONS (when to ask):
-- Tier 3 (reputation): Ask for more detail to help operator respond.
-- Tier 4 inquiry: Ask for clarification if vague.
-- DON'T ask Tier 1 or clear Tier 2 (just acknowledge and forward).
-- Examples: "Which machine/location?", "Can you tell us more?", "Is this still happening?"
+FOLLOW-UP QUESTIONS (clarify a MISSING actionable detail):
+- If the message is missing a critical detail the operator needs to act on — above all WHICH site / unit / space / machine / location — append ONE short question to your reply, e.g. "Which site?" or "Which machine?".
+- Applies to Tier 1, 2, and 3. It NEVER delays or replaces the alert — you still classify and the operator is alerted right away. The question only gathers the missing detail.
+- For Tier 1, keep the call-911 guidance FIRST, then add the location question if location is missing.
+- Tier 4 vague inquiry: ask one clarifying question.
+- Do NOT ask if the detail is already given, or if no detail would change what the operator does. Never ask Tier 4 positive feedback. One question maximum.
 
 HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken.
 - NEVER claim to have contacted emergency services.
-- NEVER ask follow-up for Tier 1 or clear Tier 2.
+- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify.
 - Keep auto_reply under 160 characters.
 - Vary responses. Don't repeat templates.
 - ALWAYS thank customer first.
@@ -3159,6 +3160,10 @@ EDGE CASES:
 - "You should fire her" = Tier 3, staffing complaint. NOT emergency.
 - "Out of toilet paper" = Tier 2, supply.
 - Any equipment failure, payment failure, or machinery jam = Tier 2 (customers cannot complete transactions).
+- "No power at my site" / "Power is out" / "Breaker won't reset" = Tier 2, equipment (utility outage). NOT an emergency — do NOT tell them to call 911.
+- "No water" / "No hot water" / "WiFi is down" = Tier 2, equipment (utility outage).
+- "Sparks from the outlet" / "Burning smell from the panel" / "Smoke from the dryer" = Tier 1, safety (active hazard).
+- "Door lock is broken and won't open" / "Machine is broken" with no specific unit named = Tier 2; append "Which one?" or "Which door/machine?".
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
