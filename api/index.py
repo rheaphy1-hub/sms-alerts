@@ -640,9 +640,9 @@ _ai_client = None  # Stores API key string; HTTP calls used directly
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency).
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency). Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
-- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary).
+- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary). Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
 - Tier 4: Routine (Gray) — No action needed. Positive feedback, compliments, general questions (hours, location, menu), neutral messages.
 
@@ -661,18 +661,19 @@ AUTO-REPLY TONE:
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If genuinely vague or unclear, ask one clarifying question. Forward to management. Natural conversation, not templates.
 
-FOLLOW-UP QUESTIONS (ask for clarity ONLY in these cases):
-- Tier 3 (Complaint/Reputation): Ask specifics to help resolution. "Which [machine/area]?" or "What specifically happened?"
-- Tier 4 Inquiry (Vague): Ask for clarity since you cannot answer without details. "Which location?" or "Can you tell us more?"
-- NEVER ask follow-ups for: Tier 1 (emergency — no time), Tier 2 clear issues (management knows), Tier 4 positive (just thank them).
+FOLLOW-UP QUESTIONS (clarify a MISSING actionable detail):
+- If the message is missing a critical detail the operator needs to act on — above all WHICH site / unit / space / machine / location — append ONE short question to your reply, e.g. "Which site is this?" or "Which machine?".
+- This applies to Tier 1, 2, and 3. It NEVER delays or replaces the alert: you still classify and the operator is alerted right away. The question only gathers the missing detail.
+- For Tier 1, keep the call-911 guidance FIRST, then add the location question if location is missing.
+- Tier 4 vague inquiry: ask one clarifying question since you cannot answer without details.
+- Do NOT ask if the detail is already given (e.g. they already named the site/unit/machine), or if no specific detail would change what the operator does. Never ask Tier 4 positive feedback to clarify. One question maximum.
 
 HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
 - NEVER use words like "immediately", "shortly", "soon", "right away", "quickly", "asap", "will get back to you". Avoid all urgency language about timing.
-- NEVER ask follow-up questions for Tier 1 (emergency), Tier 2 (clear issues), or Tier 4 positive.
-- Only ask follow-ups for: Tier 3 complaints (if specifics needed) or Tier 4 vague inquiries (if clarification needed).
+- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify.
 - Keep auto_reply under 160 characters.
 - Vary responses naturally. Don't repeat same template. Sound conversational, not corporate.
 - ALWAYS thank customer first in every response.
@@ -703,6 +704,9 @@ OTHER EDGE CASES:
 - "The dryer isn't heating" = Tier 2, equipment (revenue loss per unit).
 - "Coins are jammed in the machine" = Tier 2, payment (customer loses money, business loses revenue).
 - "I dropped my food/drink/item" = Tier 4. Customer accident, not a business issue.
+- "No power at my site" / "Power is out" / "Breaker won't reset" = Tier 2, equipment (utility outage). NOT an emergency — do NOT tell them to call 911.
+- "No water" / "No hot water" / "WiFi is down" = Tier 2, equipment (utility outage).
+- "Sparks from the outlet" / "Burning smell from the panel" / "Smoke from the dryer" = Tier 1, safety (active hazard).
 
 {website_context}
 
@@ -857,6 +861,13 @@ def _classify_fallback(text):
     t_clean = _re.sub(r"[^a-z0-9 ]", " ", t)
     # Check for figurative "fire" (fire her, fire him, dumpster fire, etc)
     fire_is_literal = "fire" in t_clean and not any(p in t_clean for p in ["fire her","fire him","fire them","fire that","fire the ","fire this","dumpster fire","on fire with","on fire today","fired","crossfire","campfire","open fire on","gunfire"])
+    # Utility outage (power/water/wifi down) is NOT an emergency — Tier 2, never 911.
+    _util = ["no power","power is out","power out","power outage","breaker","no water","no hot water","wifi","wi fi","internet is down","internet down","no internet"]
+    _hazard = ["fire","burning","smoke","spark","gas","shock","exposed wire","live wire","arc"]
+    if any(w in t_clean for w in _util) and not any(h in t_clean for h in _hazard):
+        return {"tier":2,"category":"equipment","sentiment":"negative","confidence":0.8,
+                "summary":"Utility outage reported",
+                "auto_reply":"Thank you for reporting this. We're notifying management of the outage."}
     emergency = ["emergency","injury","hurt","bleeding","attack","weapon","gun","violence","ambulance","911",
                  "collapsed","unconscious","not breathing","heart attack","seizure","overdose","stabbed","shot",
                  "flood","flooding","gas leak","smoke","sparks","electrical","water leak","burst pipe"]
@@ -2896,6 +2907,8 @@ def _process_customer_message(biz, sender, body, image_url=""):
                      f"Customer:\n{body}\n\n"
                      f"{reply_block}"
                      f"Reply REPLY to message customer back.")
+            if auto_reply and auto_reply.rstrip().endswith("?"):
+                alert += "\n\u23f3 Asked customer to confirm details."
             if public_media_url and biz.get("alert_include_images"):
                 alert += "\n📷 Photo attached"
             for p in alert_phones:
@@ -3418,7 +3431,7 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .hero h1{font-size:clamp(28px,5vw,44px);font-weight:700;line-height:1.15;margin-bottom:10px;letter-spacing:-0.02em}
 .hero h1 em{font-style:normal;color:#ea580c}
 .hero p{font-size:16px;color:#888;margin-bottom:0}
-.industry-bar{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding:20px 20px 4px;max-width:700px;margin:0 auto}
+.industry-bar{display:grid;grid-template-columns:repeat(3,auto);justify-content:center;justify-items:center;gap:8px;padding:20px 20px 4px;max-width:700px;margin:0 auto}
 .ind-pill{padding:7px 16px;border-radius:99px;border:1.5px solid #e0e0dc;background:#fff;font-size:13px;font-weight:600;color:#888;cursor:pointer;transition:all 0.15s;white-space:nowrap}
 .ind-pill.active{background:#ea580c;border-color:#ea580c;color:#fff}
 .ind-pill:hover:not(.active){border-color:#ea580c;color:#ea580c}
@@ -3471,7 +3484,7 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .cta-section p{font-size:13px;color:#888;margin-bottom:16px}
 .cta-section a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
-@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:420px}.industry-bar{gap:6px}}
+@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:420px}.industry-bar{gap:6px;grid-template-columns:repeat(2,auto)}}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
