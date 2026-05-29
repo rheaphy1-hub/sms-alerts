@@ -194,21 +194,52 @@ def get_business_by_id(bid):
     with get_db() as c:
         return _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
 
+# Offline ZIP3-prefix -> state (USPS SCF assignments). Used so STATE is always
+# populated even when the external city/state API is unavailable.
+_ZIP3_STATE_RANGES = [
+    (5,5,"NY"),(6,9,"PR"),(10,27,"MA"),(28,29,"RI"),(30,38,"NH"),(39,49,"ME"),
+    (50,59,"VT"),(60,69,"CT"),(70,89,"NJ"),(100,149,"NY"),(150,196,"PA"),
+    (197,199,"DE"),(200,205,"DC"),(206,219,"MD"),(220,246,"VA"),(247,268,"WV"),
+    (270,289,"NC"),(290,299,"SC"),(300,319,"GA"),(320,349,"FL"),(350,369,"AL"),
+    (370,385,"TN"),(386,397,"MS"),(398,399,"GA"),(400,427,"KY"),(430,459,"OH"),
+    (460,479,"IN"),(480,499,"MI"),(500,528,"IA"),(530,549,"WI"),(550,567,"MN"),
+    (570,577,"SD"),(580,588,"ND"),(590,599,"MT"),(600,629,"IL"),(630,658,"MO"),
+    (660,679,"KS"),(680,693,"NE"),(700,714,"LA"),(716,729,"AR"),(730,749,"OK"),
+    (750,799,"TX"),(800,816,"CO"),(820,831,"WY"),(832,838,"ID"),(840,847,"UT"),
+    (850,865,"AZ"),(870,884,"NM"),(885,885,"TX"),(889,898,"NV"),(900,961,"CA"),
+    (967,968,"HI"),(970,979,"OR"),(980,994,"WA"),(995,999,"AK"),
+]
+
+def _state_from_zip(zip_code):
+    """Resolve a US state abbreviation from a 5-digit ZIP offline. '' if unknown."""
+    z = (zip_code or "").strip()
+    if len(z) < 3 or not z[:3].isdigit():
+        return ""
+    pref = int(z[:3])
+    for lo, hi, st in _ZIP3_STATE_RANGES:
+        if lo <= pref <= hi:
+            return st
+    return ""
+
 def _lookup_zip(zip_code):
-    """Return (city, state) from a US zip code using zippopotam.us. Returns ('','') on any failure."""
-    if not zip_code or not re.match(r"^\d{5}$", zip_code.strip()):
+    """Return (city, state) for a US ZIP. Tries the zippopotam API for city+state,
+    and always falls back to the offline table for state so it is populated even
+    when the API is unreachable. Returns ('','') only for an invalid ZIP."""
+    z = (zip_code or "").strip()
+    if not re.match(r"^\d{5}$", z):
         return ("", "")
+    offline_state = _state_from_zip(z)
     try:
-        url = f"https://api.zippopotam.us/us/{zip_code.strip()}"
+        url = f"https://api.zippopotam.us/us/{z}"
         req = _urllib_req.Request(url, headers={"User-Agent": "Hotline/1.0"})
         with _urllib_req.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode())
         city = data["places"][0]["place name"]
-        state = data["places"][0]["state abbreviation"]
+        state = data["places"][0]["state abbreviation"] or offline_state
         return (city, state)
     except Exception as e:
-        logger.warning(f"[ZIP LOOKUP] Failed for {zip_code}: {e}")
-        return ("", "")
+        logger.warning(f"[ZIP LOOKUP] API failed for {z}; using offline state '{offline_state or 'unknown'}': {e}")
+        return ("", offline_state)
 
 def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code="", zip_code="", vertical=""):
     now = datetime.now(timezone.utc).isoformat()
@@ -230,9 +261,13 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
             return business_code
         except Exception as e:
-            err_msg = str(e).lower()
-            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "vertical" in err_msg or "column" in err_msg):
-                logger.warning(f"create_business: zip/city/state/vertical columns missing, retrying without — {e}")
+            if use_zip_cols:
+                # The full-column insert failed for ANY reason — retry with the
+                # minimal column set. If that also fails, its error surfaces below
+                # and we return None. (Previously this only retried on specific
+                # error-message keywords, which let a placeholder-count bug fail
+                # hard instead of falling back.)
+                logger.warning(f"create_business: full-column insert failed, retrying with minimal columns — {e}")
                 continue
             logger.error(f"create_business failed for {biz_id}: {e}")
             return None
@@ -466,7 +501,7 @@ def send_trial_warnings():
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
         if days == 1:
-            link_part = f"\nSubscribe so you don't miss a critical issue from your customers &#9888;\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
+            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
             msg = f"Your free Hotline trial ends tomorrow.{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
@@ -474,7 +509,7 @@ def send_trial_warnings():
         elif days == 0:
             set_sub_status(biz["id"], "expired")
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
@@ -548,7 +583,31 @@ def init_sms():
         from twilio.rest import Client; _twilio_client = Client(sid, token); logger.info("Twilio ready")
     else: logger.warning("Twilio not configured")
 
+def _decode_numeric_entities(text):
+    """Convert numeric HTML entities (e.g. &#9888; or &#x26A0;) to real characters
+    so markup can never reach an SMS as literal text. Deliberately narrow: numeric
+    entities only, so a literal '&amp;' in a business name is left untouched. Never raises."""
+    if not text or "&#" not in text:
+        return text
+    def _num(m):
+        try:
+            cp = int(m.group(1)); return chr(cp) if 0 <= cp <= 0x10FFFF else m.group(0)
+        except Exception:
+            return m.group(0)
+    def _hex(m):
+        try:
+            cp = int(m.group(1), 16); return chr(cp) if 0 <= cp <= 0x10FFFF else m.group(0)
+        except Exception:
+            return m.group(0)
+    try:
+        text = re.sub(r"&#(\d{1,7});", _num, text)
+        text = re.sub(r"&#[xX]([0-9a-fA-F]{1,6});", _hex, text)
+    except Exception:
+        return text
+    return text
+
 def send_sms(to, body, from_number="", media_url=""):
+    body = _decode_numeric_entities(body)
     sender = from_number or _twilio_from
     if not _twilio_client: logger.info(f"[DRY-RUN] {sender} -> {to}: {body}"); return True
     try:
@@ -1330,7 +1389,7 @@ def handle_owner_command(text, business, sender_phone=""):
             return f"Trial active \u2014 {days} day(s) left.{link_part}"
         else:
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
-            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
+            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
 
     # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
     # level for 10DLC compliance, so we use MENU as the in-app command.
@@ -1963,7 +2022,7 @@ async def admin_billing(request: Request):
         if status == "active":
             msg = "\u2705 Your Hotline subscription is active."
         elif status in ("expired","canceled","past_due"):
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
         else:
             msg = f"\u23f0 Your Hotline trial has {days} day(s) left.{link_part}"
         phones = get_alert_phones(biz)
@@ -2826,7 +2885,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
             elif cat == "inquiry":
                 header = "\u2753 Customer question"
             elif tier == 2:
-                header = "&#9888; Issue"
+                header = "\u26a0\ufe0f Issue"
             else:
                 header = "\U0001f4ac Feedback"
             when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
@@ -5016,7 +5075,7 @@ async def stripe_webhook(request: Request):
             PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
             link_part = f"\nUpdate payment: {PAYMENT_LINK}" if PAYMENT_LINK else ""
             for p in get_alert_phones(biz):
-                send_sms(p, f"&#9888; Hotline payment failed. Alerts may stop soon.{link_part}")
+                send_sms(p, f"\u26a0\ufe0f Hotline payment failed. Alerts may stop soon.{link_part}")
 
     elif event_type == "customer.subscription.updated":
         status_map = {"active": "active", "past_due": "past_due", "canceled": "canceled",
