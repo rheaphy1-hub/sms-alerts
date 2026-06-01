@@ -4841,6 +4841,7 @@ async function signup(){
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip,vertical:document.getElementById('f-vertical').value})});const d=await r.json();
   if(d.success){
+    if(typeof gtag==='function'){gtag('event','sign_up',{method:'web'});}
     res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your texts for your sign PDF and QR code image.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign &rarr;</a>';
     res.style.display='block';btn.textContent='Done!'}
   else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my QR code &rarr;'}}
