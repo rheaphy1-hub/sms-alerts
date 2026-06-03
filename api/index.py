@@ -9,7 +9,7 @@ except ImportError:
     ZoneInfo = None
 from contextlib import contextmanager
 from fastapi import FastAPI, Form, Response, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 # PDF + QR generation (required at top level for Vercel to bundle correctly)
 import urllib.request as _urllib_req
@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v38"
+VERSION = "v56"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -194,21 +194,52 @@ def get_business_by_id(bid):
     with get_db() as c:
         return _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
 
+# Offline ZIP3-prefix -> state (USPS SCF assignments). Used so STATE is always
+# populated even when the external city/state API is unavailable.
+_ZIP3_STATE_RANGES = [
+    (5,5,"NY"),(6,9,"PR"),(10,27,"MA"),(28,29,"RI"),(30,38,"NH"),(39,49,"ME"),
+    (50,59,"VT"),(60,69,"CT"),(70,89,"NJ"),(100,149,"NY"),(150,196,"PA"),
+    (197,199,"DE"),(200,205,"DC"),(206,219,"MD"),(220,246,"VA"),(247,268,"WV"),
+    (270,289,"NC"),(290,299,"SC"),(300,319,"GA"),(320,349,"FL"),(350,369,"AL"),
+    (370,385,"TN"),(386,397,"MS"),(398,399,"GA"),(400,427,"KY"),(430,459,"OH"),
+    (460,479,"IN"),(480,499,"MI"),(500,528,"IA"),(530,549,"WI"),(550,567,"MN"),
+    (570,577,"SD"),(580,588,"ND"),(590,599,"MT"),(600,629,"IL"),(630,658,"MO"),
+    (660,679,"KS"),(680,693,"NE"),(700,714,"LA"),(716,729,"AR"),(730,749,"OK"),
+    (750,799,"TX"),(800,816,"CO"),(820,831,"WY"),(832,838,"ID"),(840,847,"UT"),
+    (850,865,"AZ"),(870,884,"NM"),(885,885,"TX"),(889,898,"NV"),(900,961,"CA"),
+    (967,968,"HI"),(970,979,"OR"),(980,994,"WA"),(995,999,"AK"),
+]
+
+def _state_from_zip(zip_code):
+    """Resolve a US state abbreviation from a 5-digit ZIP offline. '' if unknown."""
+    z = (zip_code or "").strip()
+    if len(z) < 3 or not z[:3].isdigit():
+        return ""
+    pref = int(z[:3])
+    for lo, hi, st in _ZIP3_STATE_RANGES:
+        if lo <= pref <= hi:
+            return st
+    return ""
+
 def _lookup_zip(zip_code):
-    """Return (city, state) from a US zip code using zippopotam.us. Returns ('','') on any failure."""
-    if not zip_code or not re.match(r"^\d{5}$", zip_code.strip()):
+    """Return (city, state) for a US ZIP. Tries the zippopotam API for city+state,
+    and always falls back to the offline table for state so it is populated even
+    when the API is unreachable. Returns ('','') only for an invalid ZIP."""
+    z = (zip_code or "").strip()
+    if not re.match(r"^\d{5}$", z):
         return ("", "")
+    offline_state = _state_from_zip(z)
     try:
-        url = f"https://api.zippopotam.us/us/{zip_code.strip()}"
+        url = f"https://api.zippopotam.us/us/{z}"
         req = _urllib_req.Request(url, headers={"User-Agent": "Hotline/1.0"})
         with _urllib_req.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode())
         city = data["places"][0]["place name"]
-        state = data["places"][0]["state abbreviation"]
+        state = data["places"][0]["state abbreviation"] or offline_state
         return (city, state)
     except Exception as e:
-        logger.warning(f"[ZIP LOOKUP] Failed for {zip_code}: {e}")
-        return ("", "")
+        logger.warning(f"[ZIP LOOKUP] API failed for {z}; using offline state '{offline_state or 'unknown'}': {e}")
+        return ("", offline_state)
 
 def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones="", email="", website_url="", business_code="", zip_code="", vertical=""):
     now = datetime.now(timezone.utc).isoformat()
@@ -223,16 +254,20 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         try:
             with get_db() as c:
                 if use_zip_cols:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, vertical or "", now))
                 else:
                     _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
             return business_code
         except Exception as e:
-            err_msg = str(e).lower()
-            if use_zip_cols and ("zip" in err_msg or "city" in err_msg or "state" in err_msg or "vertical" in err_msg or "column" in err_msg):
-                logger.warning(f"create_business: zip/city/state/vertical columns missing, retrying without — {e}")
+            if use_zip_cols:
+                # The full-column insert failed for ANY reason — retry with the
+                # minimal column set. If that also fails, its error surfaces below
+                # and we return None. (Previously this only retried on specific
+                # error-message keywords, which let a placeholder-count bug fail
+                # hard instead of falling back.)
+                logger.warning(f"create_business: full-column insert failed, retrying with minimal columns — {e}")
                 continue
             logger.error(f"create_business failed for {biz_id}: {e}")
             return None
@@ -466,7 +501,7 @@ def send_trial_warnings():
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
         if days == 1:
-            link_part = f"\nSubscribe so you don't miss a critical issue from your customers &#9888;\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
+            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
             msg = f"Your free Hotline trial ends tomorrow.{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
@@ -474,7 +509,7 @@ def send_trial_warnings():
         elif days == 0:
             set_sub_status(biz["id"], "expired")
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
@@ -496,6 +531,8 @@ def get_pending_signups():
 def mark_pending_provisioned(pending_id):
     with get_db() as c: _execute(c, _q("UPDATE pending_signups SET provisioned=1 WHERE id=?"), (pending_id,))
 
+DIGEST_TIER_CAP = 25  # max message rows shown per tier in the digest email
+
 def get_stats(bid, days=7):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with get_db() as c:
@@ -503,7 +540,20 @@ def get_stats(bid, days=7):
         flagged = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>?"), (bid, cutoff))["cnt"]
         acked = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=1 AND created_at>?"), (bid, cutoff))["cnt"]
         top = _fetchone(c, _q("SELECT category,COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>? GROUP BY category ORDER BY cnt DESC LIMIT 1"), (bid, cutoff))
-        return {"total_messages":total,"flagged_issues":flagged,"acknowledged":acked,"top_category":top["category"] if top else "none"}
+        # Per-tier counts (full totals, used for the "+N more" line)
+        tier_counts = {1:0,2:0,3:0,4:0}
+        for r in _fetchall(c, _q("SELECT tier, COUNT(*) as cnt FROM messages WHERE business_id=? AND created_at>? GROUP BY tier"), (bid, cutoff)):
+            tr = r["tier"] if r["tier"] in (1,2,3,4) else 4
+            tier_counts[tr] = tier_counts.get(tr,0) + r["cnt"]
+        # Message rows grouped by tier (capped). Customer phone is intentionally NOT selected.
+        by_tier = {1:[],2:[],3:[],4:[]}
+        for r in _fetchall(c, _q("SELECT tier, category, summary, message_text, acknowledged, created_at FROM messages WHERE business_id=? AND created_at>? ORDER BY tier ASC, created_at DESC"), (bid, cutoff)):
+            tr = r["tier"] if r["tier"] in (1,2,3,4) else 4
+            if len(by_tier[tr]) < DIGEST_TIER_CAP:
+                by_tier[tr].append(dict(r))
+        return {"total_messages":total,"flagged_issues":flagged,"acknowledged":acked,
+                "top_category":top["category"] if top else "none",
+                "tier_counts":tier_counts,"by_tier":by_tier}
 
 
 # --- Website scraping ---
@@ -548,7 +598,31 @@ def init_sms():
         from twilio.rest import Client; _twilio_client = Client(sid, token); logger.info("Twilio ready")
     else: logger.warning("Twilio not configured")
 
+def _decode_numeric_entities(text):
+    """Convert numeric HTML entities (e.g. &#9888; or &#x26A0;) to real characters
+    so markup can never reach an SMS as literal text. Deliberately narrow: numeric
+    entities only, so a literal '&amp;' in a business name is left untouched. Never raises."""
+    if not text or "&#" not in text:
+        return text
+    def _num(m):
+        try:
+            cp = int(m.group(1)); return chr(cp) if 0 <= cp <= 0x10FFFF else m.group(0)
+        except Exception:
+            return m.group(0)
+    def _hex(m):
+        try:
+            cp = int(m.group(1), 16); return chr(cp) if 0 <= cp <= 0x10FFFF else m.group(0)
+        except Exception:
+            return m.group(0)
+    try:
+        text = re.sub(r"&#(\d{1,7});", _num, text)
+        text = re.sub(r"&#[xX]([0-9a-fA-F]{1,6});", _hex, text)
+    except Exception:
+        return text
+    return text
+
 def send_sms(to, body, from_number="", media_url=""):
+    body = _decode_numeric_entities(body)
     sender = from_number or _twilio_from
     if not _twilio_client: logger.info(f"[DRY-RUN] {sender} -> {to}: {body}"); return True
     try:
@@ -581,9 +655,9 @@ _ai_client = None  # Stores API key string; HTTP calls used directly
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency).
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency). Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
-- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary).
+- Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary). Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
 - Tier 4: Routine (Gray) — No action needed. Positive feedback, compliments, general questions (hours, location, menu), neutral messages.
 
@@ -602,18 +676,19 @@ AUTO-REPLY TONE:
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If genuinely vague or unclear, ask one clarifying question. Forward to management. Natural conversation, not templates.
 
-FOLLOW-UP QUESTIONS (ask for clarity ONLY in these cases):
-- Tier 3 (Complaint/Reputation): Ask specifics to help resolution. "Which [machine/area]?" or "What specifically happened?"
-- Tier 4 Inquiry (Vague): Ask for clarity since you cannot answer without details. "Which location?" or "Can you tell us more?"
-- NEVER ask follow-ups for: Tier 1 (emergency — no time), Tier 2 clear issues (management knows), Tier 4 positive (just thank them).
+FOLLOW-UP QUESTIONS (clarify a MISSING actionable detail):
+- If the message is missing a critical detail the operator needs to act on — above all WHICH site / unit / space / machine / location — append ONE short question to your reply, e.g. "Which site is this?" or "Which machine?".
+- This applies to Tier 2 and Tier 3 only. It NEVER delays or replaces the alert: you still classify and the operator is alerted right away. The question only gathers the missing detail.
+- NEVER ask a follow-up question on a Tier 1 emergency. The Tier 1 reply is ONLY the thank-you and the call-911 guidance — nothing may compete with the customer calling 911.
+- Tier 4 vague inquiry: ask one clarifying question since you cannot answer without details.
+- Do NOT ask if the detail is already given (e.g. they already named the site/unit/machine), or if no specific detail would change what the operator does. Never ask Tier 4 positive feedback to clarify. One question maximum.
 
 HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken. Business decides. You acknowledge and forward.
 - NEVER claim to have contacted emergency services.
 - NEVER use words like "immediately", "shortly", "soon", "right away", "quickly", "asap", "will get back to you". Avoid all urgency language about timing.
-- NEVER ask follow-up questions for Tier 1 (emergency), Tier 2 (clear issues), or Tier 4 positive.
-- Only ask follow-ups for: Tier 3 complaints (if specifics needed) or Tier 4 vague inquiries (if clarification needed).
+- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify. NEVER ask any follow-up question on a Tier 1 emergency.
 - Keep auto_reply under 160 characters.
 - Vary responses naturally. Don't repeat same template. Sound conversational, not corporate.
 - ALWAYS thank customer first in every response.
@@ -644,6 +719,9 @@ OTHER EDGE CASES:
 - "The dryer isn't heating" = Tier 2, equipment (revenue loss per unit).
 - "Coins are jammed in the machine" = Tier 2, payment (customer loses money, business loses revenue).
 - "I dropped my food/drink/item" = Tier 4. Customer accident, not a business issue.
+- "No power at my site" / "Power is out" / "Breaker won't reset" = Tier 2, equipment (utility outage). NOT an emergency — do NOT tell them to call 911.
+- "No water" / "No hot water" / "WiFi is down" = Tier 2, equipment (utility outage).
+- "Sparks from the outlet" / "Burning smell from the panel" / "Smoke from the dryer" = Tier 1, safety (active hazard).
 
 {website_context}
 
@@ -753,7 +831,7 @@ def _check_emergency_keywords(text):
         # If fire/burning appears with a location word, it's clearly literal → ALWAYS Tier 1
         location_words = ["building","kitchen","store","office","room","bathroom","ceiling",
                           "wall","floor","roof","basement","garage","warehouse","lobby",
-                          "house","apartment","unit","suite","hallway","restaurant","shop"]
+                          "house","apartment","unit","suite","hallway","restaurant","shop","machine","dryer","washer","pump","panel","outlet","vehicle","car","equipment","kiosk","bay","tunnel","vacuum"]
         if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in location_words):
             return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.95,
                     "summary":"Fire/burning reported at location",
@@ -775,7 +853,7 @@ def _check_emergency_keywords(text):
         # Generic "flooding" without context → maybe emergency (clarify)
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
                 "summary":"Possible flooding reported",
-                "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
+                "auto_reply":"Thank you for alerting us. If anyone is in immediate danger, call 911 now. We're notifying the team right away.",
                 "_maybe_emergency": True}
     
     # --- MAYBE Tier 1: Could be literal or figurative ---
@@ -786,7 +864,7 @@ def _check_emergency_keywords(text):
     if any(_re.search(r"\b" + _re.escape(w) + r"\b", t_clean) for w in maybe_emergency):
         return {"tier":1,"category":"safety","sentiment":"negative","confidence":0.85,
                 "summary":"Possible emergency reported",
-                "auto_reply":"This sounds like it could be an emergency. If you are in immediate danger, please call 911 now. Can you tell us exactly what's happening?",
+                "auto_reply":"Thank you for alerting us. If anyone is in immediate danger, call 911 now. We're notifying the team right away.",
                 "_maybe_emergency": True}
     
     return None
@@ -798,6 +876,13 @@ def _classify_fallback(text):
     t_clean = _re.sub(r"[^a-z0-9 ]", " ", t)
     # Check for figurative "fire" (fire her, fire him, dumpster fire, etc)
     fire_is_literal = "fire" in t_clean and not any(p in t_clean for p in ["fire her","fire him","fire them","fire that","fire the ","fire this","dumpster fire","on fire with","on fire today","fired","crossfire","campfire","open fire on","gunfire"])
+    # Utility outage (power/water/wifi down) is NOT an emergency — Tier 2, never 911.
+    _util = ["no power","power is out","power out","power outage","breaker","no water","no hot water","wifi","wi fi","internet is down","internet down","no internet"]
+    _hazard = ["fire","burning","smoke","spark","gas","shock","exposed wire","live wire","arc"]
+    if any(w in t_clean for w in _util) and not any(h in t_clean for h in _hazard):
+        return {"tier":2,"category":"equipment","sentiment":"negative","confidence":0.8,
+                "summary":"Utility outage reported",
+                "auto_reply":"Thank you for reporting this. We're notifying management of the outage."}
     emergency = ["emergency","injury","hurt","bleeding","attack","weapon","gun","violence","ambulance","911",
                  "collapsed","unconscious","not breathing","heart attack","seizure","overdose","stabbed","shot",
                  "flood","flooding","gas leak","smoke","sparks","electrical","water leak","burst pipe"]
@@ -1330,7 +1415,7 @@ def handle_owner_command(text, business, sender_phone=""):
             return f"Trial active \u2014 {days} day(s) left.{link_part}"
         else:
             link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
-            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
+            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
 
     # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
     # level for 10DLC compliance, so we use MENU as the in-app command.
@@ -1391,18 +1476,142 @@ def handle_owner_command(text, business, sender_phone=""):
 
 
 # --- Digest ---
-def build_digest_html(name, stats, period="week"):
-    t,f,a = stats["total_messages"],stats["flagged_issues"],stats["acknowledged"]
-    tc = stats["top_category"].replace("_"," "); u = f - a
-    return f"""<div style="font-family:system-ui;max-width:480px;margin:0 auto;padding:24px">
-<h1 style="font-size:20px;margin:0 0 4px">{name}</h1><p style="color:#888;font-size:14px;margin:0 0 24px">Hotline {period}ly digest</p>
-<div style="display:flex;gap:12px;margin-bottom:24px">
-<div style="flex:1;background:#f5f5f0;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{t}</div><div style="font-size:12px;color:#888">messages</div></div>
-<div style="flex:1;background:#fff4e6;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{f}</div><div style="font-size:12px;color:#888">flagged</div></div>
-<div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
-{"<p style='color:#c0392b;font-size:14px'>&#9888; "+str(u)+" unacknowledged</p>" if u>0 else ""}
-{"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
-<p style="font-size:13px;color:#aaa;margin-top:24px">Reply MENU to your Hotline number for commands.</p></div>"""
+DIGEST_TIERS = [
+    (1, "Urgent",   "#DC2626", "#FFF8F5", "Safety, flooding, break-ins"),
+    (2, "Issue",    "#EA580C", "#FFF8F5", "Broken equipment, access problems"),
+    (3, "Feedback", "#CA8A04", "#FFFDF5", "Complaints and suggestions"),
+    (4, "Routine",  "#6B7280", "#F8F8F6", "Notes, questions, positive feedback"),
+]
+
+def _digest_fmt_time(iso):
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z","+00:00"))
+        return dt.strftime("%b %-d, %-I:%M %p")
+    except Exception:
+        return ""
+
+def _digest_esc(v):
+    return (str(v or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+
+def _digest_tier_section(tier, label, color, tint, blurb, rows, total):
+    if not rows:
+        return ""
+    items = []
+    for r in rows:
+        text = r.get("summary") or r.get("message_text") or ""
+        text = _digest_esc(text)
+        if len(text) > 200: text = text[:200].rstrip() + "&hellip;"
+        cat = _digest_esc((r.get("category") or "").replace("_"," "))
+        when = _digest_esc(_digest_fmt_time(r.get("created_at","")))
+        ack = ""
+        if tier in (1,2):
+            if r.get("acknowledged"):
+                ack = '<span style="color:#22C55E;font-size:11px;font-weight:600;white-space:nowrap">&#10003; acknowledged</span>'
+            else:
+                ack = '<span style="color:#DC2626;font-size:11px;font-weight:600;white-space:nowrap">&bull; open</span>'
+        meta = " &middot; ".join([x for x in [cat, when] if x])
+        items.append(
+            f'<tr><td style="padding:12px 16px;border-top:1px solid #DDDDDD">'
+            f'<div style="font-size:14px;color:#1A1A1A;line-height:1.45">{text}</div>'
+            f'<div style="margin-top:4px;display:flex;justify-content:space-between;gap:12px">'
+            f'<span style="font-size:11px;color:#888;text-transform:capitalize">{meta}</span>{ack}</div>'
+            f'</td></tr>'
+        )
+    more = ""
+    if total > len(rows):
+        more = (f'<tr><td style="padding:10px 16px;border-top:1px solid #DDDDDD;'
+                f'font-size:12px;color:#888;text-align:center">+{total-len(rows)} more in your log</td></tr>')
+    return (
+        f'<div style="margin:0 0 18px;border:1px solid #DDDDDD;border-radius:12px;overflow:hidden">'
+        f'<div style="background:{tint};padding:12px 16px;border-left:4px solid {color}">'
+        f'<span style="font-size:13px;font-weight:700;color:{color}">Tier {tier} &middot; {label}</span>'
+        f'<span style="float:right;font-size:13px;font-weight:700;color:{color}">{total}</span>'
+        f'<div style="font-size:11px;color:#888;margin-top:2px">{blurb}</div></div>'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">'
+        f'{"".join(items)}{more}</table></div>'
+    )
+
+def build_digest_html(name, stats, period="week", days=7, bid=""):
+    t = stats["total_messages"]; f = stats["flagged_issues"]; a = stats["acknowledged"]
+    u = max(f - a, 0)
+    tcount = stats.get("tier_counts", {1:0,2:0,3:0,4:0})
+    by_tier = stats.get("by_tier", {1:[],2:[],3:[],4:[]})
+    period_label = "Daily" if period == "dai" else "Weekly"
+    name_e = _digest_esc(name)
+
+    logo = (
+        '<span style="display:inline-block;background:#EA580C;color:#FFFFFF;font-weight:700;'
+        'font-size:13px;border-radius:3px;padding:2px 6px;margin-right:6px;'
+        'font-family:\'DM Sans\',system-ui,sans-serif">H</span>'
+        '<span style="color:#EA580C;font-weight:700;font-size:13px;letter-spacing:1.95px;'
+        'font-family:\'DM Sans\',system-ui,sans-serif">HOTLINE</span>'
+    )
+
+    top_cat = stats.get("top_category", "—").replace("_", " ").title()
+    stat_boxes = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:22px">'
+        '<tr>'
+        f'<td width="33%" style="padding:0 5px"><div style="background:#FAFAF8;border:1px solid #DDDDDD;padding:16px 8px;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:#1A1A1A">{t}</div><div style="font-size:11px;color:#888">messages</div></div></td>'
+        f'<td width="33%" style="padding:0 5px"><div style="background:#FFF8F5;border:1px solid #DDDDDD;padding:16px 8px;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:#EA580C">{f}</div><div style="font-size:11px;color:#888">flagged</div></div></td>'
+        f'<td width="33%" style="padding:0 5px"><div style="background:#FAFAF8;border:1px solid #DDDDDD;padding:16px 8px;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:#1A1A1A">{top_cat}</div><div style="font-size:11px;color:#888">top</div></div></td>'
+        '</tr></table>'
+    )
+
+
+    sections = "".join(
+        _digest_tier_section(tier, label, color, tint, blurb,
+                             by_tier.get(tier, []), tcount.get(tier, 0))
+        for (tier, label, color, tint, blurb) in DIGEST_TIERS
+        if tcount.get(tier, 0) > 0
+    )
+    if not sections:
+        sections = ('<div style="text-align:center;padding:32px 16px;color:#888;font-size:14px;'
+                    'border:1px solid #DDDDDD;border-radius:12px;margin-bottom:18px">'
+                    'No messages this period. All quiet.</div>')
+
+    now_utc = datetime.now(timezone.utc)
+    end_date = now_utc.strftime("%b %-d")
+    start_date = (now_utc - timedelta(days=days)).strftime("%b %-d")
+    date_range = f"{start_date} – {end_date}" if start_date != end_date else end_date
+    
+    unsub_token = _unsub_token(bid) if bid else ""
+    unsub_link = f'https://hotlinetxt.com/digest-off?bid={bid}&t={unsub_token}' if bid else ""
+    unsub_html = f'<br><a href="{unsub_link}" style="color:#EA580C;text-decoration:none;font-size:11px">Unsubscribe from digests</a>' if unsub_link else ""
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+@media (max-width: 600px) {{
+  .email-container {{ max-width: 100% !important; }}
+}}
+</style>
+</head>
+<body style="margin:0;padding:0;background:#F8F8F6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8F8F6">
+<tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="email-container" style="max-width:560px;background:#FFFFFF;border:1px solid #DDDDDD;border-radius:16px;overflow:hidden;font-family:'DM Sans',system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<tr><td style="padding:24px 24px 0">{logo}</td></tr>
+<tr><td style="padding:14px 24px 0">
+<div style="font-size:22px;font-weight:700;color:#1A1A1A">{name_e}</div>
+<div style="font-size:16px;font-weight:600;color:#EA580C;margin-top:6px">{period_label} digest</div>
+<div style="font-size:13px;color:#888;margin-top:2px">{date_range} &middot; every message, grouped by tier</div>
+</td></tr>
+<tr><td style="padding:22px 24px 0">{stat_boxes}{sections}</td></tr>
+<tr><td style="padding:4px 24px 28px">
+<div style="border-top:1px solid #DDDDDD;padding-top:16px;font-size:12px;color:#AAAAAA;line-height:1.6">
+Reply <strong style="color:#888">MENU</strong> to your Hotline number for commands.<br>
+Timestamps in UTC. <a href="mailto:Connect@HotlineTXT.com" style="color:#EA580C;text-decoration:none;">Connect@HotlineTXT.com</a>{unsub_html}
+</div></td></tr>
+</table></td></tr></table></body></html>"""
+
+def _unsub_token(bid):
+    """Generate tamper-proof unsubscribe token."""
+    key = (_ADMIN_KEY or "changeme").encode()
+    return hmac.new(key, bid.encode(), hashlib.sha256).hexdigest()[:16]
+
+def _verify_unsub_token(bid, token):
+    """Verify unsubscribe token."""
+    return hmac.compare_digest(_unsub_token(bid), token)
 
 def send_all_digests(force_freq=None):
     sent = 0
@@ -1413,7 +1622,7 @@ def send_all_digests(force_freq=None):
         days = 1 if freq=="daily" else 7
         stats = get_stats(biz["id"], days=days)
         period = "dai" if freq=="daily" else "week"
-        if send_email(email, f"Hotline {period}ly digest for {biz.get('name','')}", build_digest_html(biz.get("name",""), stats, period)): sent += 1
+        if send_email(email, f"Hotline {period}ly digest for {biz.get('name','')}", build_digest_html(biz.get("name",""), stats, period, days=days, bid=biz["id"])): sent += 1
     return sent
 
 
@@ -1675,6 +1884,17 @@ def debug_db():
 @app.post("/digest")
 def digest_endpoint(freq: str = Query("weekly")): _ensure_init(); return {"digests_sent": send_all_digests(force_freq=freq)}
 
+@app.get("/digest-off")
+def digest_off_endpoint(bid: str = Query(""), t: str = Query("")):
+    if not bid or not t or not _verify_unsub_token(bid, t): return {"error": "Invalid or expired link"}
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
+        if not biz: return {"error": "Business not found"}
+        _execute(c, _q("UPDATE businesses SET digest_freq=? WHERE id=?"), ("off", bid))
+    html = """<html><head><title>Unsubscribed</title><style>body{font-family:system-ui;max-width:560px;margin:60px auto;padding:24px;text-align:center}h1{color:#1a1a1a}p{color:#666}</style></head>
+<body><h1>Unsubscribed</h1><p>You've been removed from digest emails. Re-enable anytime by texting DIGEST DAILY or DIGEST WEEKLY.</p></body></html>"""
+    return Response(html, media_type="text/html")
+
 # ── Admin login ───────────────────────────────────────────────────────────────
 _LOGIN_PAGE = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
 <body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f8f8f6">
@@ -1823,6 +2043,7 @@ async def admin_update_business(request: Request):
     website_url = body.get("website_url","").strip()
     digest_freq = body.get("digest_freq","weekly").strip().lower()
     alert_tier = body.get("alert_tier","tier2").strip().lower()
+    vertical = body.get("vertical","").strip().lower()
     
     # Validation
     errors = []
@@ -1858,11 +2079,11 @@ async def admin_update_business(request: Request):
     
     # Update database
     with get_db() as c:
-        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=? WHERE id=?"),
-                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, biz_id))
+        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=?, vertical=? WHERE id=?"),
+                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, vertical, biz_id))
     
     # Log the changes
-    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}")
+    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}, vertical={vertical}")
     
     # Fetch updated business to return
     with get_db() as c:
@@ -1962,7 +2183,7 @@ async def admin_billing(request: Request):
         if status == "active":
             msg = "\u2705 Your Hotline subscription is active."
         elif status in ("expired","canceled","past_due"):
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers &#9888;{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
         else:
             msg = f"\u23f0 Your Hotline trial has {days} day(s) left.{link_part}"
         phones = get_alert_phones(biz)
@@ -2068,13 +2289,13 @@ def admin_ui(request: Request):
       f'<div style="background:#fff;border:1px solid #e0e0dc;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:10px">' +
       f'<span style="font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:.05em">{label}</span>' +
       f'<span style="font-size:20px;font-weight:700;color:#1a1a1a">{sum(1 for b in all_biz if (b.get("vertical") or "") == slug)}</span></div>'
-      for slug, label in [("laundromat","Laundromat"),("carwash","Car Wash"),("selfstorage","Self Storage"),("parking","Parking"),("gym","Gym"),("","Other / Direct")]
+      for slug, label in [("laundromat","Laundromat"),("selfstorage","Self Storage"),("mhc","Mobile Home Park"),("gym","Gym"),("carwash","Car Wash"),("rvpark","RV Park"),("","Other / Direct")]
     )}
   </div>'''
 
     html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title>
 <style>
-#drawer{{position:fixed;top:0;right:-480px;width:480px;max-width:100vw;height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px}}
+#drawer{{position:fixed;top:0;right:-500px;width:500px;height:100vh;background:#fff;border-left:1px solid #e0e0dc;box-shadow:-4px 0 24px rgba(0,0,0,0.08);transition:right 0.25s ease;z-index:200;overflow-y:auto;padding:24px 28px}}#drawer.open{{right:0}}@media(max-width:560px){{#drawer{{width:100%;right:-100%}}}}
 #drawer.open{{right:0}}
 #drawer-overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:199}}
 #drawer-overlay.open{{display:block}}
@@ -2204,6 +2425,19 @@ def admin_ui(request: Request):
           </select>
         </div>
         <div>
+          <label style="display:block;font-size:12px;color:#888;margin-bottom:4px">Vertical</label>
+          <select id="em-vertical" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+            <option value="">— Not set —</option>
+            <option value="laundromat">Laundromat</option>
+            <option value="carwash">Car Wash</option>
+            <option value="selfstorage">Self Storage</option>
+            <option value="mhc">Mobile Home Park</option>
+            <option value="rvpark">RV Park</option>
+            <option value="gym">24/7 Gym</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div>
           <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Alert Tier</label>
           <select id="em-tier" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
             <option value="tier2">Tier 2 (Critical)</option>
@@ -2286,6 +2520,7 @@ async function openDrawer(bizId, bizName){{
     if(!r.ok){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Failed to load.</p>";return;}}
     const d=await r.json();
     const b=d.business; const s=d.stats; const msgs=d.messages;
+    window._drawerBiz=b; window._drawerBizId=bizId;
     const loc=b.city&&b.state?b.city+", "+b.state:b.zip||"—";
     const signed=b.created_at?b.created_at.slice(0,10):"—";
     const days_ago=b.created_at?Math.floor((Date.now()-new Date(b.created_at))/86400000)+" days ago":"";
@@ -2334,7 +2569,7 @@ async function openDrawer(bizId, bizName){{
       <div style="font-size:13px;font-weight:600;color:#444;margin-bottom:8px">Last 10 messages</div>
       <div>${{msg_rows}}</div>
       <div style="border-top:1px solid #f0f0ec;margin-top:20px;padding-top:16px;display:flex;gap:10px">
-        <button onclick="openEditModal('{bid}',{{'name':'{b['name'].replace("'","").replace("\"","&quot;")}','owner_phone':'{b['owner_phone']}','zip':'{b['zip']}','city':'{b.get('city','')}','state':'{b.get('state','')}','email':'{b['email']}','website_url':'{b['website_url']}','digest_freq':'{b['digest_freq']}','alert_tier':'{('tier3' if b['alert_tier3'] else 'tier2')}'}});return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
+        <button onclick="openEditModal(window._drawerBizId,window._drawerBiz);return false" style="flex:1;padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✏️ Edit</button>
       </div>`;
   }}catch(e){{document.getElementById("drawer-body").innerHTML="<p style='color:#dc2626'>Error: "+e.message+"</p>";}}
 }}
@@ -2348,7 +2583,8 @@ function openEditModal(bizId,data){{
   document.getElementById("em-email").value=data.email||"";
   document.getElementById("em-website").value=data.website_url||"";
   document.getElementById("em-digest").value=data.digest_freq||"weekly";
-  document.getElementById("em-tier").value=data.alert_tier||"tier2";
+  document.getElementById("em-tier").value=(data.alert_tier3?"tier3":(data.alert_tier||"tier2"));
+  document.getElementById("em-vertical").value=data.vertical||data.vertical_slug||"";
   document.getElementById("edit-error").style.display="none";
   document.getElementById("edit-modal").style.display="flex";
 }}
@@ -2366,8 +2602,9 @@ async function saveBusinessEdit(){{
   const tier=document.getElementById("em-tier").value;
   const errEl=document.getElementById("edit-error");
   if(!name||!phone){{errEl.textContent="Name and phone are required";errEl.style.display="block";return;}}
+  const vertical=document.getElementById("em-vertical").value;
   try{{
-    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier}})}});
+    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier,vertical:vertical}})}});
     const d=await r.json();
     if(!d.success){{errEl.textContent=d.error||"Failed to save";errEl.style.display="block";return;}}
     toast("Business updated",true);
@@ -2809,7 +3046,7 @@ def _process_customer_message(biz, sender, body, image_url=""):
             elif cat == "inquiry":
                 header = "\u2753 Customer question"
             elif tier == 2:
-                header = "&#9888; Issue"
+                header = "\u26a0\ufe0f Issue"
             else:
                 header = "\U0001f4ac Feedback"
             when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
@@ -2820,6 +3057,10 @@ def _process_customer_message(biz, sender, body, image_url=""):
                      f"Customer:\n{body}\n\n"
                      f"{reply_block}"
                      f"Reply REPLY to message customer back.")
+            if tier == 1:
+                alert += "\n\U0001f4cd Confirm location with caller if needed."
+            elif auto_reply and auto_reply.rstrip().endswith("?"):
+                alert += "\n\u23f3 Asked customer to confirm details."
             if public_media_url and biz.get("alert_include_images"):
                 alert += "\n📷 Photo attached"
             for p in alert_phones:
@@ -3011,16 +3252,16 @@ body{background:#f8f8f6}
 
 NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" viewBox="0 0 224.87999 67.499998" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="d1n"><path d="M 0.765625 9 L 48 9 L 48 57 L 0.765625 57 Z M 0.765625 9 " clip-rule="nonzero"/></clipPath><clipPath id="d2n"><path d="M 208 20 L 223.992188 20 L 223.992188 45 L 208 45 Z M 208 20 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#d1n)"><path fill="#ea580c" d="M 7.839844 9.40625 L 40.8125 9.40625 C 44.589844 9.40625 47.878906 12.699219 47.878906 16.488281 L 47.878906 49.542969 C 47.878906 53.332031 44.589844 56.625 40.8125 56.625 L 7.839844 56.625 C 4.0625 56.625 0.777344 53.332031 0.777344 49.542969 L 0.777344 16.488281 C 0.777344 12.699219 4.0625 9.40625 7.839844 9.40625 Z " fill-opacity="1" fill-rule="nonzero"/></g><g fill="#ffffff" fill-opacity="1"><g transform="translate(10.726965, 46.401259)"><path d="M 20.734375 -12.542969 L 8.230469 -12.542969 L 8.230469 0 L 3.109375 0 L 3.109375 -29.109375 L 8.175781 -29.109375 L 8.175781 -17.214844 L 20.734375 -17.214844 L 20.734375 -29.109375 L 25.816406 -29.109375 L 25.816406 0 L 20.734375 0 Z M 20.734375 -12.542969 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(62.007197, 44.82787)"><path d="M 17.277344 -10.453125 L 6.859375 -10.453125 L 6.859375 0 L 2.589844 0 L 2.589844 -24.257812 L 6.8125 -24.257812 L 6.8125 -14.34375 L 17.277344 -14.34375 L 17.277344 -24.257812 L 21.515625 -24.257812 L 21.515625 0 L 17.277344 0 Z M 17.277344 -10.453125 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(89.370287, 44.82787)"><path d="M 12.859375 -24.640625 C 16.707031 -24.640625 19.71875 -23.261719 21.894531 -20.5 L 22.734375 -19.265625 C 23.976562 -17.132812 24.597656 -14.632812 24.597656 -11.769531 C 24.597656 -8.511719 23.691406 -5.726562 21.882812 -3.402344 C 18.375 -0.136719 15.867188 0.722656 12.886719 0.722656 C 9.1875 0.722656 6.246094 -0.585938 4.0625 -3.203125 C 2.140625 -5.503906 1.179688 -8.421875 1.179688 -11.953125 C 1.179688 -16 2.40625 -19.210938 4.859375 -21.585938 C 6.980469 -23.625 9.648438 -24.640625 12.859375 -24.640625 Z M 12.859375 -20.75 C 10.363281 -20.75 8.425781 -19.769531 7.046875 -17.816406 C 5.949219 -16.25 5.402344 -14.292969 5.402344 -11.953125 C 5.402344 -8.839844 6.324219 -6.480469 8.167969 -4.867188 C 9.445312 -3.738281 11.019531 -3.171875 12.886719 -3.171875 C 15.363281 -3.171875 17.292969 -4.132812 18.675781 -6.050781 C 19.796875 -7.585938 20.359375 -9.511719 20.359375 -11.828125 C 20.359375 -15.089844 19.414062 -17.527344 17.523438 -19.136719 C 16.257812 -20.210938 14.699219 -20.75 12.859375 -20.75 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(118.49594, 44.82787)"><path d="M 12.421875 -20.363281 L 12.421875 0 L 8.203125 0 L 8.203125 -20.363281 L 0.660156 -20.363281 L 0.660156 -24.257812 L 19.921875 -24.257812 L 19.921875 -20.363281 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(142.379885, 44.82787)"><path d="M 6.71875 -24.257812 L 6.71875 -3.894531 L 18.035156 -3.894531 L 18.035156 0 L 2.5 0 L 2.5 -24.257812 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(164.53192, 44.82787)"><path d="M 3.128906 -24.257812 L 7.394531 -24.257812 L 7.394531 0 L 3.128906 0 Z "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(177.963102, 44.82787)"><path d="M 21.574219 -24.257812 L 21.574219 0 L 17.265625 0 L 6.445312 -17.007812 L 6.445312 0 L 2.375 0 L 2.375 -24.257812 L 6.5625 -24.257812 L 17.507812 -7.082031 L 17.507812 -24.257812 Z "/></g></g><g clip-path="url(#d2n)"><g fill="#ea580c" fill-opacity="1"><g transform="translate(205.326192, 44.82787)"><path d="M 7.042969 -10.453125 L 7.042969 -3.894531 L 20.546875 -3.894531 L 20.546875 0 L 2.820312 0 L 2.820312 -24.257812 L 19.980469 -24.257812 L 19.980469 -20.363281 L 7.042969 -20.363281 L 7.042969 -14.34375 L 19.519531 -14.34375 L 19.519531 -10.453125 Z "/></g></g></g></svg></a>
 <div class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</div>
-<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
+<div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/selfstorage">Self Storage</a><a href="/mhc">Mobile Home Parks</a><a href="/gym">24/7 Gym</a><a href="/carwash">Car Wash</a><a href="/rvpark">RV Parks</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav>"""
 
 
 # --- Demo page (homepage) ---
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness.
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness. Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
-- Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues.
+- Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues. Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
 - Tier 4: Routine — Positive feedback, compliments, questions, neutral.
 
@@ -3036,17 +3277,18 @@ AUTO-REPLY TONE:
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer business questions. If vague, ask follow-up. Forward to management.
 
-FOLLOW-UP QUESTIONS (when to ask):
-- Tier 3 (reputation): Ask for more detail to help operator respond.
-- Tier 4 inquiry: Ask for clarification if vague.
-- DON'T ask Tier 1 or clear Tier 2 (just acknowledge and forward).
-- Examples: "Which machine/location?", "Can you tell us more?", "Is this still happening?"
+FOLLOW-UP QUESTIONS (clarify a MISSING actionable detail):
+- If the message is missing a critical detail the operator needs to act on — above all WHICH site / unit / space / machine / location — append ONE short question to your reply, e.g. "Which site?" or "Which machine?".
+- Applies to Tier 2 and Tier 3 only. It NEVER delays or replaces the alert — you still classify and the operator is alerted right away. The question only gathers the missing detail.
+- NEVER ask a follow-up question on a Tier 1 emergency. The Tier 1 reply is ONLY the thank-you and the call-911 guidance — nothing may compete with the customer calling 911.
+- Tier 4 vague inquiry: ask one clarifying question.
+- Do NOT ask if the detail is already given, or if no detail would change what the operator does. Never ask Tier 4 positive feedback. One question maximum.
 
 HARD RULES:
 - NEVER fabricate business information.
 - NEVER promise action will be taken.
 - NEVER claim to have contacted emergency services.
-- NEVER ask follow-up for Tier 1 or clear Tier 2.
+- Ask AT MOST ONE clarifying question, and only for a missing actionable detail (which site/unit/machine/location). Never ask Tier 4 positive feedback to clarify. NEVER ask any follow-up question on a Tier 1 emergency.
 - Keep auto_reply under 160 characters.
 - Vary responses. Don't repeat templates.
 - ALWAYS thank customer first.
@@ -3070,6 +3312,10 @@ EDGE CASES:
 - "You should fire her" = Tier 3, staffing complaint. NOT emergency.
 - "Out of toilet paper" = Tier 2, supply.
 - Any equipment failure, payment failure, or machinery jam = Tier 2 (customers cannot complete transactions).
+- "No power at my site" / "Power is out" / "Breaker won't reset" = Tier 2, equipment (utility outage). NOT an emergency — do NOT tell them to call 911.
+- "No water" / "No hot water" / "WiFi is down" = Tier 2, equipment (utility outage).
+- "Sparks from the outlet" / "Burning smell from the panel" / "Smoke from the dryer" = Tier 1, safety (active hazard).
+- "Door lock is broken and won't open" / "Machine is broken" with no specific unit named = Tier 2; append "Which one?" or "Which door/machine?".
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
@@ -3265,28 +3511,6 @@ VERTICAL_SELFSTORAGE_HTML = _make_vertical_page(
     plural="Self Storage Facilities"
 )
 
-VERTICAL_PARKING_HTML = _make_vertical_page(
-    slug="parking",
-    label="Parking",
-    headline="Your kiosk is down. Revenue is walking away. You won\'t know until tonight.",
-    sub="Hotline alerts you instantly when payment fails, gates jam, or customers are blocked — no staff required.",
-    scenarios=[
-        "Pay station is showing an error, won\'t take payment",
-        "Entry gate is stuck closed, can\'t get in",
-        "Exit gate is stuck open",
-        "Ticket machine is jammed",
-        "Lights are out in section B",
-        "Someone is blocking two spaces and won\'t move",
-        "Entry intercom isn\'t responding",
-        "I paid but the gate still won\'t open",
-    ],
-    placements=["Gate booth", "Lot entrance sign", "Barrier", "Kiosk"],
-    step1=("Display your Hotline", "One sign at pay stations and gates. Customers know exactly what to do."),
-    step2=("Customers text equipment failures instantly", "No app. No phone number to find. Just text. AI handles triage."),
-    step3=("You get a text the moment something breaks", "Fix it fast. Recover the revenue you\'d otherwise lose."),
-    plural="Parking Lots"
-)
-
 VERTICAL_GYM_HTML = _make_vertical_page(
     slug="gym",
     label="24/7 Gym",
@@ -3310,8 +3534,52 @@ VERTICAL_GYM_HTML = _make_vertical_page(
 )
 
 
+VERTICAL_MHC_HTML = _make_vertical_page(
+    slug="mhc",
+    label="Mobile Home Parks",
+    headline="A pipe bursts at lot 14. Your resident has no one to call. You find out when it floods.",
+    sub="Hotline puts a direct line between your residents and you — so water, sewer, gate, and utility failures surface before they become liability claims or move-outs.",
+    scenarios=[
+        "There\'s sewage backing up into my yard",
+        "Water main looks broken — water is bubbling up on the road",
+        "The front gate won\'t open and I can\'t get in",
+        "Streetlights on the back row have been out for days",
+        "A tree limb fell and is blocking the road",
+        "My water has been shut off all day with no notice",
+        "The dumpster area is overflowing again",
+        "Can we get the speed bumps repainted?",
+    ],
+    placements=["Park entrance", "Office window", "Mailbox kiosk", "Laundry / common area"],
+    step1=("Display your Hotline", "One sign at the entrance, one at the office, one at the mailboxes. Covers the whole community."),
+    step2=("Residents text issues directly to you", "No ignored voicemails. No after-hours service that never calls back. A text you actually see."),
+    step3=("You get alerted before it becomes a claim", "Catch water, sewer, and access failures early. Protect habitability and retention."),
+    plural="Mobile Home Parks"
+)
+
+VERTICAL_RVPARK_HTML = _make_vertical_page(
+    slug="rvpark",
+    label="RV Parks",
+    headline="The hookup at site 22 fails. Your guest has no one to tell. You find out at checkout — with the bad review already written.",
+    sub="Hotline gives every site a direct line to you — so power, water, sewer, and gate problems get reported the moment they happen, not at checkout.",
+    scenarios=[
+        "No power at my site — breaker won\'t reset",
+        "The sewer hookup at site 22 is leaking",
+        "Water pressure dropped to nothing across the loop",
+        "The bathhouse is out of hot water",
+        "Entry gate code isn\'t working",
+        "A branch came down on the road to the back loop",
+        "WiFi has been down all evening",
+        "Could you add a trash can near the dog run?",
+    ],
+    placements=["Park entrance", "Office / check-in", "Bathhouse", "Hookup pedestal"],
+    step1=("Display your Hotline", "One sign at check-in, one at the bathhouse, one at each loop. Coverage everywhere guests are."),
+    step2=("Guests text issues from their site", "No walking to the office. No app. They text the number on the sign and Hotline triages it."),
+    step3=("You get alerted before the bad review", "Fix hookups and access fast — while the guest is still on-site, not after they\'ve left angry."),
+    plural="RV Parks"
+)
+
 HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hotline — Real-Time Alerts for Absentee Operators</title>
+<title>Hotline — Real-Time Alerts for Offsite Operators</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;-webkit-font-smoothing:antialiased}a{color:#ea580c;text-decoration:none}
@@ -3320,7 +3588,7 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .hero h1{font-size:clamp(28px,5vw,44px);font-weight:700;line-height:1.15;margin-bottom:10px;letter-spacing:-0.02em}
 .hero h1 em{font-style:normal;color:#ea580c}
 .hero p{font-size:16px;color:#888;margin-bottom:0}
-.industry-bar{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding:20px 20px 4px;max-width:700px;margin:0 auto}
+.industry-bar{display:grid;grid-template-columns:repeat(3,auto);justify-content:center;justify-items:center;gap:8px;padding:20px 20px 4px;max-width:700px;margin:0 auto}
 .ind-pill{padding:7px 16px;border-radius:99px;border:1.5px solid #e0e0dc;background:#fff;font-size:13px;font-weight:600;color:#888;cursor:pointer;transition:all 0.15s;white-space:nowrap}
 .ind-pill.active{background:#ea580c;border-color:#ea580c;color:#fff}
 .ind-pill:hover:not(.active){border-color:#ea580c;color:#ea580c}
@@ -3373,19 +3641,26 @@ HOMEPAGE_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="
 .cta-section p{font-size:13px;color:#888;margin-bottom:16px}
 .cta-section a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none}
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc}
-@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:420px}.industry-bar{gap:6px}}
+@media(max-width:700px){.phones{flex-direction:column;align-items:center}.device{width:100%;max-width:420px}.industry-bar{gap:6px;grid-template-columns:repeat(2,auto)}}
 </style></head><body>
 """ + NAV_HTML + """
 <div class="hero">
-<h1>Never miss a <em>critical</em> issue again.</h1>
+<h1>Operate from a distance &amp; never miss a <em>critical issue</em> again.</h1>
 <p>Customers text. Hotline triages and alerts you — automatically.</p>
+</div>
+<div class="features">
+<div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
+<div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
+<div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div>
+<div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div>
 </div>
 <div class="industry-bar">
 <div class="ind-pill active" onclick="setIndustry('laundromat',this)">Laundromat</div>
-<div class="ind-pill" onclick="setIndustry('carwash',this)">Car Wash</div>
 <div class="ind-pill" onclick="setIndustry('selfstorage',this)">Self Storage</div>
-<div class="ind-pill" onclick="setIndustry('parking',this)">Parking</div>
+<div class="ind-pill" onclick="setIndustry('mhc',this)">Mobile Home Parks</div>
 <div class="ind-pill" onclick="setIndustry('gym',this)">24/7 Gym</div>
+<div class="ind-pill" onclick="setIndustry('carwash',this)">Car Wash</div>
+<div class="ind-pill" onclick="setIndustry('rvpark',this)">RV Parks</div>
 </div>
 <div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 0 4px"><p class="try-label" style="padding:0;margin:0">Try a scenario or type your own</p><button onclick="resetDemo()" style="padding:4px 10px;background:#f0f0f0;color:#999;border:1px solid #e0e0dc;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">Reset</button></div>
 <div class="ex-area" style="padding-bottom:12px">
@@ -3420,18 +3695,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div></div>
 </div>
 
-<div class="features">
-<div class="feature"><div class="feature-title">One-minute setup</div><div class="feature-desc">No app. No software. Works by text.</div></div>
-<div class="feature"><div class="feature-title">Tier alerts only</div><div class="feature-desc">Critical issues reach you. Low-priority messages don't.</div></div>
-<div class="feature"><div class="feature-title">Your number stays private</div><div class="feature-desc">Customers text a shared number. Yours never shows.</div></div>
-<div class="feature"><div class="feature-title">Always on</div><div class="feature-desc">Works 24/7 even when you're not there.</div></div>
-</div>
 <div class="cta-section">
-<h2>Try free for 14 days</h2>
+<h2>Start a free 14-day pilot</h2>
 <p>No credit card required.</p>
 <a href="/signup">Get Started &rarr;</a>
 </div>
-<footer>Hotline &middot; Real-time alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; Real-time alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
 let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
@@ -3461,13 +3730,21 @@ const CHIPS={
     "Hallway lights on floor 2 are all out",
     "Could you add a bench near the entrance?"
   ],
-  parking:[
-    "Exit gate is stuck closed and I can't leave",
-    "Pay station on level 2 is showing an error",
-    "I paid at the kiosk but the gate won't open",
-    "Level 3 lights are completely out",
-    "Someone is parked in a handicap spot without a placard",
-    "The trash near the elevator is overflowing"
+  mhc:[
+    "There's sewage backing up into my yard",
+    "Water main looks broken — water is bubbling up on the road",
+    "The front gate won't open and I can't get in",
+    "Streetlights on the back row have been out for days",
+    "My water has been shut off all day with no notice",
+    "Can we get the speed bumps repainted?"
+  ],
+  rvpark:[
+    "No power at my site — breaker won't reset",
+    "The sewer hookup at site 22 is leaking",
+    "Water pressure dropped to nothing across the loop",
+    "The bathhouse is out of hot water",
+    "Entry gate code isn't working",
+    "Could you add a trash can near the dog run?"
   ],
   gym:[
     "Someone is having a medical emergency near the squat rack",
@@ -3707,7 +3984,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="cta"><a href="/signup">Get Hotline for your business &rarr;</a></div>
 
-<footer>Hotline &middot; Real-time SMS alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
+<footer>Hotline &middot; Real-time SMS alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
 let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
@@ -3802,7 +4079,7 @@ def demo_page(): _ensure_init(); return Response(content=_ga(DEMO_HTML), media_t
 
 
 # --- How It Works page ---
-HOW_IT_WORKS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>How It Works — Hotline</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f8f8f6;color:#333}.nav{display:flex;align-items:center;padding:12px 24px;position:relative}.nav .logo{flex:1;text-align:center}.nav .logo svg{height:36px}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}.nav a{text-decoration:none;color:#333;font-size:13px;font-weight:500}.nav a.signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}.container{max-width:700px;margin:40px auto;padding:0 24px}.hero{text-align:center;margin-bottom:40px}.hero h1{font-size:42px;font-weight:700;line-height:1.2;margin-bottom:16px;color:#1a1a1a}.hero p{font-size:16px;color:#666}.steps{display:flex;flex-direction:column;gap:30px;margin:50px 0}.step{display:flex;gap:20px}.step-num{flex-shrink:0;width:40px;height:40px;background:#ea580c;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}.step-content h3{font-weight:600;font-size:16px;margin-bottom:8px;color:#1a1a1a}.step-content p{font-size:14px;color:#666;line-height:1.5}.section-divider{margin:40px 0;padding:40px 0;border-top:1px solid #e0e0dc}.placement-title{font-size:18px;font-weight:700;margin-bottom:24px;color:#1a1a1a;text-align:center}.placement-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:0}@media(max-width:700px){.placement-grid{grid-template-columns:repeat(2,1fr)}}.placement-card{padding:18px 20px;background:#fff;border-radius:8px;border:1px solid #e0e0dc}.placement-card h4{font-weight:700;font-size:14px;margin-bottom:6px}.placement-card p{font-size:13px;color:#666;margin:0;line-height:1.5}.placement-list{display:flex;flex-direction:column;gap:0;margin-bottom:40px;border:1px solid #e0e0dc;border-radius:10px;overflow:hidden}.placement-row{display:flex;align-items:baseline;padding:14px 20px;border-bottom:1px solid #e0e0dc;background:#fff}.placement-row:last-child{border-bottom:none}.placement-row:hover{background:#fff7ed;text-decoration:none}.placement-row{text-decoration:none;color:inherit}.placement-arrow{margin-left:auto;color:#ea580c;font-size:18px;font-weight:300;opacity:0.6}.placement-label{font-weight:700;font-size:14px;color:#ea580c;min-width:140px;flex-shrink:0}.placement-spots{font-size:13px;color:#666;line-height:1.5}.cta{text-align:center;padding:40px 24px;background:#fff7ed;border-radius:12px;border:1px solid #fed7aa}.cta h2{font-size:20px;font-weight:700;margin-bottom:8px;color:#1a1a1a}.cta p{font-size:14px;color:#888;margin-bottom:20px}.cta a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:6px;font-weight:700;text-decoration:none}.footer{margin-top:60px;padding-top:24px;border-top:1px solid #e0e0dc;text-align:center;font-size:13px;color:#999}a{color:#ea580c;text-decoration:none}.dropdown{position:relative;display:inline-block}.dropdown-menu{display:none;position:absolute;min-width:180px;z-index:100;top:100%;right:0;padding-top:8px}.dropdown-menu-inner{display:flex;flex-direction:column;gap:4px;background:#fff;box-shadow:0 8px 16px rgba(0,0,0,0.1);border-radius:8px;padding:8px;border:1px solid #e0e0dc}.dropdown-menu a{display:block;padding:8px 12px;border-radius:4px;transition:background 0.2s}.dropdown-menu a:hover{background:#f5f5f5}.dropdown:hover .dropdown-menu{display:block}</style></head><body><nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" viewBox="0 0 224.87999 67.499998" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="d1h"><path d="M 0.765625 9 L 48 9 L 48 57 L 0.765625 57 Z M 0.765625 9 " clip-rule="nonzero"/></clipPath><clipPath id="d2h"><path d="M 208 20 L 223.992188 20 L 223.992188 45 L 208 45 Z M 208 20 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#d1h)"><path fill="#ea580c" d="M 7.839844 9.40625 L 40.8125 9.40625 C 41.277344 9.40625 41.738281 9.449219 42.191406 9.542969 C 42.648438 9.632812 43.089844 9.765625 43.515625 9.945312 C 43.945312 10.121094 44.351562 10.339844 44.738281 10.597656 C 45.125 10.855469 45.480469 11.152344 45.808594 11.480469 C 46.136719 11.808594 46.429688 12.167969 46.6875 12.554688 C 46.945312 12.941406 47.164062 13.347656 47.339844 13.777344 C 47.519531 14.207031 47.652344 14.648438 47.742188 15.105469 C 47.832031 15.5625 47.878906 16.023438 47.878906 16.488281 L 47.878906 49.542969 C 47.878906 50.007812 47.832031 50.46875 47.742188 50.925781 C 47.652344 51.382812 47.519531 51.824219 47.339844 52.253906 C 47.164062 52.683594 46.945312 53.09375 46.6875 53.480469 C 46.429688 53.867188 46.136719 54.222656 45.808594 54.550781 C 45.480469 54.878906 45.125 55.175781 44.738281 55.433594 C 44.351562 55.691406 43.945312 55.910156 43.515625 56.085938 C 43.089844 56.265625 42.648438 56.398438 42.191406 56.492188 C 41.738281 56.582031 41.277344 56.625 40.8125 56.625 L 7.839844 56.625 C 7.378906 56.625 6.917969 56.582031 6.460938 56.492188 C 6.007812 56.398438 5.566406 56.265625 5.136719 56.085938 C 4.707031 55.910156 4.300781 55.691406 3.914062 55.433594 C 3.53125 55.175781 3.171875 54.878906 2.84375 54.550781 C 2.515625 54.222656 2.222656 53.867188 1.964844 53.480469 C 1.707031 53.09375 1.492188 52.683594 1.3125 52.253906 C 1.136719 51.824219 1 51.382812 0.910156 50.925781 C 0.820312 50.46875 0.777344 50.007812 0.777344 49.542969 L 0.777344 16.488281 C 0.777344 16.023438 0.820312 15.5625 0.910156 15.105469 C 1 14.648438 1.136719 14.207031 1.3125 13.777344 C 1.492188 13.347656 1.707031 12.941406 1.964844 12.554688 C 2.222656 12.167969 2.515625 11.808594 2.84375 11.480469 C 3.171875 11.152344 3.53125 10.855469 3.914062 10.597656 C 4.300781 10.339844 4.707031 10.121094 5.136719 9.945312 C 5.566406 9.765625 6.007812 9.632812 6.460938 9.542969 C 6.917969 9.449219 7.378906 9.40625 7.839844 9.40625 Z M 7.839844 9.40625 " fill-opacity="1" fill-rule="nonzero"/></g><g fill="#ffffff" fill-opacity="1"><g transform="translate(10.726965, 46.401259)"><path d="M 20.734375 -12.542969 L 8.230469 -12.542969 L 8.230469 0 L 3.109375 0 L 3.109375 -29.109375 L 8.175781 -29.109375 L 8.175781 -17.214844 L 20.734375 -17.214844 L 20.734375 -29.109375 L 25.816406 -29.109375 L 25.816406 0 L 20.734375 0 Z M 20.734375 -12.542969 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(62.007197, 44.82787)"><path d="M 17.277344 -10.453125 L 6.859375 -10.453125 L 6.859375 0 L 2.589844 0 L 2.589844 -24.257812 L 6.8125 -24.257812 L 6.8125 -14.34375 L 17.277344 -14.34375 L 17.277344 -24.257812 L 21.515625 -24.257812 L 21.515625 0 L 17.277344 0 Z M 17.277344 -10.453125 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(89.370287, 44.82787)"><path d="M 12.859375 -24.640625 C 16.707031 -24.640625 19.71875 -23.261719 21.894531 -20.5 L 22.734375 -19.265625 C 23.976562 -17.132812 24.597656 -14.632812 24.597656 -11.769531 C 24.597656 -8.511719 23.691406 -5.726562 21.882812 -3.402344 C 21.433594 -2.824219 20.945312 -2.308594 20.40625 -1.859375 C 18.375 -0.136719 15.867188 0.722656 12.886719 0.722656 C 9.1875 0.722656 6.246094 -0.585938 4.0625 -3.203125 C 2.140625 -5.503906 1.179688 -8.421875 1.179688 -11.953125 C 1.179688 -16 2.40625 -19.210938 4.859375 -21.585938 C 6.980469 -23.625 9.648438 -24.640625 12.859375 -24.640625 Z M 12.859375 -20.75 C 10.363281 -20.75 8.425781 -19.769531 7.046875 -17.816406 C 5.949219 -16.25 5.402344 -14.292969 5.402344 -11.953125 C 5.402344 -8.839844 6.324219 -6.480469 8.167969 -4.867188 C 9.445312 -3.738281 11.019531 -3.171875 12.886719 -3.171875 C 15.363281 -3.171875 17.292969 -4.132812 18.675781 -6.050781 C 19.796875 -7.585938 20.359375 -9.511719 20.359375 -11.828125 C 20.359375 -15.089844 19.414062 -17.527344 17.523438 -19.136719 C 16.257812 -20.210938 14.699219 -20.75 12.859375 -20.75 Z M 12.859375 -20.75 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(118.49594, 44.82787)"><path d="M 12.421875 -20.363281 L 12.421875 0 L 8.203125 0 L 8.203125 -20.363281 L 0.660156 -20.363281 L 0.660156 -24.257812 L 19.921875 -24.257812 L 19.921875 -20.363281 Z M 12.421875 -20.363281 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(142.379885, 44.82787)"><path d="M 6.71875 -24.257812 L 6.71875 -3.894531 L 18.035156 -3.894531 L 18.035156 0 L 2.5 0 L 2.5 -24.257812 Z M 6.71875 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(164.53192, 44.82787)"><path d="M 3.128906 -24.257812 L 7.394531 -24.257812 L 7.394531 0 L 3.128906 0 Z M 3.128906 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(177.963102, 44.82787)"><path d="M 21.574219 -24.257812 L 21.574219 0 L 17.265625 0 L 6.445312 -17.007812 L 6.445312 0 L 2.375 0 L 2.375 -24.257812 L 6.5625 -24.257812 L 17.507812 -7.082031 L 17.507812 -24.257812 Z M 21.574219 -24.257812 "/></g></g><g clip-path="url(#d2h)"><g fill="#ea580c" fill-opacity="1"><g transform="translate(205.326192, 44.82787)"><path d="M 7.042969 -10.453125 L 7.042969 -3.894531 L 20.546875 -3.894531 L 20.546875 0 L 2.820312 0 L 2.820312 -24.257812 L 19.980469 -24.257812 L 19.980469 -20.363281 L 7.042969 -20.363281 L 7.042969 -14.34375 L 19.519531 -14.34375 L 19.519531 -10.453125 Z M 7.042969 -10.453125 "/></g></g></g></svg></a><div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/carwash">Car Wash</a><a href="/selfstorage">Self Storage</a><a href="/parking">Parking</a><a href="/gym">24/7 Gym</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav><div class="container"><div class="hero"><h1>How It Works</h1><p>Hotline reads, triages, and tiers every message automatically — so only what matters reaches you, instantly.</p></div><div class="steps"><div class="step"><div class="step-num">1</div><div class="step-content"><h3>Display your Hotline</h3><p>Put your Hotline where customers can find it — a QR code or text number, right where problems happen.</p></div></div><div class="step"><div class="step-num">2</div><div class="step-content"><h3>Customer texts — and gets an instant reply</h3><p>The moment something's wrong, they text. Hotline responds automatically in seconds, so the customer knows they've been heard.</p></div></div><div class="step"><div class="step-num">3</div><div class="step-content"><h3>Hotline triages and tiers it — automatically</h3><p>Every message is read and sorted in real time. A flooding bathroom (Tier 1) is not the same as a vending machine out of snacks (Tier 4) — and Hotline knows the difference.</p></div></div><div class="step"><div class="step-num">4</div><div class="step-content"><h3>You hear only what matters</h3><p>Critical issues reach you instantly with the customer's words and the tier. Low-priority feedback is logged, not pushed. No noise, no app, no dashboard.</p></div></div></div><div class="section-divider" style="border-top:none;padding-top:0;margin-top:0"><h2 class="placement-title">Manage everything by text.</h2><p style="text-align:center;font-size:14px;color:#888;margin:-16px 0 28px">No app. No dashboard. No login. Your phone is the dashboard.</p><div style="background:#1a1a1a;border-radius:14px;overflow:hidden"><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">REPLY</span><span style="font-size:14px;color:#ccc">Open a direct line to the last customer</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">CLOSE</span><span style="font-size:14px;color:#ccc">End the conversation, auto-replies resume</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">STATUS</span><span style="font-size:14px;color:#ccc">See your current alert settings</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">PAUSE&nbsp;/&nbsp;RESUME</span><span style="font-size:14px;color:#ccc">Stop or restart alerts</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">TIER2&nbsp;/&nbsp;TIER3</span><span style="font-size:14px;color:#ccc">Switch between critical-only or all alerts</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">MENU</span><span style="font-size:14px;color:#ccc">See all commands</span></div></div></div><div class="section-divider"><h2 class="placement-title" style="margin-bottom:16px">The four tiers</h2><div class="placement-grid" style="margin-bottom:48px"><div class="placement-card" style="border-left:3px solid #dc2626"><h4 style="color:#dc2626">Tier 1 · Urgent</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Safety, flooding, break-ins. Reaches you instantly.</p></div><div class="placement-card" style="border-left:3px solid #ea580c"><h4 style="color:#ea580c">Tier 2 · Issue</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Broken equipment, access problems. Sent right away.</p></div><div class="placement-card" style="border-left:3px solid #ca8a04"><h4 style="color:#ca8a04">Tier 3 · Feedback</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Complaints, suggestions. Logged for your digest.</p></div><div class="placement-card" style="border-left:3px solid #9ca3af"><h4 style="color:#6b7280">Tier 4 · Logged</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Minor notes, spam filtered. Recorded quietly.</p></div></div><h2 class="placement-title">Where to Display Your Hotline</h2><div class="placement-list"><a href="/laundromat" class="placement-row"><span class="placement-label">Laundromat</span><span class="placement-spots">Next to washers &nbsp;·&nbsp; By dryers &nbsp;·&nbsp; Coin dispenser &nbsp;·&nbsp; Entrance wall</span><span class="placement-arrow">&rsaquo;</span></a><a href="/carwash" class="placement-row"><span class="placement-label">Car Wash</span><span class="placement-spots">Payment booth &nbsp;·&nbsp; Tunnel entrance &nbsp;·&nbsp; Lane entrance &nbsp;·&nbsp; Waiting area</span><span class="placement-arrow">&rsaquo;</span></a><a href="/selfstorage" class="placement-row"><span class="placement-label">Self Storage</span><span class="placement-spots">Gate entrance &nbsp;·&nbsp; Office door &nbsp;·&nbsp; Unit entrance &nbsp;·&nbsp; Access kiosk</span><span class="placement-arrow">&rsaquo;</span></a><a href="/parking" class="placement-row"><span class="placement-label">Parking</span><span class="placement-spots">Gate booth &nbsp;·&nbsp; Lot entrance &nbsp;·&nbsp; Barrier gate &nbsp;·&nbsp; Info kiosk</span><span class="placement-arrow">&rsaquo;</span></a><a href="/gym" class="placement-row"><span class="placement-label">24/7 Gym</span><span class="placement-spots">Front desk &nbsp;·&nbsp; Main entrance &nbsp;·&nbsp; Locker room &nbsp;·&nbsp; Equipment area</span><span class="placement-arrow">&rsaquo;</span></a></div></div><div class="cta"><h2>Ready to get started?</h2><p>14-day free trial. No credit card required.</p><a href="/signup">Sign Up Now</a></div></div><div class="footer"><p>© Hotline. All rights reserved.</p></div></body></html>"""
+HOW_IT_WORKS_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>How It Works — Hotline</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f8f8f6;color:#333}.nav{display:flex;align-items:center;padding:12px 24px;position:relative}.nav .logo{flex:1;text-align:center}.nav .logo svg{height:36px}.nav-links{position:absolute;right:24px;display:flex;gap:20px;align-items:center}.nav a{text-decoration:none;color:#333;font-size:13px;font-weight:500}.nav a.signup-btn{background:#ea580c;color:#fff;padding:8px 16px;border-radius:6px;font-weight:600}.container{max-width:700px;margin:40px auto;padding:0 24px}.hero{text-align:center;margin-bottom:40px}.hero h1{font-size:42px;font-weight:700;line-height:1.2;margin-bottom:16px;color:#1a1a1a}.hero p{font-size:16px;color:#666}.steps{display:flex;flex-direction:column;gap:30px;margin:50px 0}.step{display:flex;gap:20px}.step-num{flex-shrink:0;width:40px;height:40px;background:#ea580c;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}.step-content h3{font-weight:600;font-size:16px;margin-bottom:8px;color:#1a1a1a}.step-content p{font-size:14px;color:#666;line-height:1.5}.section-divider{margin:40px 0;padding:40px 0;border-top:1px solid #e0e0dc}.placement-title{font-size:18px;font-weight:700;margin-bottom:24px;color:#1a1a1a;text-align:center}.placement-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:0}@media(max-width:700px){.placement-grid{grid-template-columns:repeat(2,1fr)}}.placement-card{padding:18px 20px;background:#fff;border-radius:8px;border:1px solid #e0e0dc}.placement-card h4{font-weight:700;font-size:14px;margin-bottom:6px}.placement-card p{font-size:13px;color:#666;margin:0;line-height:1.5}.placement-list{display:flex;flex-direction:column;gap:0;margin-bottom:40px;border:1px solid #e0e0dc;border-radius:10px;overflow:hidden}.placement-row{display:flex;align-items:baseline;padding:14px 20px;border-bottom:1px solid #e0e0dc;background:#fff}.placement-row:last-child{border-bottom:none}.placement-row:hover{background:#fff7ed;text-decoration:none}.placement-row{text-decoration:none;color:inherit}.placement-arrow{margin-left:auto;color:#ea580c;font-size:18px;font-weight:300;opacity:0.6}.placement-label{font-weight:700;font-size:14px;color:#ea580c;min-width:140px;flex-shrink:0}.placement-spots{font-size:13px;color:#666;line-height:1.5}.cta{text-align:center;padding:40px 24px;background:#fff7ed;border-radius:12px;border:1px solid #fed7aa}.cta h2{font-size:20px;font-weight:700;margin-bottom:8px;color:#1a1a1a}.cta p{font-size:14px;color:#888;margin-bottom:20px}.cta a{display:inline-block;padding:12px 28px;background:#ea580c;color:#fff;border-radius:6px;font-weight:700;text-decoration:none}.footer{margin-top:60px;padding-top:24px;border-top:1px solid #e0e0dc;text-align:center;font-size:13px;color:#999}a{color:#ea580c;text-decoration:none}.dropdown{position:relative;display:inline-block}.dropdown-menu{display:none;position:absolute;min-width:180px;z-index:100;top:100%;right:0;padding-top:8px}.dropdown-menu-inner{display:flex;flex-direction:column;gap:4px;background:#fff;box-shadow:0 8px 16px rgba(0,0,0,0.1);border-radius:8px;padding:8px;border:1px solid #e0e0dc}.dropdown-menu a{display:block;padding:8px 12px;border-radius:4px;transition:background 0.2s}.dropdown-menu a:hover{background:#f5f5f5}.dropdown:hover .dropdown-menu{display:block}</style></head><body><nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" viewBox="0 0 224.87999 67.499998" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="d1h"><path d="M 0.765625 9 L 48 9 L 48 57 L 0.765625 57 Z M 0.765625 9 " clip-rule="nonzero"/></clipPath><clipPath id="d2h"><path d="M 208 20 L 223.992188 20 L 223.992188 45 L 208 45 Z M 208 20 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#d1h)"><path fill="#ea580c" d="M 7.839844 9.40625 L 40.8125 9.40625 C 41.277344 9.40625 41.738281 9.449219 42.191406 9.542969 C 42.648438 9.632812 43.089844 9.765625 43.515625 9.945312 C 43.945312 10.121094 44.351562 10.339844 44.738281 10.597656 C 45.125 10.855469 45.480469 11.152344 45.808594 11.480469 C 46.136719 11.808594 46.429688 12.167969 46.6875 12.554688 C 46.945312 12.941406 47.164062 13.347656 47.339844 13.777344 C 47.519531 14.207031 47.652344 14.648438 47.742188 15.105469 C 47.832031 15.5625 47.878906 16.023438 47.878906 16.488281 L 47.878906 49.542969 C 47.878906 50.007812 47.832031 50.46875 47.742188 50.925781 C 47.652344 51.382812 47.519531 51.824219 47.339844 52.253906 C 47.164062 52.683594 46.945312 53.09375 46.6875 53.480469 C 46.429688 53.867188 46.136719 54.222656 45.808594 54.550781 C 45.480469 54.878906 45.125 55.175781 44.738281 55.433594 C 44.351562 55.691406 43.945312 55.910156 43.515625 56.085938 C 43.089844 56.265625 42.648438 56.398438 42.191406 56.492188 C 41.738281 56.582031 41.277344 56.625 40.8125 56.625 L 7.839844 56.625 C 7.378906 56.625 6.917969 56.582031 6.460938 56.492188 C 6.007812 56.398438 5.566406 56.265625 5.136719 56.085938 C 4.707031 55.910156 4.300781 55.691406 3.914062 55.433594 C 3.53125 55.175781 3.171875 54.878906 2.84375 54.550781 C 2.515625 54.222656 2.222656 53.867188 1.964844 53.480469 C 1.707031 53.09375 1.492188 52.683594 1.3125 52.253906 C 1.136719 51.824219 1 51.382812 0.910156 50.925781 C 0.820312 50.46875 0.777344 50.007812 0.777344 49.542969 L 0.777344 16.488281 C 0.777344 16.023438 0.820312 15.5625 0.910156 15.105469 C 1 14.648438 1.136719 14.207031 1.3125 13.777344 C 1.492188 13.347656 1.707031 12.941406 1.964844 12.554688 C 2.222656 12.167969 2.515625 11.808594 2.84375 11.480469 C 3.171875 11.152344 3.53125 10.855469 3.914062 10.597656 C 4.300781 10.339844 4.707031 10.121094 5.136719 9.945312 C 5.566406 9.765625 6.007812 9.632812 6.460938 9.542969 C 6.917969 9.449219 7.378906 9.40625 7.839844 9.40625 Z M 7.839844 9.40625 " fill-opacity="1" fill-rule="nonzero"/></g><g fill="#ffffff" fill-opacity="1"><g transform="translate(10.726965, 46.401259)"><path d="M 20.734375 -12.542969 L 8.230469 -12.542969 L 8.230469 0 L 3.109375 0 L 3.109375 -29.109375 L 8.175781 -29.109375 L 8.175781 -17.214844 L 20.734375 -17.214844 L 20.734375 -29.109375 L 25.816406 -29.109375 L 25.816406 0 L 20.734375 0 Z M 20.734375 -12.542969 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(62.007197, 44.82787)"><path d="M 17.277344 -10.453125 L 6.859375 -10.453125 L 6.859375 0 L 2.589844 0 L 2.589844 -24.257812 L 6.8125 -24.257812 L 6.8125 -14.34375 L 17.277344 -14.34375 L 17.277344 -24.257812 L 21.515625 -24.257812 L 21.515625 0 L 17.277344 0 Z M 17.277344 -10.453125 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(89.370287, 44.82787)"><path d="M 12.859375 -24.640625 C 16.707031 -24.640625 19.71875 -23.261719 21.894531 -20.5 L 22.734375 -19.265625 C 23.976562 -17.132812 24.597656 -14.632812 24.597656 -11.769531 C 24.597656 -8.511719 23.691406 -5.726562 21.882812 -3.402344 C 21.433594 -2.824219 20.945312 -2.308594 20.40625 -1.859375 C 18.375 -0.136719 15.867188 0.722656 12.886719 0.722656 C 9.1875 0.722656 6.246094 -0.585938 4.0625 -3.203125 C 2.140625 -5.503906 1.179688 -8.421875 1.179688 -11.953125 C 1.179688 -16 2.40625 -19.210938 4.859375 -21.585938 C 6.980469 -23.625 9.648438 -24.640625 12.859375 -24.640625 Z M 12.859375 -20.75 C 10.363281 -20.75 8.425781 -19.769531 7.046875 -17.816406 C 5.949219 -16.25 5.402344 -14.292969 5.402344 -11.953125 C 5.402344 -8.839844 6.324219 -6.480469 8.167969 -4.867188 C 9.445312 -3.738281 11.019531 -3.171875 12.886719 -3.171875 C 15.363281 -3.171875 17.292969 -4.132812 18.675781 -6.050781 C 19.796875 -7.585938 20.359375 -9.511719 20.359375 -11.828125 C 20.359375 -15.089844 19.414062 -17.527344 17.523438 -19.136719 C 16.257812 -20.210938 14.699219 -20.75 12.859375 -20.75 Z M 12.859375 -20.75 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(118.49594, 44.82787)"><path d="M 12.421875 -20.363281 L 12.421875 0 L 8.203125 0 L 8.203125 -20.363281 L 0.660156 -20.363281 L 0.660156 -24.257812 L 19.921875 -24.257812 L 19.921875 -20.363281 Z M 12.421875 -20.363281 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(142.379885, 44.82787)"><path d="M 6.71875 -24.257812 L 6.71875 -3.894531 L 18.035156 -3.894531 L 18.035156 0 L 2.5 0 L 2.5 -24.257812 Z M 6.71875 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(164.53192, 44.82787)"><path d="M 3.128906 -24.257812 L 7.394531 -24.257812 L 7.394531 0 L 3.128906 0 Z M 3.128906 -24.257812 "/></g></g><g fill="#ea580c" fill-opacity="1"><g transform="translate(177.963102, 44.82787)"><path d="M 21.574219 -24.257812 L 21.574219 0 L 17.265625 0 L 6.445312 -17.007812 L 6.445312 0 L 2.375 0 L 2.375 -24.257812 L 6.5625 -24.257812 L 17.507812 -7.082031 L 17.507812 -24.257812 Z M 21.574219 -24.257812 "/></g></g><g clip-path="url(#d2h)"><g fill="#ea580c" fill-opacity="1"><g transform="translate(205.326192, 44.82787)"><path d="M 7.042969 -10.453125 L 7.042969 -3.894531 L 20.546875 -3.894531 L 20.546875 0 L 2.820312 0 L 2.820312 -24.257812 L 19.980469 -24.257812 L 19.980469 -20.363281 L 7.042969 -20.363281 L 7.042969 -14.34375 L 19.519531 -14.34375 L 19.519531 -10.453125 Z M 7.042969 -10.453125 "/></g></g></g></svg></a><div class="nav-links"><a href="/">Demo</a><a href="/how-it-works">How It Works</a><div class="dropdown"><a href="/industries">Who We Support</a><div class="dropdown-menu"><div class="dropdown-menu-inner"><a href="/laundromat">Laundromat</a><a href="/selfstorage">Self Storage</a><a href="/mhc">Mobile Home Parks</a><a href="/gym">24/7 Gym</a><a href="/carwash">Car Wash</a><a href="/rvpark">RV Parks</a></div></div></div><a href="/resources">Resources</a><a href="/signup" class="signup-btn">Sign Up</a></div></nav><div class="container"><div class="hero"><h1>How It Works</h1><p>Hotline reads, triages, and tiers every message automatically — so only what matters reaches you, instantly.</p></div><div class="steps"><div class="step"><div class="step-num">1</div><div class="step-content"><h3>Display your Hotline</h3><p>Put your Hotline where customers can find it — a QR code or text number, right where problems happen.</p></div></div><div class="step"><div class="step-num">2</div><div class="step-content"><h3>Customer texts — and gets an instant reply</h3><p>The moment something's wrong, they text. Hotline responds automatically in seconds, so the customer knows they've been heard.</p></div></div><div class="step"><div class="step-num">3</div><div class="step-content"><h3>Hotline triages and tiers it — automatically</h3><p>Every message is read and sorted in real time. A flooding bathroom (Tier 1) is not the same as a vending machine out of snacks (Tier 4) — and Hotline knows the difference.</p></div></div><div class="step"><div class="step-num">4</div><div class="step-content"><h3>You hear only what matters</h3><p>Critical issues reach you instantly with the customer's words and the tier. Low-priority feedback is logged, not pushed. No noise, no app, no dashboard.</p></div></div></div><div class="section-divider" style="border-top:none;padding-top:0;margin-top:0"><h2 class="placement-title">Manage everything by text.</h2><p style="text-align:center;font-size:14px;color:#888;margin:-16px 0 28px">No app. No dashboard. No login. Your phone is the dashboard.</p><div style="background:#1a1a1a;border-radius:14px;overflow:hidden"><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">REPLY</span><span style="font-size:14px;color:#ccc">Open a direct line to the last customer</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">CLOSE</span><span style="font-size:14px;color:#ccc">End the conversation, auto-replies resume</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">STATUS</span><span style="font-size:14px;color:#ccc">See your current alert settings</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">PAUSE&nbsp;/&nbsp;RESUME</span><span style="font-size:14px;color:#ccc">Stop or restart alerts</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid #2a2a2a"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">TIER2&nbsp;/&nbsp;TIER3</span><span style="font-size:14px;color:#ccc">Switch between critical-only or all alerts</span></div><div style="display:flex;align-items:center;gap:16px;padding:18px 24px"><span style="background:#ea580c;color:#fff;font-size:11px;font-weight:700;letter-spacing:0.08em;padding:5px 12px;border-radius:6px;white-space:nowrap">MENU</span><span style="font-size:14px;color:#ccc">See all commands</span></div></div></div><div class="section-divider"><h2 class="placement-title" style="margin-bottom:16px">The four tiers</h2><div class="placement-grid" style="margin-bottom:48px"><div class="placement-card" style="border-left:3px solid #dc2626"><h4 style="color:#dc2626">Tier 1 · Urgent</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Safety, flooding, break-ins. Reaches you instantly.</p></div><div class="placement-card" style="border-left:3px solid #ea580c"><h4 style="color:#ea580c">Tier 2 · Issue</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Broken equipment, access problems. Sent right away.</p></div><div class="placement-card" style="border-left:3px solid #ca8a04"><h4 style="color:#ca8a04">Tier 3 · Feedback</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Complaints, suggestions. Logged for your digest.</p></div><div class="placement-card" style="border-left:3px solid #9ca3af"><h4 style="color:#6b7280">Tier 4 · Logged</h4><p style="font-size:13px;color:#666;margin:0;line-height:1.5">Minor notes, spam filtered. Recorded quietly.</p></div></div><h2 class="placement-title">Where to Display Your Hotline</h2><div class="placement-list"><a href="/laundromat" class="placement-row"><span class="placement-label">Laundromat</span><span class="placement-spots">Next to washers &nbsp;·&nbsp; By dryers &nbsp;·&nbsp; Coin dispenser &nbsp;·&nbsp; Entrance wall</span><span class="placement-arrow">&rsaquo;</span></a><a href="/selfstorage" class="placement-row"><span class="placement-label">Self Storage</span><span class="placement-spots">Gate entrance &nbsp;·&nbsp; Office door &nbsp;·&nbsp; Unit entrance &nbsp;·&nbsp; Access kiosk</span><span class="placement-arrow">&rsaquo;</span></a><a href="/mhc" class="placement-row"><span class="placement-label">Mobile Home Parks</span><span class="placement-spots">Park entrance &nbsp;·&nbsp; Office window &nbsp;·&nbsp; Mailbox kiosk &nbsp;·&nbsp; Common area</span><span class="placement-arrow">&rsaquo;</span></a><a href="/gym" class="placement-row"><span class="placement-label">24/7 Gym</span><span class="placement-spots">Front desk &nbsp;·&nbsp; Main entrance &nbsp;·&nbsp; Locker room &nbsp;·&nbsp; Equipment area</span><span class="placement-arrow">&rsaquo;</span></a><a href="/carwash" class="placement-row"><span class="placement-label">Car Wash</span><span class="placement-spots">Payment booth &nbsp;·&nbsp; Tunnel entrance &nbsp;·&nbsp; Lane entrance &nbsp;·&nbsp; Waiting area</span><span class="placement-arrow">&rsaquo;</span></a><a href="/rvpark" class="placement-row"><span class="placement-label">RV Parks</span><span class="placement-spots">Check-in &nbsp;·&nbsp; Bathhouse &nbsp;·&nbsp; Hookup pedestal &nbsp;·&nbsp; Loop entrance</span><span class="placement-arrow">&rsaquo;</span></a></div></div><div class="cta"><h2>Ready to get started?</h2><p>14-day free pilot. No credit card required.</p><a href="/signup">Sign Up Now</a></div></div><div class="footer"><p>© Hotline. All rights reserved.</p></div></body></html>"""
 
 
 
@@ -3862,7 +4139,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="problem">
 
-<h2 class="sect">The problem with absentee operations</h2>
+<h2 class="sect">The problem with operating remotely</h2>
 <p class="sect-sub" style="margin-bottom:20px">Equipment fails silently. Customers leave frustrated. You find out too late.</p>
 
 <div class="problem-grid">
@@ -3906,20 +4183,21 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h2 class="sect">Operations We Serve</h2>
 <div class="verticals">
 <a href="/laundromat" class="v-card"><h3>Laundromat</h3><p>Machine failures, leaks, access issues, coin jams</p><span class="v-cta">See it &rarr;</span></a>
-<a href="/carwash" class="v-card"><h3>Car Wash</h3><p>Bay jams, tunnel stops, payment failures, stuck gates</p><span class="v-cta">See it &rarr;</span></a>
 <a href="/selfstorage" class="v-card"><h3>Self Storage</h3><p>Gate access, unit locks, leaks, after-hours issues</p><span class="v-cta">See it &rarr;</span></a>
-<a href="/parking" class="v-card"><h3>Parking</h3><p>Kiosk outages, stuck gates, payment failures</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/mhc" class="v-card"><h3>Mobile Home Parks</h3><p>Water &amp; sewer, gate access, utilities, road hazards</p><span class="v-cta">See it &rarr;</span></a>
 <a href="/gym" class="v-card"><h3>24/7 Gym</h3><p>Broken equipment, access fobs, safety issues</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/carwash" class="v-card"><h3>Car Wash</h3><p>Bay jams, tunnel stops, payment failures, stuck gates</p><span class="v-cta">See it &rarr;</span></a>
+<a href="/rvpark" class="v-card"><h3>RV Parks</h3><p>Hookup &amp; power failures, sewer, gate codes, bathhouse</p><span class="v-cta">See it &rarr;</span></a>
 </div>
 
 </div>
 
 <div class="cta-block">
-<a href="/signup">Start your free trial &rarr;</a>
-<span class="fine">14-day free trial. No credit card. Cancel by text.</span>
+<a href="/signup">Start your free pilot &rarr;</a>
+<span class="fine">14-day free pilot. No credit card. Cancel by text.</span>
 </div>
 
-<footer>Hotline &middot; Real-time alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
+<footer>Hotline &middot; Real-time alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 </body></html>"""
 
 
@@ -3976,7 +4254,7 @@ article ul li::before{content:'*';position:absolute;left:0;color:#ea580c;font-we
 footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:1px solid #e0e0dc;margin-top:40px}
 """
 
-_ARTICLE_FOOT = """<footer>Hotline &middot; Real-time SMS alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>"""
+_ARTICLE_FOOT = """<footer>Hotline &middot; Real-time SMS alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>"""
 
 _ARTICLE_CTA = """<div class="article-cta"><h3>Set up your Hotline today.</h3><a href="https://hotlinetxt.com/signup" class="cta-btn">Sign up &rarr;</a></div>"""
 
@@ -4192,12 +4470,12 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">How much does Hotline cost? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>$19.99 per month after your free trial. No setup fees, no contracts, cancel anytime by texting or emailing us.</p></div>
+<div class="faq-a"><p>$19.99 per month after your free pilot. No setup fees, no contracts, cancel anytime by texting or emailing us.</p></div>
 </div>
 
 <div class="faq-item">
-<button class="faq-q" onclick="toggle(this)">Is there a free trial? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes, 14 days. No credit card required to start. You get full access to everything during the trial.</p></div>
+<button class="faq-q" onclick="toggle(this)">Is there a free pilot? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes, 14 days. No credit card required to start. You get full access to everything during the pilot.</p></div>
 </div>
 
 <div class="faq-item">
@@ -4651,7 +4929,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <h1>Start getting alerts today</h1>
 <p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready Hotline instantly.</p>
 <div class="card">
-<div class="trial">14-day free trial &middot; No credit card required</div>
+<div class="trial">14-day free pilot &middot; No credit card required</div>
 <div style="text-align:center;font-size:13px;color:#888;margin:-8px 0 16px">Then $19.99/month. Cancel anytime.</div>
 <div class="result" id="result"></div>
 <label>Business name</label><input type="text" id="f-name" placeholder="Joe's Coffee">
@@ -4660,7 +4938,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <label>Email (for digest reports)</label><input type="email" id="f-email" placeholder="you@example.com">
 <label>Business website (optional)</label><input type="url" id="f-url" placeholder="https://joescoffee.com">
 <label>Business zip code</label><input type="text" id="f-zip" placeholder="78745" maxlength="5" pattern="[0-9]{5}" inputmode="numeric" required>
-<label>Type of operation</label><select id="f-vertical"><option value="">Select your operation...</option><option value="laundromat">Laundromat</option><option value="carwash">Car Wash</option><option value="selfstorage">Self Storage</option><option value="parking">Parking / Garage</option><option value="gym">24/7 Gym</option><option value="other">Other</option></select>
+<label>Type of operation</label><select id="f-vertical"><option value="">Select your operation...</option><option value="laundromat">Laundromat</option><option value="selfstorage">Self Storage</option><option value="mhc">Mobile Home Park</option><option value="gym">24/7 Gym</option><option value="carwash">Car Wash</option><option value="rvpark">RV Park</option><option value="other">Other</option></select>
 
 
 <!-- ============================================================
@@ -4679,7 +4957,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
      END TWILIO COMPLIANCE BLOCK
      ============================================================ -->
 
-<button class="btn" id="f-btn" onclick="signup()">Start my free trial &rarr;</button>
+<button class="btn" id="f-btn" onclick="signup()">Start my free pilot &rarr;</button>
 </div>
 <div class="steps">
 <div class="step"><div class="step-num">1</div><h3>Sign up</h3><p>Get your QR code and sign in seconds</p></div>
@@ -4687,7 +4965,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="step"><div class="step-num">3</div><h3>Get alerted</h3><p>Know the moment something needs your attention</p></div>
 </div>
 </div>
-<footer>Hotline &middot; Real-time SMS alerts for absentee operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
+<footer>Hotline &middot; Real-time SMS alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
 async function signup(){
   const name=document.getElementById('f-name').value.trim();
@@ -4732,8 +5010,14 @@ def vertical_carwash(): _ensure_init(); return Response(content=_ga(VERTICAL_CAR
 @app.get("/selfstorage")
 def vertical_selfstorage(): _ensure_init(); return Response(content=_ga(VERTICAL_SELFSTORAGE_HTML), media_type="text/html")
 
+@app.get("/mhc")
+def vertical_mhc(): _ensure_init(); return Response(content=_ga(VERTICAL_MHC_HTML), media_type="text/html")
+
+@app.get("/rvpark")
+def vertical_rvpark(): _ensure_init(); return Response(content=_ga(VERTICAL_RVPARK_HTML), media_type="text/html")
+
 @app.get("/parking")
-def vertical_parking(): _ensure_init(); return Response(content=_ga(VERTICAL_PARKING_HTML), media_type="text/html")
+def vertical_parking_redirect(): return RedirectResponse(url="/industries", status_code=301)
 
 @app.get("/gym")
 def vertical_gym(): _ensure_init(); return Response(content=_ga(VERTICAL_GYM_HTML), media_type="text/html")
@@ -4961,7 +5245,7 @@ async def stripe_webhook(request: Request):
             PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "")
             link_part = f"\nUpdate payment: {PAYMENT_LINK}" if PAYMENT_LINK else ""
             for p in get_alert_phones(biz):
-                send_sms(p, f"&#9888; Hotline payment failed. Alerts may stop soon.{link_part}")
+                send_sms(p, f"\u26a0\ufe0f Hotline payment failed. Alerts may stop soon.{link_part}")
 
     elif event_type == "customer.subscription.updated":
         status_map = {"active": "active", "past_due": "past_due", "canceled": "canceled",
