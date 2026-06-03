@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v58"
+VERSION = "v59"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -2521,7 +2521,7 @@ async function adminPost(path,body){{
   return r.json();
 }}
 async function adminDigest(bizId){{
-  const d=await fetch('/digest?bid='+bizId,{{method:'POST'}}).then(r=>r.json()).catch(e=>({error:e.message}));
+  const d=await fetch('/digest?bid='+bizId,{{method:'POST'}}).then(r=>r.json()).catch(e=>({{'error':e.message}}));
   if(d&&d.digests_sent>0)toast("Digest sent",true);
   else toast((d&&d.error)||"Failed",false);
 }}
