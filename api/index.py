@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v60"
+VERSION = "v61"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -138,7 +138,8 @@ def init_db():
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
                          ("business_code","\'\'"),("trial_ends_at","\'\'"),
                          ("sub_status","\'trialing\'"),("stripe_customer_id","\'\'"),
-                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'"),("vertical","\'\'")]:
+                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'"),("vertical","\'\'"),
+                         ("last_digest_sent_at","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
