@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v61"
+VERSION = "v62"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -1504,7 +1504,7 @@ def _digest_tier_section(tier, label, color, tint, blurb, rows, total, tz="Ameri
         return ""
     items = []
     for r in rows:
-        text = r.get("summary") or r.get("message_text") or ""
+        text = r.get("message_text") or r.get("summary") or ""
         text = _digest_esc(text)
         if len(text) > 200: text = text[:200].rstrip() + "&hellip;"
         cat = _digest_esc((r.get("category") or "").replace("_"," "))
