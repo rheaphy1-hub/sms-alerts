@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v59"
+VERSION = "v60"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -1927,7 +1927,12 @@ def debug_db():
 @app.post("/digest")
 def digest_endpoint(freq: str = Query("weekly"), bid: str = Query("")):
     _ensure_init()
-    return {"digests_sent": send_all_digests(force_freq=freq, bid=bid if bid else None)}
+    try:
+        result = send_all_digests(force_freq=freq, bid=bid if bid else None)
+        return {"digests_sent": result}
+    except Exception as e:
+        logger.error(f"[DIGEST] Failed: {e}", exc_info=True)
+        raise
 
 @app.post("/cron/digests")
 def cron_digests_endpoint(admin_key: str = Query("")):
