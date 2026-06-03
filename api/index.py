@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v62"
+VERSION = "v63"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -549,7 +549,7 @@ def get_stats(bid, days=7):
             tier_counts[tr] = tier_counts.get(tr,0) + r["cnt"]
         # Message rows grouped by tier (capped). Customer phone is intentionally NOT selected.
         by_tier = {1:[],2:[],3:[],4:[]}
-        for r in _fetchall(c, _q("SELECT tier, category, summary, message_text, acknowledged, created_at FROM messages WHERE business_id=? AND created_at>? ORDER BY tier ASC, created_at DESC"), (bid, cutoff)):
+        for r in _fetchall(c, _q("SELECT tier, category, summary, message_text, auto_reply, created_at FROM messages WHERE business_id=? AND created_at>? ORDER BY tier ASC, created_at DESC"), (bid, cutoff)):
             tr = r["tier"] if r["tier"] in (1,2,3,4) else 4
             if len(by_tier[tr]) < DIGEST_TIER_CAP:
                 by_tier[tr].append(dict(r))
@@ -1487,14 +1487,13 @@ DIGEST_TIERS = [
 
 def _digest_fmt_time(iso, tz="America/Chicago"):
     try:
-        import pytz
+        from zoneinfo import ZoneInfo
         dt_utc = datetime.fromisoformat(iso.replace("Z","+00:00"))
-        tz_obj = pytz.timezone(tz)
-        dt_local = dt_utc.astimezone(tz_obj)
+        dt_local = dt_utc.astimezone(ZoneInfo(tz))
         abbr = dt_local.strftime("%Z")
         return dt_local.strftime(f"%b %-d, %-I:%M %p {abbr}")
     except Exception:
-        return ""
+        return iso[:16] if iso else ""
 
 def _digest_esc(v):
     return (str(v or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
@@ -1504,23 +1503,20 @@ def _digest_tier_section(tier, label, color, tint, blurb, rows, total, tz="Ameri
         return ""
     items = []
     for r in rows:
-        text = r.get("message_text") or r.get("summary") or ""
-        text = _digest_esc(text)
-        if len(text) > 200: text = text[:200].rstrip() + "&hellip;"
+        text = _digest_esc(r.get("message_text") or r.get("summary") or "")
+        if len(text) > 300: text = text[:300].rstrip() + "&hellip;"
+        reply = _digest_esc(r.get("auto_reply") or "")
+        if len(reply) > 300: reply = reply[:300].rstrip() + "&hellip;"
         cat = _digest_esc((r.get("category") or "").replace("_"," "))
         when = _digest_esc(_digest_fmt_time(r.get("created_at",""), tz=tz))
-        ack = ""
-        if tier in (1,2):
-            if r.get("acknowledged"):
-                ack = '<span style="color:#22C55E;font-size:11px;font-weight:600;white-space:nowrap">&#10003; acknowledged</span>'
-            else:
-                ack = '<span style="color:#DC2626;font-size:11px;font-weight:600;white-space:nowrap">&bull; open</span>'
         meta = " &middot; ".join([x for x in [cat, when] if x])
+        reply_html = (f'<div style="margin-top:6px;padding:6px 10px;background:#FFF7ED;border-left:3px solid #EA580C;'
+                      f'font-size:12px;color:#92400E;line-height:1.4"><strong>We replied:</strong> {reply}</div>') if reply else ""
         items.append(
             f'<tr><td style="padding:12px 16px;border-top:1px solid #DDDDDD">'
             f'<div style="font-size:14px;color:#1A1A1A;line-height:1.45">{text}</div>'
-            f'<div style="margin-top:4px;display:flex;justify-content:space-between;gap:12px">'
-            f'<span style="font-size:11px;color:#888;text-transform:capitalize">{meta}</span>{ack}</div>'
+            f'{reply_html}'
+            f'<div style="margin-top:4px"><span style="font-size:11px;color:#888;text-transform:capitalize">{meta}</span></div>'
             f'</td></tr>'
         )
     more = ""
