@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v56"
+VERSION = "v57"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -100,7 +100,8 @@ def init_db():
             digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
             website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
             twilio_number TEXT NOT NULL DEFAULT \'\', muted_until TEXT, paused INTEGER DEFAULT 0,
-            alert_include_images INTEGER DEFAULT 1, created_at TEXT NOT NULL)""",
+            alert_include_images INTEGER DEFAULT 1, timezone TEXT NOT NULL DEFAULT 'America/Chicago',
+            last_digest_sent_at TEXT, created_at TEXT NOT NULL)""",
         f"""CREATE TABLE IF NOT EXISTS messages (
             id {s} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
             message_text TEXT NOT NULL, tier INTEGER, category TEXT, sentiment TEXT,
@@ -1483,17 +1484,21 @@ DIGEST_TIERS = [
     (4, "Routine",  "#6B7280", "#F8F8F6", "Notes, questions, positive feedback"),
 ]
 
-def _digest_fmt_time(iso):
+def _digest_fmt_time(iso, tz="America/Chicago"):
     try:
-        dt = datetime.fromisoformat(iso.replace("Z","+00:00"))
-        return dt.strftime("%b %-d, %-I:%M %p")
+        import pytz
+        dt_utc = datetime.fromisoformat(iso.replace("Z","+00:00"))
+        tz_obj = pytz.timezone(tz)
+        dt_local = dt_utc.astimezone(tz_obj)
+        abbr = dt_local.strftime("%Z")
+        return dt_local.strftime(f"%b %-d, %-I:%M %p {abbr}")
     except Exception:
         return ""
 
 def _digest_esc(v):
     return (str(v or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
 
-def _digest_tier_section(tier, label, color, tint, blurb, rows, total):
+def _digest_tier_section(tier, label, color, tint, blurb, rows, total, tz="America/Chicago"):
     if not rows:
         return ""
     items = []
@@ -1502,7 +1507,7 @@ def _digest_tier_section(tier, label, color, tint, blurb, rows, total):
         text = _digest_esc(text)
         if len(text) > 200: text = text[:200].rstrip() + "&hellip;"
         cat = _digest_esc((r.get("category") or "").replace("_"," "))
-        when = _digest_esc(_digest_fmt_time(r.get("created_at","")))
+        when = _digest_esc(_digest_fmt_time(r.get("created_at",""), tz=tz))
         ack = ""
         if tier in (1,2):
             if r.get("acknowledged"):
@@ -1531,7 +1536,7 @@ def _digest_tier_section(tier, label, color, tint, blurb, rows, total):
         f'{"".join(items)}{more}</table></div>'
     )
 
-def build_digest_html(name, stats, period="week", days=7, bid=""):
+def build_digest_html(name, stats, period="week", days=7, bid="", tz="America/Chicago"):
     t = stats["total_messages"]; f = stats["flagged_issues"]; a = stats["acknowledged"]
     u = max(f - a, 0)
     tcount = stats.get("tier_counts", {1:0,2:0,3:0,4:0})
@@ -1560,7 +1565,7 @@ def build_digest_html(name, stats, period="week", days=7, bid=""):
 
     sections = "".join(
         _digest_tier_section(tier, label, color, tint, blurb,
-                             by_tier.get(tier, []), tcount.get(tier, 0))
+                             by_tier.get(tier, []), tcount.get(tier, 0), tz=tz)
         for (tier, label, color, tint, blurb) in DIGEST_TIERS
         if tcount.get(tier, 0) > 0
     )
@@ -1604,6 +1609,31 @@ Timestamps in UTC. <a href="mailto:Connect@HotlineTXT.com" style="color:#EA580C;
 </div></td></tr>
 </table></td></tr></table></body></html>"""
 
+def _is_digest_due(bid, freq):
+    """Check if business is due for a scheduled digest."""
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT timezone, last_digest_sent_at, digest_freq FROM businesses WHERE id=?"), (bid,))
+        if not biz or biz.get("digest_freq") == "off": return False
+        last_sent = biz.get("last_digest_sent_at")
+        tz_name = biz.get("timezone", "America/Chicago")
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+            now_tz = datetime.now(tz)
+        except Exception:
+            now_tz = datetime.now(timezone.utc)
+        if freq == "daily":
+            if now_tz.hour < 6: return False
+            if not last_sent: return True
+            last_dt = datetime.fromisoformat(last_sent.replace("Z","+00:00"))
+            return (datetime.now(timezone.utc) - last_dt).total_seconds() > 72000
+        if freq == "weekly":
+            if now_tz.weekday() != 0 or now_tz.hour < 6: return False
+            if not last_sent: return True
+            last_dt = datetime.fromisoformat(last_sent.replace("Z","+00:00"))
+            return (datetime.now(timezone.utc) - last_dt).total_seconds() > 691200
+        return False
+
 def _unsub_token(bid):
     """Generate tamper-proof unsubscribe token."""
     key = (_ADMIN_KEY or "changeme").encode()
@@ -1613,16 +1643,29 @@ def _verify_unsub_token(bid, token):
     """Verify unsubscribe token."""
     return hmac.compare_digest(_unsub_token(bid), token)
 
-def send_all_digests(force_freq=None):
+def send_all_digests(force_freq=None, bid=None):
     sent = 0
-    for biz in get_all_businesses():
+    businesses = get_all_businesses()
+    if bid:
+        with get_db() as c:
+            biz_row = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
+            if biz_row: businesses = [dict(biz_row)]
+            else: return 0
+    for biz in businesses:
         freq = force_freq or biz.get("digest_freq") or "weekly"
+        if freq == "off": continue
         email = biz.get("email","")
         if not email: continue
         days = 1 if freq=="daily" else 7
         stats = get_stats(biz["id"], days=days)
         period = "dai" if freq=="daily" else "week"
-        if send_email(email, f"Hotline {period}ly digest for {biz.get('name','')}", build_digest_html(biz.get("name",""), stats, period, days=days, bid=biz["id"])): sent += 1
+        tz = biz.get("timezone", "America/Chicago")
+        now_date = datetime.now(timezone.utc).strftime("%b %-d")
+        subject = f"Hotline digest: {biz.get('name','')} · {now_date}"
+        if send_email(email, subject, build_digest_html(biz.get("name",""), stats, period, days=days, bid=biz["id"], tz=tz)):
+            with get_db() as c:
+                _execute(c, _q("UPDATE businesses SET last_digest_sent_at=? WHERE id=?"), (datetime.now(timezone.utc).isoformat(), biz["id"]))
+            sent += 1
     return sent
 
 
@@ -1882,7 +1925,23 @@ def debug_db():
     return result
 
 @app.post("/digest")
-def digest_endpoint(freq: str = Query("weekly")): _ensure_init(); return {"digests_sent": send_all_digests(force_freq=freq)}
+def digest_endpoint(freq: str = Query("weekly"), bid: str = Query("")):
+    _ensure_init()
+    return {"digests_sent": send_all_digests(force_freq=freq, bid=bid if bid else None)}
+
+@app.post("/cron/digests")
+def cron_digests_endpoint(admin_key: str = Query("")):
+    """Hourly cron: send digests that are due."""
+    if admin_key != _ADMIN_KEY: return {"error": "Unauthorized"}
+    _ensure_init()
+    sent = 0
+    for biz in get_all_businesses():
+        freq = biz.get("digest_freq", "weekly")
+        if freq == "off": continue
+        if _is_digest_due(biz["id"], freq):
+            result = send_all_digests(force_freq=freq, bid=biz["id"])
+            sent += result
+    return {"digests_sent": sent}
 
 @app.get("/digest-off")
 def digest_off_endpoint(bid: str = Query(""), t: str = Query("")):
