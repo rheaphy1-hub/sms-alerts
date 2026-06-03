@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v54"
+VERSION = "v61"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -100,7 +100,8 @@ def init_db():
             digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
             website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
             twilio_number TEXT NOT NULL DEFAULT \'\', muted_until TEXT, paused INTEGER DEFAULT 0,
-            alert_include_images INTEGER DEFAULT 1, created_at TEXT NOT NULL)""",
+            alert_include_images INTEGER DEFAULT 1, timezone TEXT NOT NULL DEFAULT 'America/Chicago',
+            last_digest_sent_at TEXT, created_at TEXT NOT NULL)""",
         f"""CREATE TABLE IF NOT EXISTS messages (
             id {s} {pk}, business_id TEXT NOT NULL, from_number TEXT NOT NULL,
             message_text TEXT NOT NULL, tier INTEGER, category TEXT, sentiment TEXT,
@@ -137,7 +138,8 @@ def init_db():
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
                          ("business_code","\'\'"),("trial_ends_at","\'\'"),
                          ("sub_status","\'trialing\'"),("stripe_customer_id","\'\'"),
-                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'"),("vertical","\'\'")]:
+                         ("stripe_sub_id","\'\'"),("zip","\'\'"),("city","\'\'"),("state","\'\'"),("vertical","\'\'"),
+                         ("last_digest_sent_at","\'\'")]:
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
@@ -531,6 +533,8 @@ def get_pending_signups():
 def mark_pending_provisioned(pending_id):
     with get_db() as c: _execute(c, _q("UPDATE pending_signups SET provisioned=1 WHERE id=?"), (pending_id,))
 
+DIGEST_TIER_CAP = 25  # max message rows shown per tier in the digest email
+
 def get_stats(bid, days=7):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with get_db() as c:
@@ -538,7 +542,20 @@ def get_stats(bid, days=7):
         flagged = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>?"), (bid, cutoff))["cnt"]
         acked = _fetchone(c, _q("SELECT COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND acknowledged=1 AND created_at>?"), (bid, cutoff))["cnt"]
         top = _fetchone(c, _q("SELECT category,COUNT(*) as cnt FROM messages WHERE business_id=? AND tier IN (1,2) AND created_at>? GROUP BY category ORDER BY cnt DESC LIMIT 1"), (bid, cutoff))
-        return {"total_messages":total,"flagged_issues":flagged,"acknowledged":acked,"top_category":top["category"] if top else "none"}
+        # Per-tier counts (full totals, used for the "+N more" line)
+        tier_counts = {1:0,2:0,3:0,4:0}
+        for r in _fetchall(c, _q("SELECT tier, COUNT(*) as cnt FROM messages WHERE business_id=? AND created_at>? GROUP BY tier"), (bid, cutoff)):
+            tr = r["tier"] if r["tier"] in (1,2,3,4) else 4
+            tier_counts[tr] = tier_counts.get(tr,0) + r["cnt"]
+        # Message rows grouped by tier (capped). Customer phone is intentionally NOT selected.
+        by_tier = {1:[],2:[],3:[],4:[]}
+        for r in _fetchall(c, _q("SELECT tier, category, summary, message_text, acknowledged, created_at FROM messages WHERE business_id=? AND created_at>? ORDER BY tier ASC, created_at DESC"), (bid, cutoff)):
+            tr = r["tier"] if r["tier"] in (1,2,3,4) else 4
+            if len(by_tier[tr]) < DIGEST_TIER_CAP:
+                by_tier[tr].append(dict(r))
+        return {"total_messages":total,"flagged_issues":flagged,"acknowledged":acked,
+                "top_category":top["category"] if top else "none",
+                "tier_counts":tier_counts,"by_tier":by_tier}
 
 
 # --- Website scraping ---
@@ -1461,29 +1478,195 @@ def handle_owner_command(text, business, sender_phone=""):
 
 
 # --- Digest ---
-def build_digest_html(name, stats, period="week"):
-    t,f,a = stats["total_messages"],stats["flagged_issues"],stats["acknowledged"]
-    tc = stats["top_category"].replace("_"," "); u = f - a
-    return f"""<div style="font-family:system-ui;max-width:480px;margin:0 auto;padding:24px">
-<h1 style="font-size:20px;margin:0 0 4px">{name}</h1><p style="color:#888;font-size:14px;margin:0 0 24px">Hotline {period}ly digest</p>
-<div style="display:flex;gap:12px;margin-bottom:24px">
-<div style="flex:1;background:#f5f5f0;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{t}</div><div style="font-size:12px;color:#888">messages</div></div>
-<div style="flex:1;background:#fff4e6;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{f}</div><div style="font-size:12px;color:#888">flagged</div></div>
-<div style="flex:1;background:#e8f5e9;padding:16px;border-radius:10px;text-align:center"><div style="font-size:28px;font-weight:700">{a}</div><div style="font-size:12px;color:#888">acknowledged</div></div></div>
-{"<p style='color:#c0392b;font-size:14px'>&#9888; "+str(u)+" unacknowledged</p>" if u>0 else ""}
-{"<p style='font-size:14px'>Top category: <strong>"+tc+"</strong></p>" if f>0 else ""}
-<p style="font-size:13px;color:#aaa;margin-top:24px">Reply MENU to your Hotline number for commands.</p></div>"""
+DIGEST_TIERS = [
+    (1, "Urgent",   "#DC2626", "#FFF8F5", "Safety, flooding, break-ins"),
+    (2, "Issue",    "#EA580C", "#FFF8F5", "Broken equipment, access problems"),
+    (3, "Feedback", "#CA8A04", "#FFFDF5", "Complaints and suggestions"),
+    (4, "Routine",  "#6B7280", "#F8F8F6", "Notes, questions, positive feedback"),
+]
 
-def send_all_digests(force_freq=None):
+def _digest_fmt_time(iso, tz="America/Chicago"):
+    try:
+        import pytz
+        dt_utc = datetime.fromisoformat(iso.replace("Z","+00:00"))
+        tz_obj = pytz.timezone(tz)
+        dt_local = dt_utc.astimezone(tz_obj)
+        abbr = dt_local.strftime("%Z")
+        return dt_local.strftime(f"%b %-d, %-I:%M %p {abbr}")
+    except Exception:
+        return ""
+
+def _digest_esc(v):
+    return (str(v or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+
+def _digest_tier_section(tier, label, color, tint, blurb, rows, total, tz="America/Chicago"):
+    if not rows:
+        return ""
+    items = []
+    for r in rows:
+        text = r.get("summary") or r.get("message_text") or ""
+        text = _digest_esc(text)
+        if len(text) > 200: text = text[:200].rstrip() + "&hellip;"
+        cat = _digest_esc((r.get("category") or "").replace("_"," "))
+        when = _digest_esc(_digest_fmt_time(r.get("created_at",""), tz=tz))
+        ack = ""
+        if tier in (1,2):
+            if r.get("acknowledged"):
+                ack = '<span style="color:#22C55E;font-size:11px;font-weight:600;white-space:nowrap">&#10003; acknowledged</span>'
+            else:
+                ack = '<span style="color:#DC2626;font-size:11px;font-weight:600;white-space:nowrap">&bull; open</span>'
+        meta = " &middot; ".join([x for x in [cat, when] if x])
+        items.append(
+            f'<tr><td style="padding:12px 16px;border-top:1px solid #DDDDDD">'
+            f'<div style="font-size:14px;color:#1A1A1A;line-height:1.45">{text}</div>'
+            f'<div style="margin-top:4px;display:flex;justify-content:space-between;gap:12px">'
+            f'<span style="font-size:11px;color:#888;text-transform:capitalize">{meta}</span>{ack}</div>'
+            f'</td></tr>'
+        )
+    more = ""
+    if total > len(rows):
+        more = (f'<tr><td style="padding:10px 16px;border-top:1px solid #DDDDDD;'
+                f'font-size:12px;color:#888;text-align:center">+{total-len(rows)} more in your log</td></tr>')
+    return (
+        f'<div style="margin:0 0 18px;border:1px solid #DDDDDD;border-radius:12px;overflow:hidden">'
+        f'<div style="background:{tint};padding:12px 16px;border-left:4px solid {color}">'
+        f'<span style="font-size:13px;font-weight:700;color:{color}">Tier {tier} &middot; {label}</span>'
+        f'<span style="float:right;font-size:13px;font-weight:700;color:{color}">{total}</span>'
+        f'<div style="font-size:11px;color:#888;margin-top:2px">{blurb}</div></div>'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">'
+        f'{"".join(items)}{more}</table></div>'
+    )
+
+def build_digest_html(name, stats, period="week", days=7, bid="", tz="America/Chicago"):
+    t = stats["total_messages"]; f = stats["flagged_issues"]; a = stats["acknowledged"]
+    u = max(f - a, 0)
+    tcount = stats.get("tier_counts", {1:0,2:0,3:0,4:0})
+    by_tier = stats.get("by_tier", {1:[],2:[],3:[],4:[]})
+    period_label = "Daily" if period == "dai" else "Weekly"
+    name_e = _digest_esc(name)
+
+    logo = (
+        '<span style="display:inline-block;background:#EA580C;color:#FFFFFF;font-weight:700;'
+        'font-size:13px;border-radius:3px;padding:2px 6px;margin-right:6px;'
+        'font-family:\'DM Sans\',system-ui,sans-serif">H</span>'
+        '<span style="color:#EA580C;font-weight:700;font-size:13px;letter-spacing:1.95px;'
+        'font-family:\'DM Sans\',system-ui,sans-serif">HOTLINE</span>'
+    )
+
+    top_cat = stats.get("top_category", "—").replace("_", " ").title()
+    stat_boxes = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:22px">'
+        '<tr>'
+        f'<td width="33%" style="padding:0 5px"><div style="background:#FAFAF8;border:1px solid #DDDDDD;padding:16px 8px;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:#1A1A1A">{t}</div><div style="font-size:11px;color:#888">messages</div></div></td>'
+        f'<td width="33%" style="padding:0 5px"><div style="background:#FFF8F5;border:1px solid #DDDDDD;padding:16px 8px;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:#EA580C">{f}</div><div style="font-size:11px;color:#888">flagged</div></div></td>'
+        f'<td width="33%" style="padding:0 5px"><div style="background:#FAFAF8;border:1px solid #DDDDDD;padding:16px 8px;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:#1A1A1A">{top_cat}</div><div style="font-size:11px;color:#888">top</div></div></td>'
+        '</tr></table>'
+    )
+
+
+    sections = "".join(
+        _digest_tier_section(tier, label, color, tint, blurb,
+                             by_tier.get(tier, []), tcount.get(tier, 0), tz=tz)
+        for (tier, label, color, tint, blurb) in DIGEST_TIERS
+        if tcount.get(tier, 0) > 0
+    )
+    if not sections:
+        sections = ('<div style="text-align:center;padding:32px 16px;color:#888;font-size:14px;'
+                    'border:1px solid #DDDDDD;border-radius:12px;margin-bottom:18px">'
+                    'No messages this period. All quiet.</div>')
+
+    now_utc = datetime.now(timezone.utc)
+    end_date = now_utc.strftime("%b %-d")
+    start_date = (now_utc - timedelta(days=days)).strftime("%b %-d")
+    date_range = f"{start_date} – {end_date}" if start_date != end_date else end_date
+    
+    unsub_token = _unsub_token(bid) if bid else ""
+    unsub_link = f'https://hotlinetxt.com/digest-off?bid={bid}&t={unsub_token}' if bid else ""
+    unsub_html = f'<br><a href="{unsub_link}" style="color:#EA580C;text-decoration:none;font-size:11px">Unsubscribe from digests</a>' if unsub_link else ""
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+@media (max-width: 600px) {{
+  .email-container {{ max-width: 100% !important; }}
+}}
+</style>
+</head>
+<body style="margin:0;padding:0;background:#F8F8F6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8F8F6">
+<tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="email-container" style="max-width:560px;background:#FFFFFF;border:1px solid #DDDDDD;border-radius:16px;overflow:hidden;font-family:'DM Sans',system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<tr><td style="padding:24px 24px 0">{logo}</td></tr>
+<tr><td style="padding:14px 24px 0">
+<div style="font-size:22px;font-weight:700;color:#1A1A1A">{name_e}</div>
+<div style="font-size:16px;font-weight:600;color:#EA580C;margin-top:6px">{period_label} digest</div>
+<div style="font-size:13px;color:#888;margin-top:2px">{date_range} &middot; every message, grouped by tier</div>
+</td></tr>
+<tr><td style="padding:22px 24px 0">{stat_boxes}{sections}</td></tr>
+<tr><td style="padding:4px 24px 28px">
+<div style="border-top:1px solid #DDDDDD;padding-top:16px;font-size:12px;color:#AAAAAA;line-height:1.6">
+Reply <strong style="color:#888">MENU</strong> to your Hotline number for commands.<br>
+Timestamps in UTC. <a href="mailto:Connect@HotlineTXT.com" style="color:#EA580C;text-decoration:none;">Connect@HotlineTXT.com</a>{unsub_html}
+</div></td></tr>
+</table></td></tr></table></body></html>"""
+
+def _is_digest_due(bid, freq):
+    """Check if business is due for a scheduled digest."""
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT timezone, last_digest_sent_at, digest_freq FROM businesses WHERE id=?"), (bid,))
+        if not biz or biz.get("digest_freq") == "off": return False
+        last_sent = biz.get("last_digest_sent_at")
+        tz_name = biz.get("timezone", "America/Chicago")
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+            now_tz = datetime.now(tz)
+        except Exception:
+            now_tz = datetime.now(timezone.utc)
+        if freq == "daily":
+            if now_tz.hour < 6: return False
+            if not last_sent: return True
+            last_dt = datetime.fromisoformat(last_sent.replace("Z","+00:00"))
+            return (datetime.now(timezone.utc) - last_dt).total_seconds() > 72000
+        if freq == "weekly":
+            if now_tz.weekday() != 0 or now_tz.hour < 6: return False
+            if not last_sent: return True
+            last_dt = datetime.fromisoformat(last_sent.replace("Z","+00:00"))
+            return (datetime.now(timezone.utc) - last_dt).total_seconds() > 691200
+        return False
+
+def _unsub_token(bid):
+    """Generate tamper-proof unsubscribe token."""
+    key = (_ADMIN_KEY or "changeme").encode()
+    return hmac.new(key, bid.encode(), hashlib.sha256).hexdigest()[:16]
+
+def _verify_unsub_token(bid, token):
+    """Verify unsubscribe token."""
+    return hmac.compare_digest(_unsub_token(bid), token)
+
+def send_all_digests(force_freq=None, bid=None):
     sent = 0
-    for biz in get_all_businesses():
+    businesses = get_all_businesses()
+    if bid:
+        with get_db() as c:
+            biz_row = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
+            if biz_row: businesses = [dict(biz_row)]
+            else: return 0
+    for biz in businesses:
         freq = force_freq or biz.get("digest_freq") or "weekly"
+        if freq == "off": continue
         email = biz.get("email","")
         if not email: continue
         days = 1 if freq=="daily" else 7
         stats = get_stats(biz["id"], days=days)
         period = "dai" if freq=="daily" else "week"
-        if send_email(email, f"Hotline {period}ly digest for {biz.get('name','')}", build_digest_html(biz.get("name",""), stats, period)): sent += 1
+        tz = biz.get("timezone", "America/Chicago")
+        now_date = datetime.now(timezone.utc).strftime("%b %-d")
+        subject = f"Hotline digest: {biz.get('name','')} · {now_date}"
+        if send_email(email, subject, build_digest_html(biz.get("name",""), stats, period, days=days, bid=biz["id"], tz=tz)):
+            with get_db() as c:
+                _execute(c, _q("UPDATE businesses SET last_digest_sent_at=? WHERE id=?"), (datetime.now(timezone.utc).isoformat(), biz["id"]))
+            sent += 1
     return sent
 
 
@@ -1743,7 +1926,39 @@ def debug_db():
     return result
 
 @app.post("/digest")
-def digest_endpoint(freq: str = Query("weekly")): _ensure_init(); return {"digests_sent": send_all_digests(force_freq=freq)}
+def digest_endpoint(freq: str = Query("weekly"), bid: str = Query("")):
+    _ensure_init()
+    try:
+        result = send_all_digests(force_freq=freq, bid=bid if bid else None)
+        return {"digests_sent": result}
+    except Exception as e:
+        logger.error(f"[DIGEST] Failed: {e}", exc_info=True)
+        raise
+
+@app.post("/cron/digests")
+def cron_digests_endpoint(admin_key: str = Query("")):
+    """Hourly cron: send digests that are due."""
+    if admin_key != _ADMIN_KEY: return {"error": "Unauthorized"}
+    _ensure_init()
+    sent = 0
+    for biz in get_all_businesses():
+        freq = biz.get("digest_freq", "weekly")
+        if freq == "off": continue
+        if _is_digest_due(biz["id"], freq):
+            result = send_all_digests(force_freq=freq, bid=biz["id"])
+            sent += result
+    return {"digests_sent": sent}
+
+@app.get("/digest-off")
+def digest_off_endpoint(bid: str = Query(""), t: str = Query("")):
+    if not bid or not t or not _verify_unsub_token(bid, t): return {"error": "Invalid or expired link"}
+    with get_db() as c:
+        biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (bid,))
+        if not biz: return {"error": "Business not found"}
+        _execute(c, _q("UPDATE businesses SET digest_freq=? WHERE id=?"), ("off", bid))
+    html = """<html><head><title>Unsubscribed</title><style>body{font-family:system-ui;max-width:560px;margin:60px auto;padding:24px;text-align:center}h1{color:#1a1a1a}p{color:#666}</style></head>
+<body><h1>Unsubscribed</h1><p>You've been removed from digest emails. Re-enable anytime by texting DIGEST DAILY or DIGEST WEEKLY.</p></body></html>"""
+    return Response(html, media_type="text/html")
 
 # ── Admin login ───────────────────────────────────────────────────────────────
 _LOGIN_PAGE = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hotline Admin</title></head>
@@ -2083,6 +2298,7 @@ def admin_ui(request: Request):
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
             f'<td style="padding:12px 16px">{badge_html}{trial_info}</td>'
             f'<td style="padding:12px 16px;white-space:nowrap">'
+            f'<a href="#" onclick="adminDigest(\'{bid}\');return false" style="color:#ea580c;font-size:12px;margin-right:10px">Digest</a>'
             f'<a href="#" onclick="adminResend(\'{bid}\');return false" style="color:#2563eb;font-size:12px;margin-right:10px">Resend</a>'
             f'<a href="#" onclick="openBilling(\'{bid}\',\'{b["name"]}\',\'{bstatus}\',\'{trial_end_val}\');return false" style="color:#7c3aed;font-size:12px;margin-right:10px">Billing</a>'
             f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:12px">Remove</a>'
@@ -2309,6 +2525,11 @@ async function adminPost(path,body){{
   const r=await fetch(path,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
   if(r.status===401){{location.href="/admin";return null;}}
   return r.json();
+}}
+async function adminDigest(bizId){{
+  const d=await fetch('/digest?bid='+bizId,{{method:'POST'}}).then(r=>r.json()).catch(e=>({{'error':e.message}}));
+  if(d&&d.digests_sent>0)toast("Digest sent",true);
+  else toast((d&&d.error)||"Failed",false);
 }}
 async function adminResend(bizId){{
   const d=await adminPost("/admin/welcome",{{biz_id:bizId}});
@@ -4841,7 +5062,6 @@ async function signup(){
   btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Setting up...';res.style.display='none';
   try{const r=await fetch('/signup/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,phone2,email,website_url:url,zip,vertical:document.getElementById('f-vertical').value})});const d=await r.json();
   if(d.success){
-    if(typeof gtag==='function'){gtag('event','sign_up',{method:'web'});}
     res.className='result ok';res.innerHTML='<strong>You are live!</strong><br><br>Check your texts for your sign PDF and QR code image.<br><br>Code: <strong>'+d.business_code+'</strong><br><a href="'+d.sign_url+'" target="_blank" style="color:#ea580c">Download your sign &rarr;</a>';
     res.style.display='block';btn.textContent='Done!'}
   else{res.className='result err';res.textContent=d.error||'Something went wrong.';res.style.display='block';btn.disabled=false;btn.innerHTML='Get my QR code &rarr;'}}
