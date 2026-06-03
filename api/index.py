@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v57"
+VERSION = "v58"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -2292,6 +2292,7 @@ def admin_ui(request: Request):
             f'<td style="padding:12px 16px;text-align:center">{s["flagged_issues"]}</td>'
             f'<td style="padding:12px 16px">{badge_html}{trial_info}</td>'
             f'<td style="padding:12px 16px;white-space:nowrap">'
+            f'<a href="#" onclick="adminDigest(\'{bid}\');return false" style="color:#ea580c;font-size:12px;margin-right:10px">Digest</a>'
             f'<a href="#" onclick="adminResend(\'{bid}\');return false" style="color:#2563eb;font-size:12px;margin-right:10px">Resend</a>'
             f'<a href="#" onclick="openBilling(\'{bid}\',\'{b["name"]}\',\'{bstatus}\',\'{trial_end_val}\');return false" style="color:#7c3aed;font-size:12px;margin-right:10px">Billing</a>'
             f'<a href="#" onclick="adminRemove(\'{bid}\',\'{b["name"]}\');return false" style="color:#dc2626;font-size:12px">Remove</a>'
@@ -2518,6 +2519,11 @@ async function adminPost(path,body){{
   const r=await fetch(path,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
   if(r.status===401){{location.href="/admin";return null;}}
   return r.json();
+}}
+async function adminDigest(bizId){{
+  const d=await fetch('/digest?bid='+bizId,{{method:'POST'}}).then(r=>r.json()).catch(e=>({error:e.message}));
+  if(d&&d.digests_sent>0)toast("Digest sent",true);
+  else toast((d&&d.error)||"Failed",false);
 }}
 async function adminResend(bizId){{
   const d=await adminPost("/admin/welcome",{{biz_id:bizId}});
