@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v66"
+VERSION = "v67"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -675,7 +675,7 @@ _ai_client = None  # Stores API key string; HTTP calls used directly
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency). Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, smoke, gas leak, sparks, electrical hazard (active arcing/burning), injury, someone hurt/collapsed/unconscious, violence, threats, weapons. STRUCTURAL FLOODING: only Tier 1 if active flooding INSIDE the building endangering people or property — NOT outdoor/utility flooding (water bubbling up on road, sewage backup in yard). NOT Tier 1: Toilet or sink overflow, water main break, burst pipe outdoors, sewage backup — all Tier 2 cleanliness/equipment. Tier 1 "electrical" means ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
 - Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary). Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
@@ -690,8 +690,11 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 - "safety" = anything involving physical danger (Tier 1)
 
 AUTO-REPLY TONE:
-- Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action.
+- Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us."
+  - UNCONDITIONAL "Call 911 now" for: fire, smoke, gas leak, active electrical (sparks/burning/arcing), weapons/violence, unconscious/not breathing/severe bleeding.
+  - CONDITIONAL "If anyone is in immediate danger, call 911 now" for: ambiguous-but-serious (possible medical, confrontation, structural danger that might endanger people).
+  - NEVER say "we've contacted emergency services."
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action. NEVER tell customer to call any emergency number.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Ask for specifics ONLY if genuinely needed ("Which area?" "What exactly happened?"). Natural tone, no corporate language.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If genuinely vague or unclear, ask one clarifying question. Forward to management. Natural conversation, not templates.
@@ -735,6 +738,8 @@ OTHER EDGE CASES:
 - "You should fire her" = Tier 3, staffing. Employment complaint, NOT emergency.
 - "Bathroom is flooding!" = Tier 2, cleanliness. Plumbing issue, not structural emergency.
 - "Basement is flooding!" = Tier 1, safety. Structural flooding = always emergency.
+- "Water main looks broken" / "Water bubbling up on the road" = Tier 2, equipment (utility/infrastructure). NOT an emergency — do NOT tell customer to call 911.
+- "Sewage backing up into my yard" = Tier 2, cleanliness/health. Not a 911 situation.
 - "Out of toilet paper" = Tier 2, supply.
 - "The dryer isn't heating" = Tier 2, equipment (revenue loss per unit).
 - "Coins are jammed in the machine" = Tier 2, payment (customer loses money, business loses revenue).
@@ -3337,7 +3342,7 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness. Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, smoke, gas leak, sparks, electrical hazard (active arcing/burning), injury, someone hurt/collapsed/unconscious, violence, threats, weapons. STRUCTURAL FLOODING: only Tier 1 if active flooding INSIDE the building endangering people or property — NOT outdoor/utility flooding (water bubbling up on road, sewage backup in yard). NOT Tier 1: Toilet or sink overflow, water main break, burst pipe outdoors, sewage backup — all Tier 2 cleanliness/equipment. Tier 1 "electrical" means ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
 - Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues. Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
@@ -3349,8 +3354,11 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 - "payment" = payment processing issues (card reader down, payment jam, coins stuck, online system down)
 
 AUTO-REPLY TONE:
-- Tier 1: Urgent. ALWAYS start with "Thank you for alerting us." Tell customer to call 911 immediately. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue, say management notified. No exclamation marks. NEVER promise action.
+- Tier 1: Urgent. ALWAYS start with "Thank you for alerting us." 
+  - UNCONDITIONAL "Call 911 now" for: fire, smoke, gas leak, active electrical (sparks/burning/arcing), weapons/violence, unconscious/not breathing/severe bleeding.
+  - CONDITIONAL "If anyone is in immediate danger, call 911 now" for: ambiguous-but-serious (possible medical, confrontation, structural danger that might endanger people).
+  - NEVER say "we've contacted emergency services."
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue, say management notified. No exclamation marks. NEVER promise action. NEVER tell customer to call any emergency number.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer business questions. If vague, ask follow-up. Forward to management.
@@ -3390,6 +3398,8 @@ EDGE CASES:
 - "You should fire her" = Tier 3, staffing complaint. NOT emergency.
 - "Out of toilet paper" = Tier 2, supply.
 - Any equipment failure, payment failure, or machinery jam = Tier 2 (customers cannot complete transactions).
+- "Water main looks broken" / "Water bubbling up on the road" = Tier 2, equipment (utility/infrastructure). NOT an emergency — do NOT tell customer to call 911.
+- "Sewage backing up into my yard" = Tier 2, cleanliness/health. Not a 911 situation.
 - "No power at my site" / "Power is out" / "Breaker won't reset" = Tier 2, equipment (utility outage). NOT an emergency — do NOT tell them to call 911.
 - "No water" / "No hot water" / "WiFi is down" = Tier 2, equipment (utility outage).
 - "Sparks from the outlet" / "Burning smell from the panel" / "Smoke from the dryer" = Tier 1, safety (active hazard).
@@ -3397,6 +3407,28 @@ EDGE CASES:
 
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
+
+def _always_emergency_check(text: str):
+    """Deterministic safety net for unambiguous life-safety keywords.
+    Returns a Tier 1 result immediately if matched, else None."""
+    keywords = [
+        "fire", "smoke", "gas leak", "gas is leaking",
+        "weapon", "gun", "gunshot", "shot", "stabbed", "knife",
+        "unconscious", "not breathing", "stopped breathing", "can't breathe",
+        "severe bleeding", "bleeding badly", "bleeding heavy"
+    ]
+    text_lower = (text or "").lower()
+    for kw in keywords:
+        if kw in text_lower:
+            return {
+                "tier": 1,
+                "category": "safety",
+                "sentiment": "urgent",
+                "confidence": 1.0,
+                "summary": text[:50],
+                "auto_reply": "Thank you for alerting us. Call 911 now. Evacuate if safe to do so."
+            }
+    return None
 
 @app.post("/demo/classify")
 async def demo_classify(request_data:dict=None):
@@ -3406,6 +3438,13 @@ async def demo_classify(request_data:dict=None):
     history = request_data.get("history") or []
     if not text: return {"error":"No message"}
     if len(text) > 500: return {"error":"Too long"}
+    # Check deterministic always-911 keywords first
+    emergency_result = _always_emergency_check(text)
+    if emergency_result:
+        explanation = generate_explanation(1, "safety")
+        return {"tier":1,"category":"safety","sentiment":"urgent","confidence":1.0,
+                "summary":text[:50],"auto_reply":emergency_result["auto_reply"],"explanation":explanation,
+                "tier_label":"Emergency","would_alert":True}
     if _ai_client:
         try:
             user_msg = ""
@@ -3446,11 +3485,11 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
 const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
 function addB(c,cls,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
 async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
-history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1)}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2)}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
+history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
-function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value=''}
+function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value='';document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none'}
 function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
-function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
+function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');document.getElementById('v-op-input').style.display='block';if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none';return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
 
     steps_html = f'''<div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
@@ -3494,8 +3533,15 @@ h1{{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-botto
 <div class="phone-label-bar operator">Operator</div>
 <div class="pref-bar"><div class="pref-label">Alert level:</div><button class="filter-btn active" id="m-filt-crit" onclick="filterDemo('critical')">Critical only</button><button class="filter-btn" id="m-filt-all" onclick="filterDemo('all')">All messages</button></div>
 <div class="msgs" id="v-oper"><div class="bubble system">Operator alerts appear here</div></div>
-<div class="input-area"><div class="input-row"><input style="flex:1" type="text" placeholder="Type a message..."><button class="blue" style="margin:0">▲</button></div></div>
-<div class="home-bar"></div>
+<div class="v-op-cmds" id="v-op-cmds" style="display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff">
+<div class="cmd-btn" onclick="operatorCmd('REPLY')" style="font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600">REPLY</div>
+<div class="cmd-btn" onclick="operatorCmd('CLOSE')" style="font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600">CLOSE</div>
+<div class="cmd-btn" onclick="operatorCmd('MENU')" style="font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600">MENU</div>
+</div>
+<div class="input-area v-op-input" id="v-op-input" style="display:none"><div class="input-row">
+<input type="text" id="v-op-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')operatorCmd(this.value)">
+<button class="orange" onclick="operatorCmd(document.getElementById('v-op-inp').value)" style="background:#ea580c;color:#fff">&#9650;</button>
+</div></div><div class="home-bar"></div>
 </div></div>
 </div>
 
@@ -4254,6 +4300,16 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="multi">
+<h3>&#128273; Alerts to multiple people</h3>
+<p>Add a site manager or partner's number during signup — both of you get every alert and can reply. Useful when you need backup or want notifications to reach multiple phones.</p>
+</div>
+
+<div class="multi">
+<h3>&#128231; Quiet summaries, not notifications</h3>
+<p>Tier 3 (complaints) and Tier 4 (feedback) don't interrupt you by SMS. Get a daily or weekly email digest of them instead. Text DIGEST DAILY or DIGEST WEEKLY to opt in.</p>
+</div>
+
+<div class="multi">
 <h3>&#127970; Running multiple locations?</h3>
 <p>Sign up each location separately — each gets its own sign and business code. All alerts route to the same phone number. One inbox, full visibility across every location.</p>
 </div>
@@ -4534,8 +4590,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="faq-item">
-<button class="faq-q" onclick="toggle(this)">Can I add a second phone number for a manager or partner? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. You can add a second alert number during signup or ask us to add one after. Both numbers get the same alerts and can use the same commands.</p></div>
+<button class="faq-q" onclick="toggle(this)">Can I send alerts to both an operator and a manager? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. During signup, add a second phone number for a partner, manager, or site owner. Both numbers get identical alerts and can use the same REPLY, PAUSE, MENU commands. This is optional—many operators run solo. If you want to add a second number after signup, just email Connect@HotlineTXT.com.</p></div>
 </div>
 
 <div class="faq-item">
@@ -4546,6 +4602,11 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I reply directly to a customer? <span class="faq-icon">+</span></button>
 <div class="faq-a"><p>Yes. Text REPLY after receiving an alert. The system enters reply mode — type your message and it goes to the customer from the Hotline number. They never see your personal cell. Text CLOSE when you're done or let it time out after 15 minutes.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Do I get email summaries of non-urgent messages? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. Tier 3 (customer complaints) and Tier 4 (feedback/compliments) don't interrupt you by SMS—they're logged. You can opt into a daily or weekly email digest that summarizes them all at once. Just text DIGEST DAILY or DIGEST WEEKLY to activate. Text DIGEST OFF to stop. Tier 1 and Tier 2 alerts always come through SMS immediately, regardless of digest setting.</p></div>
 </div>
 </div>
 
