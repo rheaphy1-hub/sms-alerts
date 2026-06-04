@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v64"
+VERSION = "v65"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -639,7 +639,7 @@ def send_sms(to, body, from_number="", media_url=""):
 
 # --- Email (SendGrid) ---
 SENDGRID_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
-DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Connect@HotlineTXT.com")
+DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Digest@HotlineTXT.com")
 
 def send_email(to_email, subject, html_body):
     if not SENDGRID_KEY: logger.info(f"[DRY-RUN] Email to {to_email}: {subject}"); return True
@@ -5505,7 +5505,7 @@ async def signup_create(request_data:dict=None):
       </table>
       <p style="margin:16px 0 0;font-size:13px"><a href="{base}/signs/{business_code}.pdf" style="color:#ea580c">Sign PDF</a> &nbsp;|&nbsp; <a href="{base}/qr/{business_code}.png" style="color:#ea580c">QR PNG</a></p>
     </div>"""
-    send_email("Connect@HotlineTXT.com", f"New signup: {name} ({business_code})", email_html)
+    send_email("signups@HotlineTXT.com", f"New signup: {name} ({business_code})", email_html)
 
     return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"business_code":business_code,
             "sign_url":f"{base}/signs/{business_code}.pdf","qr_url":f"{base}/qr/{business_code}.png"}
