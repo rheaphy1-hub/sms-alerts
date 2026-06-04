@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v65"
+VERSION = "v66"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -4376,7 +4376,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <a href="/resources/why-you-need-a-hotline" class="card">
 <div class="card-meta"><span>01 &mdash; Strategy</span><span>3 min read</span></div>
 <h2>Why your business needs a direct customer line (and why Hotline is the easiest way to run one)</h2>
-<p>Your staff won't always tell you what's wrong. Your customers will, if you give them a way to reach you.</p>
+<p>You're not on site to catch what goes wrong. Your customers are &mdash; give them a way to tell you the moment it happens.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
 <a href="/resources/where-to-put-your-qr" class="card">
@@ -4393,8 +4393,14 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </a>
 <a href="/resources/why-staff-fail-you" class="card">
 <div class="card-meta"><span>04 &mdash; Operations</span><span>4 min read</span></div>
-<h2>Why your staff may be your biggest operational blind spot</h2>
-<p>It's not about bad employees. It's about a broken system — and why building your visibility around staff escalation is a costly mistake.</p>
+<h2>Why being offsite is your biggest operational blind spot</h2>
+<p>When you're rarely on site, problems can sit for days. Here's why your customers &mdash; not your staff &mdash; are the fastest way to find out.</p>
+<span class="arrow">Read &rarr;</span>
+</a>
+<a href="/resources/self-storage-hotline" class="card">
+<div class="card-meta"><span>05 &mdash; Self Storage</span><span>4 min read</span></div>
+<h2>Running a self-storage facility nobody's watching</h2>
+<p>Gates, access issues, and unit problems happen when no manager is on site. Here's how to hear about them in real time.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
 </div>
@@ -4655,15 +4661,15 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </header>
 <article>
 
-<p class="lead">Your staff won't always tell you what's wrong. Your customers will, if you give them a channel to do it.</p>
+<p class="lead">When you run your business from offsite, you can't see what's going wrong. Your customers can &mdash; if you give them a channel to tell you.</p>
 
-<p>Think about the last time something went sideways in your business and you found out too late. The bathroom that went hours without being cleaned. The staff member who called out and nobody covered the floor. The card reader that stopped working during the dinner rush.</p>
+<p>Think about the last time something went sideways at your location and you found out too late. The restroom that sat a full day without anyone noticing. The entry gate that stuck open all weekend. The bank of washers that sat dead for three days before anyone said a word.</p>
 
-<p>Someone in your building knew. They just didn't tell you. Or they told a coworker. Or they pulled out their phone and left a one-star review instead.</p>
+<p>A customer knew. They just had no way to reach you. So they shrugged it off, or they left, or they pulled out their phone and posted a one-star review instead.</p>
 
 <h2>The gap between what happens and what you know</h2>
 
-<p>Every business has this gap. Problems happen at the floor level. Operators operate above it. The information that travels between the two gets filtered by time, by staff who don't want to deliver bad news, and by systems that only catch things after the fact.</p>
+<p>Every offsite operation has this gap. Problems happen on site. You're somewhere else. The information that should travel between the two gets lost &mdash; to distance, to time, and to systems that only catch things after the damage is done.</p>
 
 <p>That gap closes when customers have a direct line to you, in the moment, while the problem is still fixable.</p>
 
@@ -4681,7 +4687,7 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Messages aren't just collected. Each one is read, classified by urgency, and you only get bothered when something actually needs your attention.</p>
 
-<p>A customer complaining that the music is too loud? that one gets logged quietly. A customer texting that your front door is locked and there's a line outside? It texts you immediately.</p>
+<p>A customer noting the lobby trash is full? That one gets logged quietly. A customer texting that the entry gate won't open and they're locked out? It texts you immediately.</p>
 
 <p>You set the threshold. You get the signal. The noise stays out of your way.</p>
 
@@ -4728,13 +4734,13 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 <p>Think about where things break down in your business. Then put it there.</p>
 
 <ul>
-<li>Inside bathroom stalls, at eye level</li>
-<li>On equipment that tends to break or jam</li>
-<li>Tables and tent cards in restaurants</li>
-<li>Near self-serve stations and kiosks</li>
-<li>Fitting rooms</li>
-<li>Hotel rooms and short-term rentals, near the TV or on the welcome card</li>
-<li>Locker rooms and shared facilities</li>
+<li>On the entry gate keypad or access panel</li>
+<li>On washers, dryers, vending, and change machines &mdash; right where they jam</li>
+<li>Inside restroom stalls, at eye level</li>
+<li>At the office door or kiosk when no manager is on site</li>
+<li>By the dump station, mailboxes, or clubhouse</li>
+<li>In the elevator and near loading bays</li>
+<li>Laundry rooms, locker rooms, and shared facilities</li>
 </ul>
 
 <p>Waterproof sticker stock for bathrooms and wet areas. Minimum 1.5 inches. Bigger in low light.</p>
@@ -4762,9 +4768,9 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Keep it to one line. Tell them what happens when they scan.</p>
 
-<div class="sample">"Something wrong? Text us. Operator reads every message."</div>
-<div class="sample">"Issue with your visit? Let us know before you leave."</div>
-<div class="sample">"Staff not around? Something broken? Scan to text us."</div>
+<div class="sample">"Something wrong on site? Text us. The operator reads every message."</div>
+<div class="sample">"Gate, machine, or unit issue? Let us know right now."</div>
+<div class="sample">"No one on site? Something broken? Scan to text us."</div>
 
 <p>Avoid "feedback survey" and "rate your experience." Those sound like homework. Nobody scans homework.</p>
 
@@ -4874,82 +4880,66 @@ def resources_article_2(): _ensure_init(); return Response(content=_ga(RESOURCES
 def resources_article_3(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_3_HTML), media_type="text/html")
 
 RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Why your staff may be your biggest operational blind spot &mdash; Hotline</title>
+<title>Why being offsite is your biggest operational blind spot &mdash; Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>""" + _ARTICLE_CSS + """</style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
 <div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ 04 &mdash; Operations</div>
 <header class="ah">
-<h1>Why your staff may be your biggest operational blind spot</h1>
+<h1>Why being offsite is your biggest operational blind spot</h1>
 <div class="ameta"><span>Operations</span><span>4 min read</span></div>
 </header>
 <article>
 
-<p class="lead">Your staff isn't trying to fail you. But they might be anyway &mdash; and the system you've built around their ability to escalate is likely more fragile than you think.</p>
+<p class="lead">You're not failing to watch your business. You physically can't be there for most of it &mdash; and the system you're counting on to tell you what's happening is more fragile than you think.</p>
 
-<p>When something goes wrong at your location, the assumption is usually the same: someone on staff will notice, someone will escalate, and someone will fix it. That assumption is costing operators real money. Most frontline employees aren't equipped, incentivized, or expected to surface operational problems. Building your visibility strategy around their judgment is one of the most common and costly mistakes physical business operators make.</p>
+<p>When something goes wrong at your location, the assumption is usually the same: someone will notice, someone will say something, and you'll hear about it in time to act. For an offsite operator, that assumption quietly fails every day. You're not there. The people who are &mdash; customers, tenants, the occasional employee &mdash; have no reliable way to reach you in the moment. Building your visibility around hoping someone speaks up is one of the most common and costly mistakes offsite operators make.</p>
 
 <p>Here's why.</p>
 
-<h2>1. They were never trained to escalate</h2>
+<h2>1. You're not there to see it</h2>
 
-<p>Most frontline employees receive training on how to do their job &mdash; how to operate the register, how to greet customers, how to close up. What they rarely receive is clear guidance on what to do when something breaks: who to call, what to say, how urgent it is, and what happens if they don't.</p>
+<p>This is the whole problem in one line. You run the facility from a phone, a laptop, another location, or three locations at once. You can't walk the floor. The issues a present owner would catch in thirty seconds &mdash; a leak, a jammed door, a light that's been out for a week &mdash; go unseen for hours or days.</p>
 
-<p>Without a defined escalation process, most employees default to the path of least resistance: assume someone else will handle it, or wait to see if the problem resolves itself. By the time anyone realizes it won't, hours have passed.</p>
+<h2>2. There's often no one on site at all</h2>
 
-<h2>2. These are entry-level positions</h2>
+<p>Self-storage, laundromats, RV parks, and plenty of gyms run unattended by design. There's no staff member to notice a problem, escalate it, or even be asked about it. The entire idea of "someone will tell the manager" assumes a manager is standing there. Most of the time, nobody is.</p>
 
-<p>The people working your front line at a car wash, parking garage, laundromat, or gas station are often in their first or second job. They're new, they're still learning what's expected of them, and they're not thinking about your revenue or your Google rating.</p>
+<h2>3. When there is staff, escalation isn't their job</h2>
 
-<p>Asking an 18-year-old making $14 an hour to recognize a broken payment terminal, understand its operational impact, find the right person to call, and confidently escalate it is a significant ask. Not because they're incapable &mdash; but because nothing in their experience has prepared them for that level of ownership.</p>
+<p>At a car wash or a staffed gym, the people on site are usually entry-level and high-turnover. Reporting a broken machine to a remote owner isn't something they were trained for, incentivized to do, or thinking about. Broken equipment reads as "someone else's problem," and the handoff that's supposed to reach you never actually happens.</p>
 
-<h2>3. Repairs aren't their responsibility</h2>
+<h2>4. Customers won't chase you down</h2>
 
-<p>From a frontline employee's perspective, broken equipment is someone else's problem. They didn't buy it. They don't maintain it. They can't fix it. When something breaks, the instinct is to mentally hand it off &mdash; "that's a manager thing" or "maintenance handles that" &mdash; and move on.</p>
-
-<p>The problem is that the handoff never actually happens. It just gets assumed. And assumptions are where operational failures live.</p>
+<p>A frustrated customer isn't going to hunt for your office number, call, and wait on hold to report a jammed dryer. It's not worth the effort. They'll leave &mdash; and some of them will leave a review on the way out. The complaint you never hear is usually the one that costs you the most.</p>
 
 <div class="callout">
 <div class="callout-label">The real cost</div>
-<p>A customer notices the broken machine at 2 PM. Staff assumes someone else reported it. You find out at 9 PM when a review goes live. That gap &mdash; not the broken machine &mdash; is what actually hurt your business.</p>
+<p>A customer hits a stuck gate at 2 PM. No one's on site. You find out at 9 PM when the review posts. That gap &mdash; not the gate &mdash; is what actually hurt your business.</p>
 </div>
 
-<h2>4. They're not driven by revenue</h2>
+<h2>5. You find out from the worst possible source</h2>
 
-<p>Your staff doesn't feel the P&L impact of downtime. They don't see the revenue lost when a machine is offline for three hours on a Friday night. They don't read the weekly review report or watch the star rating tick down.</p>
+<p>Most offsite operators learn about problems from a one-star review, a chargeback, or a tenant who finally got fed up enough to email. By then the issue is days old, public, and far more expensive than it needed to be.</p>
 
-<p>You do. The gap between what your staff cares about and what you care about is completely natural &mdash; but it creates a dangerous blind spot. What feels like an emergency to you barely registers for someone who just wants to get through their shift and go home.</p>
+<h2>6. Distance turns small problems into patterns</h2>
 
-<h2>5. They have no stake in the outcome</h2>
+<p>When you're on site, a small issue gets fixed before it repeats. When you're offsite, the same problem keeps hitting customer after customer until something finally forces it into your view. One stuck gate becomes a whole weekend of locked-out tenants.</p>
 
-<p>A bad review doesn't affect your employee's paycheck. A lost customer doesn't change their schedule. A reputation hit doesn't impact their career. When there's no personal stake in the outcome, the urgency to act simply isn't there &mdash; even for good, well-meaning people.</p>
+<h2>The real problem: you built your visibility on being there &mdash; and you're not</h2>
 
-<p>This isn't a character flaw. It's human nature. People respond to incentives. And most frontline staff have no incentive to treat a broken machine as a five-alarm fire.</p>
+<p>None of this means you're a bad operator. It means running offsite removes the one thing physical businesses have always leaned on: a set of eyes on the ground. The operators who catch issues fastest have stopped waiting to be there. They've built a direct line between the people on site and themselves.</p>
 
-<h2>6. They're checked out</h2>
-
-<p>High-turnover industries &mdash; car washes, laundromats, parking facilities, gas stations &mdash; have a well-documented engagement problem. Many employees are working a job, not building a career. A checked-out employee isn't going out of their way to report a broken kiosk. They're going to assume it's not their problem, assume someone else saw it, and move on.</p>
-
-<p>The "I just work here" mentality isn't cynical. It's a symptom of an environment where nobody has ever made operational awareness feel like part of the job.</p>
-
-<h2>7. They don't want the confrontation</h2>
-
-<p>Telling a manager something is broken can feel like delivering bad news. Some employees worry about being blamed. Others don't want to seem like they're creating problems. In environments where escalation isn't explicitly encouraged, silence becomes the default.</p>
-
-<h2>The real problem: you built your visibility on a fragile foundation</h2>
-
-<p>None of this means your staff are bad employees. It means that relying on staff escalation as your primary method of operational visibility is a structural problem, not a personnel problem.</p>
-
-<p>The businesses that catch issues fastest have stopped waiting for staff to notice. Instead, they've built a direct line between their customers and their operations. When a customer sees something wrong, they can text in immediately. Hotline's AI responds to every message instantly &mdash; 24/7 &mdash; filters out the noise, and passes only real concerns directly to you.</p>
+<p>When a customer or tenant sees something wrong, they text. Hotline's AI responds instantly &mdash; 24/7 &mdash; filters out the noise, and passes only real problems straight to you, wherever you are.</p>
 
 <ul>
-<li>No reliance on a 19-year-old remembering to call the manager</li>
+<li>No waiting to find out on your next site visit</li>
 <li>No assuming someone else already reported it</li>
-<li>No finding out three hours later from a Google review</li>
+<li>No learning about it from a public review three days later</li>
 </ul>
 
-<p>Your staff will continue to be your first line of service. But they were never meant to be your only line of operational visibility. Give your customers a direct line, let AI handle the triage, and stop building your business resilience on a foundation that was never designed to hold it.</p>
+<p>You can't be everywhere. You don't have to be. Give the people on site a direct line, let AI handle the triage, and stop building your operation on the assumption that you'll just happen to find out.
 
 """ + _ARTICLE_CTA + """
 <a href="/resources" class="back-link">&larr; Back to resources</a>
@@ -4960,6 +4950,69 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 @app.get("/resources/why-staff-fail-you")
 def resources_article_4(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_4_HTML), media_type="text/html")
+
+RESOURCES_ARTICLE_5_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Running a self-storage facility nobody's watching &mdash; Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>""" + _ARTICLE_CSS + """</style></head><body>
+""" + NAV_HTML + """
+<div class="wrap">
+<div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ 05 &mdash; Self Storage</div>
+<header class="ah">
+<h1>Running a self-storage facility nobody's watching</h1>
+<div class="ameta"><span>Self Storage</span><span>4 min read</span></div>
+</header>
+<article>
+
+<p class="lead">Most storage facilities run with no one on site for hours or days at a time. That's the model &mdash; low overhead, automated access, remote management. It's also exactly why problems go unseen until a tenant is angry enough to do something about it.</p>
+
+<h2>The unattended-facility tradeoff</h2>
+
+<p>Self-storage is built to run lean. Gate code in, gate code out, autopay, no front desk. Great for margins. The blind side is that when something breaks, there's no one standing there to notice. A gate stuck open is a security problem. A gate stuck closed is a tenant locked out of their own belongings at 8 PM. You won't know about either unless someone finds a way to tell you.</p>
+
+<h2>What tenants actually run into</h2>
+
+<ul>
+<li>Entry gate or keypad not working</li>
+<li>Elevator or roll-up door jammed</li>
+<li>A unit that won't lock, or a lock that's been cut</li>
+<li>Lights out in a hallway or across the lot after dark</li>
+<li>Leaks, pests, or a "climate-controlled" unit that isn't</li>
+<li>Someone living in a unit, or activity that doesn't look right</li>
+</ul>
+
+<h2>Why they don't just call</h2>
+
+<p>A tenant who can't get through the gate isn't going to dig up your office number and leave a voicemail nobody checks until morning. They'll force the gate, give up and leave, or open a dispute over their bill. The quiet ones simply stop paying and move out. None of that reaches you in time to fix the actual problem.</p>
+
+<div class="callout">
+<div class="callout-label">The pattern</div>
+<p>A keypad dies Friday night. Tenants can't get in all weekend. You hear about it Monday &mdash; after two move-out notices and a review that says "can never get into my unit."</p>
+</div>
+
+<h2>A QR code at the gate changes the math</h2>
+
+<p>Put a Hotline code on the keypad, the office door, and inside the elevator. A tenant who hits a problem scans and texts in seconds. The AI reads it, separates a stuck gate (you hear immediately) from a billing question (logged for your digest), and routes only what matters to your phone &mdash; without ever exposing your personal number.</p>
+
+<h2>What it means for an offsite operator</h2>
+
+<p>You get the visibility of an on-site manager without paying for one. Security and access issues reach you in real time. Everything else gets handled and summarized. Your attention goes to the handful of things that actually need an owner, and the rest stays out of your way.</p>
+
+<div class="brand-block">
+<h2>The fast version</h2>
+<p>Post a QR code at the gate, the office, and the elevator. Tenants text in problems. Hotline triages every message, alerts you instantly on anything urgent, and logs the rest. You run a facility nobody's watching &mdash; except now you are.</p>
+</div>
+
+""" + _ARTICLE_CTA + """
+<a href="/resources" class="back-link">&larr; Back to resources</a>
+</article>
+</div>
+""" + _ARTICLE_FOOT + """
+</body></html>"""
+
+@app.get("/resources/self-storage-hotline")
+def resources_article_5(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_5_HTML), media_type="text/html")
+
 
 
 # --- Signup page ---
