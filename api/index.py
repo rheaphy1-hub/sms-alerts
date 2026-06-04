@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v64"
+VERSION = "v65"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -97,7 +97,7 @@ def init_db():
             id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT \'\', owner_phone TEXT NOT NULL,
             alert_phones TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
             business_code TEXT NOT NULL DEFAULT \'\',
-            digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
+            digest_freq TEXT NOT NULL DEFAULT \'daily\', alert_tier3 INTEGER DEFAULT 0,
             website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
             twilio_number TEXT NOT NULL DEFAULT \'\', muted_until TEXT, paused INTEGER DEFAULT 0,
             alert_include_images INTEGER DEFAULT 1, timezone TEXT NOT NULL DEFAULT 'America/Chicago',
@@ -125,6 +125,8 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS media_pending (
             business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
             media_id TEXT NOT NULL, created_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS app_meta (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT \'\')""",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
@@ -133,7 +135,7 @@ def init_db():
         try:
             with get_db() as c: _execute(c, stmt)
         except Exception as e: logger.warning(f"init_db stmt skipped: {e}")
-    for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'weekly\'"),
+    for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'daily\'"),
                          ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'"),
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
                          ("business_code","\'\'"),("trial_ends_at","\'\'"),
@@ -143,6 +145,21 @@ def init_db():
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
+    # One-time backfill: default existing operators to daily digests.
+    # Gated by app_meta so a deliberate DIGEST WEEKLY choice is never re-flipped
+    # on later cold starts. Operators on 'off' (opted out) are left untouched.
+    try:
+        with get_db() as c:
+            done = _fetchone(c, _q("SELECT value FROM app_meta WHERE key=?"),
+                             ("digest_daily_default_backfill",))
+            if not done:
+                _execute(c, "UPDATE businesses SET digest_freq='daily' WHERE digest_freq='weekly'")
+                _execute(c, _q("INSERT INTO app_meta (key,value) VALUES (?,?)"),
+                         ("digest_daily_default_backfill", "done"))
+                logger.info("[MIGRATION] digest default backfill: weekly -> daily (off preserved)")
+    except Exception as e:
+        logger.warning(f"[MIGRATION] digest backfill skipped: {e}")
+
     # messages table additive columns
     for col, default in [("auto_reply","\'\'"),("explanation","\'\'"),("image_url","\'\'")]:
         try:
@@ -256,11 +273,11 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         try:
             with get_db() as c:
                 if use_zip_cols:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, vertical or "", now))
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,digest_freq,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", "daily", zip_code or "", city, state, vertical or "", now))
                 else:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
-                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,digest_freq,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", "daily", now))
             return business_code
         except Exception as e:
             if use_zip_cols:
@@ -1378,7 +1395,7 @@ def handle_owner_command(text, business, sender_phone=""):
         "NEVERMIND","CANCEL","CLOSE","DONE","WRAP","FINISH","END",
         "MENU","HELP","?",
         "STATUS","ALERTS","TIER2","TIER3","ALERTS CRITICAL","ALERTS ALL",
-        "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","REPLY",
+        "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","DIGEST OFF","REPLY",
     }
 
     # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
@@ -1432,6 +1449,7 @@ def handle_owner_command(text, business, sender_phone=""):
                 "TIER3 \u2014 Add reputation alerts\n"
                 "PAUSE / RESUME\n"
                 "BILLING \u2014 Subscription\n"
+                "DIGEST DAILY / WEEKLY / OFF \u2014 Summary emails\n"
                 "MENU \u2014 This message")
 
     if cmd == "REPLY":
@@ -1462,6 +1480,7 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd == "RESUME": set_paused(bid, False); return "\U0001f514 Alerts resumed."
     if cmd == "DIGEST DAILY": set_digest_freq(bid, "daily"); return "\U0001f4e7 Digest set to daily."
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
+    if cmd == "DIGEST OFF": set_digest_freq(bid, "off"); return "\U0001f4e7 Digests turned off. Reply DIGEST DAILY or DIGEST WEEKLY to turn back on."
 
     if cmd == "DEBUG":
         # Diagnostic: show which biz the operator is tied to and the last 3 messages
@@ -1650,7 +1669,7 @@ def send_all_digests(force_freq=None, bid=None):
             if biz_row: businesses = [dict(biz_row)]
             else: return 0
     for biz in businesses:
-        freq = force_freq or biz.get("digest_freq") or "weekly"
+        freq = force_freq or biz.get("digest_freq") or "daily"
         if freq == "off": continue
         email = biz.get("email","")
         if not email: continue
