@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v65"
+VERSION = "v64"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -502,16 +502,16 @@ def send_trial_warnings():
             continue
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
-        BASE_URL = os.getenv("BASE_URL", "https://hotlinetxt.com")
-        sub_link = f"{BASE_URL}/subscribe?bid={biz['id']}"
         if days == 1:
-            msg = f"Your free Hotline trial ends tomorrow.\nSubscribe so you don't miss a critical issue \u26a0\ufe0f\n{sub_link}"
+            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
+            msg = f"Your free Hotline trial ends tomorrow.{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
             sent += 1
         elif days == 0:
             set_sub_status(biz["id"], "expired")
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue \u26a0\ufe0f\n{sub_link}"
+            link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
@@ -639,13 +639,14 @@ def send_sms(to, body, from_number="", media_url=""):
 
 # --- Email (SendGrid) ---
 SENDGRID_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
-DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Digest@HotlineTXT.com")
+DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Connect@HotlineTXT.com")
+SIGNUP_NOTIFY_EMAIL = os.getenv("SIGNUP_NOTIFY_EMAIL", "signups@HotlineTXT.com")
 
-def send_email(to_email, subject, html_body):
+def send_email(to_email, subject, html_body, from_email=None):
     if not SENDGRID_KEY: logger.info(f"[DRY-RUN] Email to {to_email}: {subject}"); return True
     try:
         import urllib.request
-        data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":DIGEST_FROM_EMAIL,"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
+        data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":(from_email or DIGEST_FROM_EMAIL),"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
         req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send", data=data, headers={"Authorization":f"Bearer {SENDGRID_KEY}","Content-Type":"application/json"}, method="POST")
         urllib.request.urlopen(req); return True
     except Exception as e: logger.error(f"Email failed: {e}"); return False
@@ -1413,13 +1414,11 @@ def handle_owner_command(text, business, sender_phone=""):
         if status == "active":
             return "\u2705 Subscription active. Reply BILLING CANCEL to cancel."
         elif status == "trialing":
-            BASE_URL2 = os.getenv("BASE_URL", "https://hotlinetxt.com")
-            sub_link2 = f"{BASE_URL2}/subscribe?bid={business['id']}"
-            return f"Trial active \u2014 {days} day(s) left.\nSubscribe here: {sub_link2}"
+            link_part = f"\nPay here when ready: {PAYMENT_LINK}" if PAYMENT_LINK else ""
+            return f"Trial active \u2014 {days} day(s) left.{link_part}"
         else:
-            BASE_URL3 = os.getenv("BASE_URL", "https://hotlinetxt.com")
-            sub_link3 = f"{BASE_URL3}/subscribe?bid={business['id']}"
-            return f"Your Hotline trial has ended. Subscribe to reactivate \u26a0\ufe0f\n{sub_link3}"
+            link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
+            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
 
     # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
     # level for 10DLC compliance, so we use MENU as the in-app command.
@@ -2763,155 +2762,146 @@ def _make_qr_png_bytes(business_code: str, business_name: str = "") -> bytes:
     return buf.getvalue()
 
 
-def _make_sign_pdf_bytes(business_code: str, business_name: str = "") -> bytes:
-    """
-    Sign PDF matching the Hotline template:
-    - Cream/off-white background (#F5F0E8)
-    - Orange double border with crop marks
-    - Dark bold headline "Something wrong?"
-    - Orange bold "Text us:" subhead
-    - Orange divider line with center dot
-    - Large QR code (SMS deep link — opens native messages app)
-    - "Powered by H HOTLINE" + "Visit Hotlinetxt.com" footer
-    """
-    url = _sms_deep_link(business_code, business_name)
+VERTICALS_EXAMPLES = {
+    "laundromat":  ['"Machine ate my money"', '"Water leaking"', '"Card reader down"'],
+    "selfstorage": ['"Gate won\'t open"', '"Someone living in a unit"', '"My unit was broken into"'],
+    "mhc":         ['"Water main broke"', '"Power out at lot 12"', '"Sewage backing up"'],
+    "gym":         ['"Treadmill broken"', '"AC not working"', '"Door not locking"'],
+    "carwash":     ['"Bay won\'t release my car"', '"Bay broken mid-wash"', '"Payment kiosk down"'],
+    "rvpark":      ['"No power at site 14"', '"Sewage backing up"', '"No water at site 8"'],
+}
 
-    # Build QR image bytes for ReportLab
+
+def _make_sign_pdf_bytes(business_code: str, business_name: str = "", vertical: str = "") -> bytes:
+    """
+    Vertical-aware sign PDF (Hotline template):
+      - Cream background, orange double border
+      - "Something broken?" headline
+      - Per-vertical example messages ('other'/unknown -> none = generic sign)
+      - "Scan to text us" subhead + orange divider
+      - Large QR (SMS deep link -> opens native Messages app prefilled)
+      - Thank-you line + "Emergency? Call 911."
+      - "Powered by H HOTLINE" wordmark footer
+    """
+    IN = 72.0
+    url = _sms_deep_link(business_code, business_name)
+    examples = VERTICALS_EXAMPLES.get((vertical or "").strip().lower(), [])
+
     qr_pil = _make_qr_pil(url, size_px=900)
     qr_buf = io.BytesIO()
     qr_pil.save(qr_buf, format="PNG")
     qr_buf.seek(0)
     qr_reader = RLImageReader(qr_buf)
 
-    ORANGE      = rl_colors.HexColor("#D4520A")   # template orange
-    CREAM       = rl_colors.HexColor("#F5F0E8")   # template background
-    DARK        = rl_colors.HexColor("#1C1C1A")   # near-black headline
-    GRAY        = rl_colors.HexColor("#888880")   # footer text
+    ORANGE = rl_colors.HexColor("#EA580C")
+    CREAM  = rl_colors.HexColor("#F5EFE6")
+    INK    = rl_colors.HexColor("#1A0F08")
+    MUTED  = rl_colors.HexColor("#7A6E63")
 
-    # Page: 8.5 × 11" (letter) — matches template proportions
-    PAGE_W, PAGE_H = 8.5 * 72, 11 * 72
+    PAGE_W, PAGE_H = 8.5 * IN, 11 * IN
     pdf_buf = io.BytesIO()
     c = rl_canvas.Canvas(pdf_buf, pagesize=(PAGE_W, PAGE_H))
 
-    # ── Cream background ────────────────────────────────────────────────────
+    # Background
     c.setFillColor(CREAM)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    # ── Crop marks (small corner ticks outside border) ──────────────────────
-    MARGIN = 36       # margin from page edge to outer border
-    TICK   = 14       # length of crop mark ticks
-    GAP    = 6        # gap between border and tick start
-    c.setStrokeColor(rl_colors.HexColor("#CCCCCC"))
-    c.setLineWidth(0.5)
-    # corners: TL, TR, BR, BL
-    corners = [
-        (MARGIN, PAGE_H - MARGIN),
-        (PAGE_W - MARGIN, PAGE_H - MARGIN),
-        (PAGE_W - MARGIN, MARGIN),
-        (MARGIN, MARGIN),
-    ]
-    for (cx, cy) in corners:
-        # horizontal tick
-        dx = -1 if cx < PAGE_W/2 else 1
-        c.line(cx + dx*(GAP), cy, cx + dx*(GAP+TICK), cy)
-        # vertical tick
-        dy = 1 if cy < PAGE_H/2 else -1
-        c.line(cx, cy + dy*(GAP), cx, cy + dy*(GAP+TICK))
-
-    # ── Double orange border ─────────────────────────────────────────────────
-    OUTER_PAD = MARGIN           # outer rect inset from page edge
-    INNER_PAD = OUTER_PAD + 7   # inner rect (gap between borders)
-    RADIUS = 18
-
+    # Double orange border
+    margin, inset = 0.45 * IN, 0.10 * IN
     c.setStrokeColor(ORANGE)
-    c.setFillColor(CREAM)
+    c.setLineWidth(2.5)
+    c.roundRect(margin, margin, PAGE_W - 2*margin, PAGE_H - 2*margin, 14, fill=0, stroke=1)
+    c.setLineWidth(0.8)
+    c.roundRect(margin+inset, margin+inset, PAGE_W - 2*margin - 2*inset,
+                PAGE_H - 2*margin - 2*inset, 10, fill=0, stroke=1)
 
-    # Outer border
-    c.setLineWidth(3)
-    c.roundRect(OUTER_PAD, OUTER_PAD,
-                PAGE_W - 2*OUTER_PAD, PAGE_H - 2*OUTER_PAD,
-                RADIUS, fill=0, stroke=1)
-    # Inner border
-    c.setLineWidth(1.5)
-    c.roundRect(INNER_PAD, INNER_PAD,
-                PAGE_W - 2*INNER_PAD, PAGE_H - 2*INNER_PAD,
-                RADIUS - 4, fill=0, stroke=1)
+    # Headline
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 60)
+    c.drawCentredString(PAGE_W/2, PAGE_H - 1.55*IN, "Something")
+    c.drawCentredString(PAGE_W/2, PAGE_H - 2.35*IN, "broken?")
 
-    # ── "Something wrong?" headline ──────────────────────────────────────────
-    c.setFillColor(DARK)
-    c.setFont("Helvetica-Bold", 58)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 148, "Something")
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 216, "wrong?")
+    # Per-vertical examples
+    cursor_y = PAGE_H - 2.95*IN
+    if examples:
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Oblique", 13)
+        for ex in examples:
+            c.drawCentredString(PAGE_W/2, cursor_y, ex)
+            cursor_y -= 0.24*IN
+        cursor_y -= 0.15*IN
 
-    # ── "Text us:" in orange ─────────────────────────────────────────────────
+    # Subhead
     c.setFillColor(ORANGE)
-    c.setFont("Helvetica-Bold", 52)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 290, "Text us:")
+    c.setFont("Helvetica-Bold", 28)
+    c.drawCentredString(PAGE_W/2, cursor_y - 0.15*IN, "Scan to text us")
+    cursor_y -= 0.55*IN
 
-    # ── Orange divider line with center dot ──────────────────────────────────
-    div_y = PAGE_H - 330
-    line_x1 = PAGE_W * 0.18
-    line_x2 = PAGE_W * 0.82
+    # Divider with center dot
+    div_y = cursor_y
+    c.setStrokeColor(ORANGE)
+    c.setLineWidth(1.2)
+    line_len, gap = 1.55*IN, 0.13*IN
+    c.line(PAGE_W/2 - line_len - gap, div_y, PAGE_W/2 - gap, div_y)
+    c.line(PAGE_W/2 + gap, div_y, PAGE_W/2 + line_len + gap, div_y)
+    c.setFillColor(ORANGE)
+    c.circle(PAGE_W/2, div_y, 0.055*IN, fill=1, stroke=0)
+
+    # QR card
+    card_size = 2.85*IN
+    card_x = (PAGE_W - card_size) / 2
+    card_y = div_y - 0.40*IN - card_size
     c.setStrokeColor(ORANGE)
     c.setLineWidth(1.5)
-    mid = PAGE_W / 2
-    # left segment
-    c.line(line_x1, div_y, mid - 12, div_y)
-    # right segment
-    c.line(mid + 12, div_y, line_x2, div_y)
-    # center dot
-    c.setFillColor(ORANGE)
-    c.circle(mid, div_y, 5, fill=1, stroke=0)
-
-    # ── QR code (large, centered, with thin orange border box) ───────────────
-    qr_size = 240
-    qr_x = (PAGE_W - qr_size) / 2
-    qr_y = div_y - 20 - qr_size
-
-    # Orange border around QR
-    pad = 10
-    c.setStrokeColor(ORANGE)
     c.setFillColor(rl_colors.white)
-    c.setLineWidth(1.5)
-    c.roundRect(qr_x - pad, qr_y - pad,
-                qr_size + pad*2, qr_size + pad*2,
-                6, fill=1, stroke=1)
-    c.drawImage(qr_reader, qr_x, qr_y, width=qr_size, height=qr_size)
+    c.roundRect(card_x, card_y, card_size, card_size, 14, fill=1, stroke=1)
+    qr_pad = 0.30*IN
+    c.drawImage(qr_reader, card_x + qr_pad, card_y + qr_pad,
+                card_size - 2*qr_pad, card_size - 2*qr_pad, mask='auto')
 
-    # ── Footer ───────────────────────────────────────────────────────────────
-    footer_center_y = INNER_PAD + 34
-    wordmark_y      = footer_center_y + 4
+    # Code hint
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 10)
+    c.drawCentredString(PAGE_W/2, card_y - 0.30*IN, f"Code: {business_code}")
 
-    # "Powered by" label
-    c.setFillColor(GRAY)
+    # Thank-you
+    thanks_y = card_y - 0.95*IN
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(PAGE_W/2, thanks_y, "Thanks for helping us")
+    c.setFillColor(ORANGE)
+    c.drawCentredString(PAGE_W/2, thanks_y - 0.28*IN, "keep this place great.")
+
+    # 911 line
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica-Oblique", 10)
+    c.drawCentredString(PAGE_W/2, thanks_y - 0.70*IN, "Emergency? Call 911.")
+
+    # Footer wordmark: "Powered by [H] HOTLINE"
+    foot_y = 0.95*IN
+    box_s = 18
     c.setFont("Helvetica", 11)
     powered_w = c.stringWidth("Powered by ", "Helvetica", 11)
-
-    # H box
-    box_s = 18
-    total_w = powered_w + box_s + 6 + c.stringWidth("HOTLINE", "Helvetica-Bold", 14)
+    hotline_w = c.stringWidth("HOTLINE", "Helvetica-Bold", 14)
+    total_w = powered_w + box_s + 6 + hotline_w
     start_x = (PAGE_W - total_w) / 2
-
-    c.drawString(start_x, wordmark_y, "Powered by ")
+    c.setFillColor(MUTED)
+    c.drawString(start_x, foot_y, "Powered by ")
     box_x = start_x + powered_w
     c.setFillColor(ORANGE)
-    c.roundRect(box_x, wordmark_y - 2, box_s, box_s, 3, fill=1, stroke=0)
+    c.roundRect(box_x, foot_y - 2, box_s, box_s, 3, fill=1, stroke=0)
     c.setFillColor(rl_colors.white)
     c.setFont("Helvetica-Bold", 11)
-    c.drawCentredString(box_x + box_s/2, wordmark_y + 2, "H")
-
-    c.setFillColor(DARK)
+    c.drawCentredString(box_x + box_s/2, foot_y + 2, "H")
+    c.setFillColor(INK)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(box_x + box_s + 6, wordmark_y, "HOTLINE")
-
-    # "Visit Hotlinetxt.com for more info"
-    c.setFillColor(GRAY)
-    c.setFont("Helvetica", 10)
-    c.drawCentredString(PAGE_W / 2, footer_center_y - 14, "Visit Hotlinetxt.com for more info")
+    c.drawString(box_x + box_s + 6, foot_y, "HOTLINE")
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(PAGE_W/2, foot_y - 0.18*IN, "hotlinetxt.com")
 
     c.save()
     return pdf_buf.getvalue()
-
 
 @app.get("/signs/{business_code}.pdf")
 def sign_pdf(business_code: str):
@@ -2923,7 +2913,7 @@ def sign_pdf(business_code: str):
     if not biz:
         return Response(content="Business not found", status_code=404)
     try:
-        pdf_bytes = _make_sign_pdf_bytes(code, biz.get("name", ""))
+        pdf_bytes = _make_sign_pdf_bytes(code, biz.get("name", ""), biz.get("vertical", ""))
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -5259,66 +5249,6 @@ footer a{color:#aaa}
 @app.get("/terms")
 def terms_page(): _ensure_init(); return Response(content=_ga(TERMS_HTML), media_type="text/html")
 
-
-@app.get("/subscribe")
-def subscribe_redirect(bid: str = Query("")):
-    """Generate a per-business Stripe Checkout session and redirect operator."""
-    _ensure_init()
-    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-    STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
-    BASE_URL = os.getenv("BASE_URL", "https://hotlinetxt.com")
-    if not bid or not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
-        logger.error(f"[SUBSCRIBE] Missing config bid={bool(bid)} key={bool(STRIPE_SECRET_KEY)} price={bool(STRIPE_PRICE_ID)}")
-        from starlette.responses import RedirectResponse
-        return RedirectResponse(url="/", status_code=302)
-    try:
-        import urllib.request as _ur
-        biz = get_business(bid)
-        email = (biz.get("email") or "") if biz else ""
-        payload = {
-            "mode": "subscription",
-            "line_items[0][price]": STRIPE_PRICE_ID,
-            "line_items[0][quantity]": "1",
-            "client_reference_id": bid,
-            "success_url": f"{BASE_URL}/billing-success?bid={bid}",
-            "cancel_url": f"{BASE_URL}/billing-cancel?bid={bid}",
-        }
-        if email:
-            payload["customer_email"] = email
-        data = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in payload.items()).encode()
-        req = _ur.Request(
-            "https://api.stripe.com/v1/checkout/sessions",
-            data=data,
-            headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}", "Content-Type": "application/x-www-form-urlencoded"},
-            method="POST"
-        )
-        resp = json.loads(_ur.urlopen(req).read())
-        url = resp.get("url", "")
-        if not url:
-            raise ValueError(f"No URL in response: {resp}")
-        logger.info(f"[SUBSCRIBE] Checkout session created for {bid}")
-        from starlette.responses import RedirectResponse
-        return RedirectResponse(url=url, status_code=302)
-    except Exception as e:
-        logger.error(f"[SUBSCRIBE] Checkout session failed: {e}")
-        from starlette.responses import RedirectResponse
-        return RedirectResponse(url="/", status_code=302)
-
-
-@app.get("/billing-success")
-def billing_success(bid: str = Query("")):
-    return HTMLResponse("<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-                        "<h2>✅ Payment received!</h2><p>Your Hotline account is now active. "
-                        "You'll receive a confirmation text shortly.</p></body></html>")
-
-
-@app.get("/billing-cancel")
-def billing_cancel(bid: str = Query("")):
-    return HTMLResponse("<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-                        "<h2>Payment cancelled</h2><p>Your trial continues. "
-                        "Reply BILLING to your Hotline number when you're ready to subscribe.</p></body></html>")
-
-
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     """Stripe sends events here after payment succeeds/fails."""
@@ -5392,21 +5322,6 @@ async def stripe_webhook(request: Request):
             for p in get_alert_phones(biz):
                 send_sms(p, "\u26d4 Hotline subscription canceled. Alerts are paused.")
 
-
-    elif event_type == "checkout.session.completed":
-        ref_bid = data.get("client_reference_id", "")
-        stripe_customer = data.get("customer", "") or customer_id
-        stripe_sub = data.get("subscription", "")
-        if ref_bid:
-            set_sub_status(ref_bid, "active", stripe_customer_id=stripe_customer, stripe_sub_id=stripe_sub)
-            logger.info(f"[STRIPE] Checkout complete — {ref_bid} set active customer={stripe_customer}")
-            biz2 = get_business(ref_bid)
-            if biz2:
-                for p in get_alert_phones(biz2):
-                    send_sms(p, "\u2705 Payment received. Your Hotline subscription is active.")
-        else:
-            logger.warning(f"[STRIPE] checkout.session.completed missing client_reference_id")
-
     return JSONResponse({"received": True})
 
 
@@ -5464,7 +5379,7 @@ async def signup_create(request_data:dict=None):
           </table>
           <p style="margin:24px 0 0;font-size:13px;color:#aaa">Add manually at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a></p>
         </div>"""
-        send_email("Connect@HotlineTXT.com", f"SIGNUP FAILED: {name} ({phone})", email_html)
+        send_email(SIGNUP_NOTIFY_EMAIL, f"SIGNUP FAILED: {name} ({phone})", email_html, from_email=SIGNUP_NOTIFY_EMAIL)
         return {"success":False,"error":"Setup failed \u2014 please try again in a moment, or contact Connect@HotlineTXT.com for help."}
 
     # Send welcome + asset links
@@ -5505,7 +5420,7 @@ async def signup_create(request_data:dict=None):
       </table>
       <p style="margin:16px 0 0;font-size:13px"><a href="{base}/signs/{business_code}.pdf" style="color:#ea580c">Sign PDF</a> &nbsp;|&nbsp; <a href="{base}/qr/{business_code}.png" style="color:#ea580c">QR PNG</a></p>
     </div>"""
-    send_email("signups@HotlineTXT.com", f"New signup: {name} ({business_code})", email_html)
+    send_email(SIGNUP_NOTIFY_EMAIL, f"New signup: {name} ({business_code})", email_html, from_email=SIGNUP_NOTIFY_EMAIL)
 
     return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"business_code":business_code,
             "sign_url":f"{base}/signs/{business_code}.pdf","qr_url":f"{base}/qr/{business_code}.png"}
