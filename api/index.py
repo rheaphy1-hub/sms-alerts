@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v67"
+VERSION = "v68"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -3436,6 +3436,7 @@ async def demo_classify(request_data:dict=None):
     if not request_data: return {"error":"No message"}
     text = (request_data.get("message") or "").strip()
     history = request_data.get("history") or []
+    suppress_reply = bool(request_data.get("suppress_reply", False))
     if not text: return {"error":"No message"}
     if len(text) > 500: return {"error":"Too long"}
     # Check deterministic always-911 keywords first
@@ -3461,6 +3462,10 @@ async def demo_classify(request_data:dict=None):
         except Exception as e: logger.error(f"Demo: {e}"); c = _classify_fallback(text)
     else: c = _classify_fallback(text)
     explanation = generate_explanation(c["tier"], c.get("category", "other"))
+    # If operator is actively handling this conversation, suppress auto-reply
+    if suppress_reply:
+        c["auto_reply"] = ""
+        logger.info("[DEMO CONVO] Suppressing auto-reply (operator active)")
     return {"tier":c["tier"],"category":c["category"],"sentiment":c["sentiment"],"confidence":c["confidence"],
             "summary":c["summary"],"auto_reply":c["auto_reply"],"explanation":explanation,
             "tier_label":{1:"Emergency",2:"Business-Critical",3:"Reputation Risk",4:"Routine"}.get(c["tier"],"Unknown"),
@@ -3481,15 +3486,15 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
     placements_html = "".join(f'<div style="padding:14px;background:#fff;border:1px solid #e0e0dc;border-radius:8px;text-align:center;font-size:13px;color:#666">{p}</div>' for p in placements)
     
     # Demo JS (adapted from main demo - uses v-cust and v-oper IDs)
-    DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+    DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
 function addB(c,cls,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
-async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
+async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
 history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
-function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value='';document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none'}
+function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;lastReplyTime=null;document.getElementById('v-input').value='';document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none'}
 function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
-function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');document.getElementById('v-op-input').style.display='block';if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none';return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
+function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;lastReplyTime=Date.now();addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');document.getElementById('v-op-input').style.display='block';if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none';return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
 
     steps_html = f'''<div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
@@ -3827,7 +3832,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <footer>Hotline &middot; Real-time alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
-let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 
 const CHIPS={
   laundromat:[
@@ -3967,7 +3972,7 @@ async function sendDemo(){
   addB(mc,'out-blue',text);
   addB(mo,'system','<span class="spinner"></span> Processing...');
   try{
-    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});
+    const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});
     const d=await r.json();lastData=d;
     if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);
     const reply=d.auto_reply||'Thanks for letting us know.';
@@ -4110,13 +4115,13 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <footer>Hotline &middot; Real-time SMS alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
-let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
 function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text.replace(/\\n/g,'<br>');d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOperatorInput(){document.getElementById('operator-cmds').style.display='flex';document.getElementById('operator-input').style.display='block'}
 function hideOperatorInput(){document.getElementById('operator-cmds').style.display='none';document.getElementById('operator-input').style.display='none'}
-function resetDemo(){history=[];lastData=null;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Operator alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('operator-inp').value='';hideOperatorInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
+function resetDemo(){history=[];lastData=null;replyMode=false;lastReplyTime=null;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Operator alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('operator-inp').value='';hideOperatorInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
 function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 function fmtTime(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
@@ -4132,8 +4137,9 @@ function operatorCmd(raw){
   // In reply mode: any non-command text goes to customer
   if(replyMode){
     if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','','Reply cancelled.');inp.placeholder='Type a command...';return}
-    if(cmd==='CLOSE'){replyMode=false;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
+    if(cmd==='CLOSE'){replyMode=false;lastReplyTime=null;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
     replyMode=false;
+    lastReplyTime=Date.now();
     addB(mo,'cmd','',raw.trim());
     addB(mo,'resp','','Reply sent. AI quiet for 15min.\\nType CLOSE when done, or just let it time out.');
     addB(mc,'in','Operator reply',raw.trim());
@@ -4152,7 +4158,7 @@ function operatorCmd(raw){
     inp.focus();
     return;
   }
-  if(cmd==='CLOSE'){addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
+  if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
   if(cmd==='MENU'||cmd==='?'){
     addB(mo,'resp','','Commands:\\nREPLY \u2014 Reply to last customer\\nCLOSE \u2014 End conversation\\nSTATUS \u2014 Alert status + level\\nALERTS \u2014 Change alert level\\nTIER2 \u2014 Critical only\\nTIER3 \u2014 Add reputation alerts\\nPAUSE / RESUME\\nBILLING \u2014 Subscription\\nMENU \u2014 This message');
     return;
@@ -4173,7 +4179,7 @@ async function sendDemo(){
   addB(mc,'out-blue','',text);
   addB(mo,'system','','<span class="spinner"></span> Processing...');
   try{
-    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});
+    const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history,suppress_reply})});
     const d=await r.json();d.original_message=text;lastData=d;
     mo.lastChild.remove();
     history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
