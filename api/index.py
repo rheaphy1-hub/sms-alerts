@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v63"
+VERSION = "v64"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -502,16 +502,16 @@ def send_trial_warnings():
             continue
         days = trial_days_left(biz)
         phones = get_alert_phones(biz)
+        BASE_URL = os.getenv("BASE_URL", "https://hotlinetxt.com")
+        sub_link = f"{BASE_URL}/subscribe?bid={biz['id']}"
         if days == 1:
-            link_part = f"\nSubscribe so you don't miss a critical issue from your customers \u26a0\ufe0f\n{PAYMENT_LINK}" if PAYMENT_LINK else ""
-            msg = f"Your free Hotline trial ends tomorrow.{link_part}"
+            msg = f"Your free Hotline trial ends tomorrow.\nSubscribe so you don't miss a critical issue \u26a0\ufe0f\n{sub_link}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL WARNING] {biz['id']}")
             sent += 1
         elif days == 0:
             set_sub_status(biz["id"], "expired")
-            link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else " Reply BILLING to reactivate."
-            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            msg = f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue \u26a0\ufe0f\n{sub_link}"
             for p in phones: send_sms(p, msg)
             logger.info(f"[TRIAL EXPIRED] {biz['id']}")
             sent += 1
@@ -1413,11 +1413,13 @@ def handle_owner_command(text, business, sender_phone=""):
         if status == "active":
             return "\u2705 Subscription active. Reply BILLING CANCEL to cancel."
         elif status == "trialing":
-            link_part = f"\nPay here when ready: {PAYMENT_LINK}" if PAYMENT_LINK else ""
-            return f"Trial active \u2014 {days} day(s) left.{link_part}"
+            BASE_URL2 = os.getenv("BASE_URL", "https://hotlinetxt.com")
+            sub_link2 = f"{BASE_URL2}/subscribe?bid={business['id']}"
+            return f"Trial active \u2014 {days} day(s) left.\nSubscribe here: {sub_link2}"
         else:
-            link_part = f"\n{PAYMENT_LINK}" if PAYMENT_LINK else "\nEmail Connect@HotlineTXT.com to reactivate."
-            return f"Your free Hotline trial has ended. Subscribe so you don't miss a critical issue from your customers \u26a0\ufe0f{link_part}"
+            BASE_URL3 = os.getenv("BASE_URL", "https://hotlinetxt.com")
+            sub_link3 = f"{BASE_URL3}/subscribe?bid={business['id']}"
+            return f"Your Hotline trial has ended. Subscribe to reactivate \u26a0\ufe0f\n{sub_link3}"
 
     # MENU (and ? shortcut). Note: HELP is intercepted by Twilio at the carrier
     # level for 10DLC compliance, so we use MENU as the in-app command.
@@ -5257,6 +5259,66 @@ footer a{color:#aaa}
 @app.get("/terms")
 def terms_page(): _ensure_init(); return Response(content=_ga(TERMS_HTML), media_type="text/html")
 
+
+@app.get("/subscribe")
+def subscribe_redirect(bid: str = Query("")):
+    """Generate a per-business Stripe Checkout session and redirect operator."""
+    _ensure_init()
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+    BASE_URL = os.getenv("BASE_URL", "https://hotlinetxt.com")
+    if not bid or not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
+        logger.error(f"[SUBSCRIBE] Missing config bid={bool(bid)} key={bool(STRIPE_SECRET_KEY)} price={bool(STRIPE_PRICE_ID)}")
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(url="/", status_code=302)
+    try:
+        import urllib.request as _ur
+        biz = get_business(bid)
+        email = (biz.get("email") or "") if biz else ""
+        payload = {
+            "mode": "subscription",
+            "line_items[0][price]": STRIPE_PRICE_ID,
+            "line_items[0][quantity]": "1",
+            "client_reference_id": bid,
+            "success_url": f"{BASE_URL}/billing-success?bid={bid}",
+            "cancel_url": f"{BASE_URL}/billing-cancel?bid={bid}",
+        }
+        if email:
+            payload["customer_email"] = email
+        data = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in payload.items()).encode()
+        req = _ur.Request(
+            "https://api.stripe.com/v1/checkout/sessions",
+            data=data,
+            headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}", "Content-Type": "application/x-www-form-urlencoded"},
+            method="POST"
+        )
+        resp = json.loads(_ur.urlopen(req).read())
+        url = resp.get("url", "")
+        if not url:
+            raise ValueError(f"No URL in response: {resp}")
+        logger.info(f"[SUBSCRIBE] Checkout session created for {bid}")
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(url=url, status_code=302)
+    except Exception as e:
+        logger.error(f"[SUBSCRIBE] Checkout session failed: {e}")
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(url="/", status_code=302)
+
+
+@app.get("/billing-success")
+def billing_success(bid: str = Query("")):
+    return HTMLResponse("<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                        "<h2>✅ Payment received!</h2><p>Your Hotline account is now active. "
+                        "You'll receive a confirmation text shortly.</p></body></html>")
+
+
+@app.get("/billing-cancel")
+def billing_cancel(bid: str = Query("")):
+    return HTMLResponse("<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                        "<h2>Payment cancelled</h2><p>Your trial continues. "
+                        "Reply BILLING to your Hotline number when you're ready to subscribe.</p></body></html>")
+
+
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     """Stripe sends events here after payment succeeds/fails."""
@@ -5329,6 +5391,21 @@ async def stripe_webhook(request: Request):
             logger.info(f"[STRIPE] Sub canceled — {biz['id']}")
             for p in get_alert_phones(biz):
                 send_sms(p, "\u26d4 Hotline subscription canceled. Alerts are paused.")
+
+
+    elif event_type == "checkout.session.completed":
+        ref_bid = data.get("client_reference_id", "")
+        stripe_customer = data.get("customer", "") or customer_id
+        stripe_sub = data.get("subscription", "")
+        if ref_bid:
+            set_sub_status(ref_bid, "active", stripe_customer_id=stripe_customer, stripe_sub_id=stripe_sub)
+            logger.info(f"[STRIPE] Checkout complete — {ref_bid} set active customer={stripe_customer}")
+            biz2 = get_business(ref_bid)
+            if biz2:
+                for p in get_alert_phones(biz2):
+                    send_sms(p, "\u2705 Payment received. Your Hotline subscription is active.")
+        else:
+            logger.warning(f"[STRIPE] checkout.session.completed missing client_reference_id")
 
     return JSONResponse({"received": True})
 
