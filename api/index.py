@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v61"
+VERSION = "v69"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -97,7 +97,7 @@ def init_db():
             id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT \'\', owner_phone TEXT NOT NULL,
             alert_phones TEXT NOT NULL DEFAULT \'\', email TEXT NOT NULL DEFAULT \'\',
             business_code TEXT NOT NULL DEFAULT \'\',
-            digest_freq TEXT NOT NULL DEFAULT \'weekly\', alert_tier3 INTEGER DEFAULT 0,
+            digest_freq TEXT NOT NULL DEFAULT \'daily\', alert_tier3 INTEGER DEFAULT 0,
             website_url TEXT NOT NULL DEFAULT \'\', website_info TEXT NOT NULL DEFAULT \'\',
             twilio_number TEXT NOT NULL DEFAULT \'\', muted_until TEXT, paused INTEGER DEFAULT 0,
             alert_include_images INTEGER DEFAULT 1, timezone TEXT NOT NULL DEFAULT 'America/Chicago',
@@ -125,6 +125,16 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS media_pending (
             business_id TEXT NOT NULL, customer_phone TEXT NOT NULL,
             media_id TEXT NOT NULL, created_at TEXT NOT NULL)""",
+        f"""CREATE TABLE IF NOT EXISTS app_meta (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT \'\')""",
+        f"""CREATE TABLE IF NOT EXISTS managers (
+            id {s} {pk}, business_id TEXT NOT NULL, phone TEXT NOT NULL,
+            phone_key TEXT NOT NULL DEFAULT \'\', name TEXT NOT NULL DEFAULT \'\',
+            role TEXT NOT NULL DEFAULT \'manager\', active INTEGER DEFAULT 1,
+            reply_context TEXT NOT NULL DEFAULT \'0\', reply_mode TEXT NOT NULL DEFAULT \'0\',
+            muted_until TEXT, created_at TEXT NOT NULL)""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mgr_biz_phone ON managers(business_id, phone_key)",
+        "CREATE INDEX IF NOT EXISTS idx_mgr_phone_key ON managers(phone_key)",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
@@ -133,7 +143,7 @@ def init_db():
         try:
             with get_db() as c: _execute(c, stmt)
         except Exception as e: logger.warning(f"init_db stmt skipped: {e}")
-    for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'weekly\'"),
+    for col, default in [("alert_phones","\'\'"),("email","\'\'"),("digest_freq","\'daily\'"),
                          ("alert_tier3","0"),("website_url","\'\'"),("website_info","\'\'"),
                          ("owner_context","\'0\'"),("owner_reply_mode","\'0\'"),
                          ("business_code","\'\'"),("trial_ends_at","\'\'"),
@@ -143,6 +153,21 @@ def init_db():
         try:
             with get_db() as c: _execute(c, f"ALTER TABLE businesses ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except: pass
+    # One-time backfill: default existing operators to daily digests.
+    # Gated by app_meta so a deliberate DIGEST WEEKLY choice is never re-flipped
+    # on later cold starts. Operators on 'off' (opted out) are left untouched.
+    try:
+        with get_db() as c:
+            done = _fetchone(c, _q("SELECT value FROM app_meta WHERE key=?"),
+                             ("digest_daily_default_backfill",))
+            if not done:
+                _execute(c, "UPDATE businesses SET digest_freq='daily' WHERE digest_freq='weekly'")
+                _execute(c, _q("INSERT INTO app_meta (key,value) VALUES (?,?)"),
+                         ("digest_daily_default_backfill", "done"))
+                logger.info("[MIGRATION] digest default backfill: weekly -> daily (off preserved)")
+    except Exception as e:
+        logger.warning(f"[MIGRATION] digest backfill skipped: {e}")
+
     # messages table additive columns
     for col, default in [("auto_reply","\'\'"),("explanation","\'\'"),("image_url","\'\'")]:
         try:
@@ -256,11 +281,12 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
         try:
             with get_db() as c:
                 if use_zip_cols:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", zip_code or "", city, state, vertical or "", now))
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,digest_freq,zip,city,state,vertical,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", "daily", zip_code or "", city, state, vertical or "", now))
                 else:
-                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
-                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", now))
+                    _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,digest_freq,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+                             (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", "daily", now))
+            sync_managers(biz_id, owner_phone, all_phones)
             return business_code
         except Exception as e:
             if use_zip_cols:
@@ -275,7 +301,116 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
             return None
     return None
 
+# --- Managers (per-person rows + per-person state) ---
+
+def _mkey(p):
+    """Last-10-digits key. +15125551234 / 512-555-1234 / (512) 555 1234 all match."""
+    d = "".join(ch for ch in (p or "") if ch.isdigit())
+    return d[-10:] if len(d) >= 10 else d
+
+def upsert_manager(bid, phone, role="manager", name="", set_role=False):
+    """Add or reactivate a manager. set_role=True rewrites role on an existing row."""
+    key = _mkey(phone)
+    if not bid or not key: return False
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT id FROM managers WHERE business_id=? AND phone_key=?"), (bid, key))
+            if row:
+                if set_role:
+                    _execute(c, _q("UPDATE managers SET phone=?, role=?, active=1 WHERE id=?"), (phone, role, row["id"]))
+                else:
+                    _execute(c, _q("UPDATE managers SET phone=?, active=1 WHERE id=?"), (phone, row["id"]))
+            else:
+                _execute(c, _q("INSERT INTO managers (business_id,phone,phone_key,name,role,active,created_at) VALUES (?,?,?,?,?,1,?)"),
+                         (bid, phone, key, name, role, now))
+        return True
+    except Exception as e:
+        logger.warning(f"upsert_manager failed {bid}/{phone}: {e}"); return False
+
+def deactivate_manager(bid, phone):
+    key = _mkey(phone)
+    if not bid or not key: return False
+    try:
+        with get_db() as c:
+            _execute(c, _q("UPDATE managers SET active=0 WHERE business_id=? AND phone_key=?"), (bid, key))
+        return True
+    except Exception as e:
+        logger.warning(f"deactivate_manager failed: {e}"); return False
+
+def get_manager(bid, phone):
+    key = _mkey(phone)
+    if not bid or not key: return None
+    try:
+        with get_db() as c:
+            return _fetchone(c, _q("SELECT * FROM managers WHERE business_id=? AND phone_key=?"), (bid, key))
+    except Exception as e:
+        logger.warning(f"get_manager failed: {e}"); return None
+
+def _mgr_set(bid, phone, field, value):
+    """Write one column on one manager row. Returns False if no such row —
+    callers use that to fall back to the legacy business-level column."""
+    key = _mkey(phone)
+    if not bid or not key: return False
+    try:
+        with get_db() as c:
+            cur = _execute(c, _q(f"UPDATE managers SET {field}=? WHERE business_id=? AND phone_key=?"),
+                           (str(value), bid, key))
+            return (cur.rowcount or 0) > 0
+    except Exception as e:
+        logger.warning(f"_mgr_set {field} failed: {e}"); return False
+
+def sync_managers(bid, owner_phone, alert_phones_str):
+    """Make manager rows match owner_phone + alert_phones. Owner first, deduped.
+    Phones no longer listed are deactivated, not deleted — their history survives."""
+    owner = (owner_phone or "").strip()
+    listed = [p.strip() for p in (alert_phones_str or "").split(",") if p.strip()]
+    seen, ordered = set(), []
+    for p in ([owner] if owner else []) + listed:
+        k = _mkey(p)
+        if k and k not in seen:
+            seen.add(k); ordered.append(p)
+    for i, p in enumerate(ordered):
+        upsert_manager(bid, p, role="owner" if i == 0 else "manager", set_role=True)
+    try:
+        with get_db() as c:
+            for r in _fetchall(c, _q("SELECT phone_key FROM managers WHERE business_id=? AND active=1"), (bid,)):
+                if r["phone_key"] not in seen:
+                    _execute(c, _q("UPDATE managers SET active=0 WHERE business_id=? AND phone_key=?"), (bid, r["phone_key"]))
+    except Exception as e:
+        logger.warning(f"sync_managers prune failed: {e}")
+    return len(ordered)
+
+def _seed_managers_if_empty(biz):
+    """Lazy migration. First alert for a business converts its alert_phones
+    string into manager rows. Runs once per business, then never writes again."""
+    bid = biz.get("id")
+    if not bid: return
+    try:
+        with get_db() as c:
+            n = _fetchone(c, _q("SELECT COUNT(*) AS n FROM managers WHERE business_id=?"), (bid,))
+        if n and int(n.get("n") or 0) > 0: return
+    except Exception:
+        return
+    sync_managers(bid, biz.get("owner_phone",""), biz.get("alert_phones",""))
+    logger.info(f"[MIGRATION] seeded managers for {bid}")
+
 def get_alert_phones(biz):
+    """Active, unmuted managers — owner first. Falls back to the legacy
+    alert_phones string if the managers table is missing or has no rows."""
+    bid = biz.get("id")
+    if bid:
+        _seed_managers_if_empty(biz)
+        try:
+            with get_db() as c:
+                rows = _fetchall(c, _q("SELECT phone, role, muted_until FROM managers WHERE business_id=? AND active=1 ORDER BY id"), (bid,))
+        except Exception as e:
+            logger.warning(f"get_alert_phones managers read failed: {e}"); rows = []
+        if rows:
+            now = datetime.now(timezone.utc).isoformat()
+            live = [r for r in rows if not (r.get("muted_until") and str(r["muted_until"]) > now)]
+            live.sort(key=lambda r: 0 if (r.get("role") == "owner") else 1)
+            return [r["phone"] for r in live]
     phones = [p.strip() for p in (biz.get("alert_phones") or biz.get("owner_phone") or "").split(",") if p.strip()]
     owner = biz.get("owner_phone","")
     if owner and owner not in phones: phones.insert(0, owner)
@@ -292,7 +427,18 @@ def get_business_by_twilio(twilio_number):
 
 def get_business_by_owner(owner_phone):
     clean = _normalize_phone(owner_phone)
+    key = _mkey(clean)
     with get_db() as c:
+        # Indexed managers lookup first — avoids scanning every business and
+        # string-splitting its alert_phones on every inbound operator text.
+        if key:
+            try:
+                m = _fetchone(c, _q("SELECT business_id FROM managers WHERE phone_key=? AND active=1 ORDER BY id LIMIT 1"), (key,))
+                if m:
+                    b = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (m["business_id"],))
+                    if b: return b
+            except Exception as e:
+                logger.warning(f"managers lookup failed, falling back to scan: {e}")
         row = _fetchone(c, _q("SELECT * FROM businesses WHERE owner_phone=?"), (clean,))
         if row: return row
         for r in _fetchall(c, "SELECT * FROM businesses"):
@@ -549,7 +695,7 @@ def get_stats(bid, days=7):
             tier_counts[tr] = tier_counts.get(tr,0) + r["cnt"]
         # Message rows grouped by tier (capped). Customer phone is intentionally NOT selected.
         by_tier = {1:[],2:[],3:[],4:[]}
-        for r in _fetchall(c, _q("SELECT tier, category, summary, message_text, acknowledged, created_at FROM messages WHERE business_id=? AND created_at>? ORDER BY tier ASC, created_at DESC"), (bid, cutoff)):
+        for r in _fetchall(c, _q("SELECT tier, category, summary, message_text, auto_reply, created_at FROM messages WHERE business_id=? AND created_at>? ORDER BY tier ASC, created_at DESC"), (bid, cutoff)):
             tr = r["tier"] if r["tier"] in (1,2,3,4) else 4
             if len(by_tier[tr]) < DIGEST_TIER_CAP:
                 by_tier[tr].append(dict(r))
@@ -640,12 +786,13 @@ def send_sms(to, body, from_number="", media_url=""):
 # --- Email (SendGrid) ---
 SENDGRID_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
 DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Connect@HotlineTXT.com")
+SIGNUP_NOTIFY_EMAIL = os.getenv("SIGNUP_NOTIFY_EMAIL", "signups@HotlineTXT.com")
 
-def send_email(to_email, subject, html_body):
+def send_email(to_email, subject, html_body, from_email=None):
     if not SENDGRID_KEY: logger.info(f"[DRY-RUN] Email to {to_email}: {subject}"); return True
     try:
         import urllib.request
-        data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":DIGEST_FROM_EMAIL,"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
+        data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":(from_email or DIGEST_FROM_EMAIL),"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
         req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send", data=data, headers={"Authorization":f"Bearer {SENDGRID_KEY}","Content-Type":"application/json"}, method="POST")
         urllib.request.urlopen(req); return True
     except Exception as e: logger.error(f"Email failed: {e}"); return False
@@ -657,7 +804,7 @@ _ai_client = None  # Stores API key string; HTTP calls used directly
 CLASSIFICATION_PROMPT = """You are a business issue classifier for an SMS alert system called Hotline. Analyze customer messages and return structured JSON.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow/flooding — that is Tier 2 equipment/cleanliness (plumbing issue, not structural emergency). Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, smoke, gas leak, sparks, electrical hazard (active arcing/burning), injury, someone hurt/collapsed/unconscious, violence, threats, weapons. STRUCTURAL FLOODING: only Tier 1 if active flooding INSIDE the building endangering people or property — NOT outdoor/utility flooding (water bubbling up on road, sewage backup in yard). NOT Tier 1: Toilet or sink overflow, water main break, burst pipe outdoors, sewage backup — all Tier 2 cleanliness/equipment. Tier 1 "electrical" means ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — these are complaints or compliments, never emergencies.
 - Tier 2: Business-Critical (Orange Alert) — Operations broken, customers being lost right now. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff present, supply outages (no toilet paper, soap, napkins), extreme wait times (20+ min, threatening to leave), access blocked (can't get in door), health/hygiene issues (disgusting bathroom, unsanitary). Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk (Yellow) — Customer unhappy, no operational failure. Rude staff, music too loud, temperature complaints, general disappointment, "never coming back."
@@ -672,8 +819,11 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 - "safety" = anything involving physical danger (Tier 1)
 
 AUTO-REPLY TONE:
-- Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us." Then tell customer to call 911. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action.
+- Tier 1: Urgent, direct. ALWAYS start with "Thank you for alerting us."
+  - UNCONDITIONAL "Call 911 now" for: fire, smoke, gas leak, active electrical (sparks/burning/arcing), weapons/violence, unconscious/not breathing/severe bleeding.
+  - CONDITIONAL "If anyone is in immediate danger, call 911 now" for: ambiguous-but-serious (possible medical, confrontation, structural danger that might endanger people).
+  - NEVER say "we've contacted emergency services."
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue type, say management notified. No exclamation marks. NEVER promise specific action. NEVER tell customer to call any emergency number.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Ask for specifics ONLY if genuinely needed ("Which area?" "What exactly happened?"). Natural tone, no corporate language.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Genuine appreciation, use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer factual questions (hours, address, menu, prices, directions). If genuinely vague or unclear, ask one clarifying question. Forward to management. Natural conversation, not templates.
@@ -717,6 +867,8 @@ OTHER EDGE CASES:
 - "You should fire her" = Tier 3, staffing. Employment complaint, NOT emergency.
 - "Bathroom is flooding!" = Tier 2, cleanliness. Plumbing issue, not structural emergency.
 - "Basement is flooding!" = Tier 1, safety. Structural flooding = always emergency.
+- "Water main looks broken" / "Water bubbling up on the road" = Tier 2, equipment (utility/infrastructure). NOT an emergency — do NOT tell customer to call 911.
+- "Sewage backing up into my yard" = Tier 2, cleanliness/health. Not a 911 situation.
 - "Out of toilet paper" = Tier 2, supply.
 - "The dryer isn't heating" = Tier 2, equipment (revenue loss per unit).
 - "Coins are jammed in the machine" = Tier 2, payment (customer loses money, business loses revenue).
@@ -945,22 +1097,38 @@ def generate_explanation(tier, category):
     tier_fallbacks = {1: "Safety emergency detected. Immediate action required.",2: "Operational issue detected. Investigate and respond within 1 hour.",3: "Customer concern noted. Follow up to preserve relationship.",4: "Message received. No immediate action required."}
     return tier_fallbacks.get(tier, "Alert received.")
 
-def set_context(bid, mid):
+# State lives on the manager row when we know who texted. The business-level
+# columns stay as fallback for unknown senders and any legacy no-phone callers.
+
+def set_context(bid, mid, phone=""):
+    if phone and _mgr_set(bid, phone, "reply_context", mid): return
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_context=? WHERE id=?"), (str(mid), bid))
 
-def get_context(bid):
+def get_context(bid, phone=""):
+    if phone:
+        m = get_manager(bid, phone)
+        if m:
+            try: return int(m.get("reply_context") or 0)
+            except: return 0
     with get_db() as c:
         row = _fetchone(c, _q("SELECT owner_context FROM businesses WHERE id=?"), (bid,))
         try: return int(row["owner_context"]) if row else 0
         except: return 0
 
-def set_reply_mode(bid, mid):
+def set_reply_mode(bid, mid, phone=""):
+    if phone and _mgr_set(bid, phone, "reply_mode", mid): return
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_reply_mode=? WHERE id=?"), (str(mid), bid))
 
-def clear_reply_mode(bid):
+def clear_reply_mode(bid, phone=""):
+    if phone and _mgr_set(bid, phone, "reply_mode", 0): return
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_reply_mode='0' WHERE id=?"), (bid,))
 
-def get_reply_mode(bid):
+def get_reply_mode(bid, phone=""):
+    if phone:
+        m = get_manager(bid, phone)
+        if m:
+            try: return int(m.get("reply_mode") or 0)
+            except: return 0
     with get_db() as c:
         row = _fetchone(c, _q("SELECT owner_reply_mode FROM businesses WHERE id=?"), (bid,))
         try: v = int(row["owner_reply_mode"]) if row else 0; return v if v else 0
@@ -1371,33 +1539,40 @@ def handle_owner_command(text, business, sender_phone=""):
     raw = text.strip()
     cmd = raw.upper()
 
+    # Self-heal: an operator texting in who has no manager row yet gets one,
+    # so their reply state is theirs from the very first command.
+    if sender_phone and not get_manager(bid, sender_phone):
+        sync_managers(bid, business.get("owner_phone",""), business.get("alert_phones",""))
+        if not get_manager(bid, sender_phone):
+            upsert_manager(bid, sender_phone)
+
     # Words that should be interpreted as commands even when we're in reply mode
     # (so the operator can't accidentally text "STATUS" to the customer).
     RESERVED = {
         "NEVERMIND","CANCEL","CLOSE","DONE","WRAP","FINISH","END",
         "MENU","HELP","?",
         "STATUS","ALERTS","TIER2","TIER3","ALERTS CRITICAL","ALERTS ALL",
-        "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","REPLY",
+        "PAUSE","RESUME","BILLING","DIGEST DAILY","DIGEST WEEKLY","DIGEST OFF","REPLY",
     }
 
     # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
-    reply_mid = get_reply_mode(bid)
+    reply_mid = get_reply_mode(bid, phone=sender_phone)
     if reply_mid:
         if cmd in {"NEVERMIND","CANCEL"}:
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             return "Reply cancelled."
         if cmd in {"CLOSE","DONE","WRAP","FINISH","END"}:
             msg = get_message_by_id(reply_mid)
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             if msg: end_conversation(bid, msg["from_number"])
             return "Conversation closed. AI auto-replies resumed."
         # If operator types another reserved command, fall through to handle it
         # instead of texting that word to the customer.
         if cmd in RESERVED:
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             # fall through below
         else:
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             msg = get_message_by_id(reply_mid)
             if msg:
                 send_sms(msg["from_number"], raw)
@@ -1431,13 +1606,14 @@ def handle_owner_command(text, business, sender_phone=""):
                 "TIER3 \u2014 Add reputation alerts\n"
                 "PAUSE / RESUME\n"
                 "BILLING \u2014 Subscription\n"
+                "DIGEST DAILY / WEEKLY / OFF \u2014 Summary emails\n"
                 "MENU \u2014 This message")
 
     if cmd == "REPLY":
         recent = get_recent_all(bid, 1)
         msg = recent[0] if recent else None
         if not msg: return "No messages to reply to."
-        set_reply_mode(bid, msg["id"])
+        set_reply_mode(bid, msg["id"], phone=sender_phone)
         logger.info(f"[REPLY MODE] biz={bid} target_msg_id={msg['id']} text={msg['message_text'][:40]!r}")
         return (f"Replying to: \"{msg['message_text'][:60]}\"\n"
                 f"Type your reply now, or NEVERMIND.\n"
@@ -1461,6 +1637,7 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd == "RESUME": set_paused(bid, False); return "\U0001f514 Alerts resumed."
     if cmd == "DIGEST DAILY": set_digest_freq(bid, "daily"); return "\U0001f4e7 Digest set to daily."
     if cmd == "DIGEST WEEKLY": set_digest_freq(bid, "weekly"); return "\U0001f4e7 Digest set to weekly."
+    if cmd == "DIGEST OFF": set_digest_freq(bid, "off"); return "\U0001f4e7 Digests turned off. Reply DIGEST DAILY or DIGEST WEEKLY to turn back on."
 
     if cmd == "DEBUG":
         # Diagnostic: show which biz the operator is tied to and the last 3 messages
@@ -1487,14 +1664,13 @@ DIGEST_TIERS = [
 
 def _digest_fmt_time(iso, tz="America/Chicago"):
     try:
-        import pytz
+        from zoneinfo import ZoneInfo
         dt_utc = datetime.fromisoformat(iso.replace("Z","+00:00"))
-        tz_obj = pytz.timezone(tz)
-        dt_local = dt_utc.astimezone(tz_obj)
+        dt_local = dt_utc.astimezone(ZoneInfo(tz))
         abbr = dt_local.strftime("%Z")
         return dt_local.strftime(f"%b %-d, %-I:%M %p {abbr}")
     except Exception:
-        return ""
+        return iso[:16] if iso else ""
 
 def _digest_esc(v):
     return (str(v or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
@@ -1504,23 +1680,20 @@ def _digest_tier_section(tier, label, color, tint, blurb, rows, total, tz="Ameri
         return ""
     items = []
     for r in rows:
-        text = r.get("summary") or r.get("message_text") or ""
-        text = _digest_esc(text)
-        if len(text) > 200: text = text[:200].rstrip() + "&hellip;"
+        text = _digest_esc(r.get("message_text") or r.get("summary") or "")
+        if len(text) > 300: text = text[:300].rstrip() + "&hellip;"
+        reply = _digest_esc(r.get("auto_reply") or "")
+        if len(reply) > 300: reply = reply[:300].rstrip() + "&hellip;"
         cat = _digest_esc((r.get("category") or "").replace("_"," "))
         when = _digest_esc(_digest_fmt_time(r.get("created_at",""), tz=tz))
-        ack = ""
-        if tier in (1,2):
-            if r.get("acknowledged"):
-                ack = '<span style="color:#22C55E;font-size:11px;font-weight:600;white-space:nowrap">&#10003; acknowledged</span>'
-            else:
-                ack = '<span style="color:#DC2626;font-size:11px;font-weight:600;white-space:nowrap">&bull; open</span>'
         meta = " &middot; ".join([x for x in [cat, when] if x])
+        reply_html = (f'<div style="margin-top:6px;padding:6px 10px;background:#FFF7ED;border-left:3px solid #EA580C;'
+                      f'font-size:12px;color:#92400E;line-height:1.4"><strong>We replied:</strong> {reply}</div>') if reply else ""
         items.append(
             f'<tr><td style="padding:12px 16px;border-top:1px solid #DDDDDD">'
             f'<div style="font-size:14px;color:#1A1A1A;line-height:1.45">{text}</div>'
-            f'<div style="margin-top:4px;display:flex;justify-content:space-between;gap:12px">'
-            f'<span style="font-size:11px;color:#888;text-transform:capitalize">{meta}</span>{ack}</div>'
+            f'{reply_html}'
+            f'<div style="margin-top:4px"><span style="font-size:11px;color:#888;text-transform:capitalize">{meta}</span></div>'
             f'</td></tr>'
         )
     more = ""
@@ -1653,7 +1826,7 @@ def send_all_digests(force_freq=None, bid=None):
             if biz_row: businesses = [dict(biz_row)]
             else: return 0
     for biz in businesses:
-        freq = force_freq or biz.get("digest_freq") or "weekly"
+        freq = force_freq or biz.get("digest_freq") or "daily"
         if freq == "off": continue
         email = biz.get("email","")
         if not email: continue
@@ -2083,6 +2256,8 @@ async def admin_update_phones(request: Request):
     normalized = ",".join(phones)
     with get_db() as c:
         _execute(c, _q("UPDATE businesses SET alert_phones=? WHERE id=?"), (normalized, biz_id))
+        biz_row = _fetchone(c, _q("SELECT owner_phone FROM businesses WHERE id=?"), (biz_id,))
+    sync_managers(biz_id, (biz_row or {}).get("owner_phone",""), normalized)
     logger.info(f"[ADMIN] Updated alert phones for {biz_id}: {normalized}")
     return {"success":True, "alert_phones": normalized}
 
@@ -2765,155 +2940,146 @@ def _make_qr_png_bytes(business_code: str, business_name: str = "") -> bytes:
     return buf.getvalue()
 
 
-def _make_sign_pdf_bytes(business_code: str, business_name: str = "") -> bytes:
-    """
-    Sign PDF matching the Hotline template:
-    - Cream/off-white background (#F5F0E8)
-    - Orange double border with crop marks
-    - Dark bold headline "Something wrong?"
-    - Orange bold "Text us:" subhead
-    - Orange divider line with center dot
-    - Large QR code (SMS deep link — opens native messages app)
-    - "Powered by H HOTLINE" + "Visit Hotlinetxt.com" footer
-    """
-    url = _sms_deep_link(business_code, business_name)
+VERTICALS_EXAMPLES = {
+    "laundromat":  ['"Machine ate my money"', '"Water leaking"', '"Card reader down"'],
+    "selfstorage": ['"Gate won\'t open"', '"Someone living in a unit"', '"My unit was broken into"'],
+    "mhc":         ['"Water main broke"', '"Power out at lot 12"', '"Sewage backing up"'],
+    "gym":         ['"Treadmill broken"', '"AC not working"', '"Door not locking"'],
+    "carwash":     ['"Bay won\'t release my car"', '"Bay broken mid-wash"', '"Payment kiosk down"'],
+    "rvpark":      ['"No power at site 14"', '"Sewage backing up"', '"No water at site 8"'],
+}
 
-    # Build QR image bytes for ReportLab
+
+def _make_sign_pdf_bytes(business_code: str, business_name: str = "", vertical: str = "") -> bytes:
+    """
+    Vertical-aware sign PDF (Hotline template):
+      - Cream background, orange double border
+      - "Something broken?" headline
+      - Per-vertical example messages ('other'/unknown -> none = generic sign)
+      - "Scan to text us" subhead + orange divider
+      - Large QR (SMS deep link -> opens native Messages app prefilled)
+      - Thank-you line + "Emergency? Call 911."
+      - "Powered by H HOTLINE" wordmark footer
+    """
+    IN = 72.0
+    url = _sms_deep_link(business_code, business_name)
+    examples = VERTICALS_EXAMPLES.get((vertical or "").strip().lower(), [])
+
     qr_pil = _make_qr_pil(url, size_px=900)
     qr_buf = io.BytesIO()
     qr_pil.save(qr_buf, format="PNG")
     qr_buf.seek(0)
     qr_reader = RLImageReader(qr_buf)
 
-    ORANGE      = rl_colors.HexColor("#D4520A")   # template orange
-    CREAM       = rl_colors.HexColor("#F5F0E8")   # template background
-    DARK        = rl_colors.HexColor("#1C1C1A")   # near-black headline
-    GRAY        = rl_colors.HexColor("#888880")   # footer text
+    ORANGE = rl_colors.HexColor("#EA580C")
+    CREAM  = rl_colors.HexColor("#F5EFE6")
+    INK    = rl_colors.HexColor("#1A0F08")
+    MUTED  = rl_colors.HexColor("#7A6E63")
 
-    # Page: 8.5 × 11" (letter) — matches template proportions
-    PAGE_W, PAGE_H = 8.5 * 72, 11 * 72
+    PAGE_W, PAGE_H = 8.5 * IN, 11 * IN
     pdf_buf = io.BytesIO()
     c = rl_canvas.Canvas(pdf_buf, pagesize=(PAGE_W, PAGE_H))
 
-    # ── Cream background ────────────────────────────────────────────────────
+    # Background
     c.setFillColor(CREAM)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    # ── Crop marks (small corner ticks outside border) ──────────────────────
-    MARGIN = 36       # margin from page edge to outer border
-    TICK   = 14       # length of crop mark ticks
-    GAP    = 6        # gap between border and tick start
-    c.setStrokeColor(rl_colors.HexColor("#CCCCCC"))
-    c.setLineWidth(0.5)
-    # corners: TL, TR, BR, BL
-    corners = [
-        (MARGIN, PAGE_H - MARGIN),
-        (PAGE_W - MARGIN, PAGE_H - MARGIN),
-        (PAGE_W - MARGIN, MARGIN),
-        (MARGIN, MARGIN),
-    ]
-    for (cx, cy) in corners:
-        # horizontal tick
-        dx = -1 if cx < PAGE_W/2 else 1
-        c.line(cx + dx*(GAP), cy, cx + dx*(GAP+TICK), cy)
-        # vertical tick
-        dy = 1 if cy < PAGE_H/2 else -1
-        c.line(cx, cy + dy*(GAP), cx, cy + dy*(GAP+TICK))
-
-    # ── Double orange border ─────────────────────────────────────────────────
-    OUTER_PAD = MARGIN           # outer rect inset from page edge
-    INNER_PAD = OUTER_PAD + 7   # inner rect (gap between borders)
-    RADIUS = 18
-
+    # Double orange border
+    margin, inset = 0.45 * IN, 0.10 * IN
     c.setStrokeColor(ORANGE)
-    c.setFillColor(CREAM)
+    c.setLineWidth(2.5)
+    c.roundRect(margin, margin, PAGE_W - 2*margin, PAGE_H - 2*margin, 14, fill=0, stroke=1)
+    c.setLineWidth(0.8)
+    c.roundRect(margin+inset, margin+inset, PAGE_W - 2*margin - 2*inset,
+                PAGE_H - 2*margin - 2*inset, 10, fill=0, stroke=1)
 
-    # Outer border
-    c.setLineWidth(3)
-    c.roundRect(OUTER_PAD, OUTER_PAD,
-                PAGE_W - 2*OUTER_PAD, PAGE_H - 2*OUTER_PAD,
-                RADIUS, fill=0, stroke=1)
-    # Inner border
-    c.setLineWidth(1.5)
-    c.roundRect(INNER_PAD, INNER_PAD,
-                PAGE_W - 2*INNER_PAD, PAGE_H - 2*INNER_PAD,
-                RADIUS - 4, fill=0, stroke=1)
+    # Headline
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 60)
+    c.drawCentredString(PAGE_W/2, PAGE_H - 1.55*IN, "Something")
+    c.drawCentredString(PAGE_W/2, PAGE_H - 2.35*IN, "broken?")
 
-    # ── "Something wrong?" headline ──────────────────────────────────────────
-    c.setFillColor(DARK)
-    c.setFont("Helvetica-Bold", 58)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 148, "Something")
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 216, "wrong?")
+    # Per-vertical examples
+    cursor_y = PAGE_H - 2.95*IN
+    if examples:
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Oblique", 13)
+        for ex in examples:
+            c.drawCentredString(PAGE_W/2, cursor_y, ex)
+            cursor_y -= 0.24*IN
+        cursor_y -= 0.15*IN
 
-    # ── "Text us:" in orange ─────────────────────────────────────────────────
+    # Subhead
     c.setFillColor(ORANGE)
-    c.setFont("Helvetica-Bold", 52)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 290, "Text us:")
+    c.setFont("Helvetica-Bold", 28)
+    c.drawCentredString(PAGE_W/2, cursor_y - 0.15*IN, "Scan to text us")
+    cursor_y -= 0.55*IN
 
-    # ── Orange divider line with center dot ──────────────────────────────────
-    div_y = PAGE_H - 330
-    line_x1 = PAGE_W * 0.18
-    line_x2 = PAGE_W * 0.82
+    # Divider with center dot
+    div_y = cursor_y
+    c.setStrokeColor(ORANGE)
+    c.setLineWidth(1.2)
+    line_len, gap = 1.55*IN, 0.13*IN
+    c.line(PAGE_W/2 - line_len - gap, div_y, PAGE_W/2 - gap, div_y)
+    c.line(PAGE_W/2 + gap, div_y, PAGE_W/2 + line_len + gap, div_y)
+    c.setFillColor(ORANGE)
+    c.circle(PAGE_W/2, div_y, 0.055*IN, fill=1, stroke=0)
+
+    # QR card
+    card_size = 2.85*IN
+    card_x = (PAGE_W - card_size) / 2
+    card_y = div_y - 0.40*IN - card_size
     c.setStrokeColor(ORANGE)
     c.setLineWidth(1.5)
-    mid = PAGE_W / 2
-    # left segment
-    c.line(line_x1, div_y, mid - 12, div_y)
-    # right segment
-    c.line(mid + 12, div_y, line_x2, div_y)
-    # center dot
-    c.setFillColor(ORANGE)
-    c.circle(mid, div_y, 5, fill=1, stroke=0)
-
-    # ── QR code (large, centered, with thin orange border box) ───────────────
-    qr_size = 240
-    qr_x = (PAGE_W - qr_size) / 2
-    qr_y = div_y - 20 - qr_size
-
-    # Orange border around QR
-    pad = 10
-    c.setStrokeColor(ORANGE)
     c.setFillColor(rl_colors.white)
-    c.setLineWidth(1.5)
-    c.roundRect(qr_x - pad, qr_y - pad,
-                qr_size + pad*2, qr_size + pad*2,
-                6, fill=1, stroke=1)
-    c.drawImage(qr_reader, qr_x, qr_y, width=qr_size, height=qr_size)
+    c.roundRect(card_x, card_y, card_size, card_size, 14, fill=1, stroke=1)
+    qr_pad = 0.30*IN
+    c.drawImage(qr_reader, card_x + qr_pad, card_y + qr_pad,
+                card_size - 2*qr_pad, card_size - 2*qr_pad, mask='auto')
 
-    # ── Footer ───────────────────────────────────────────────────────────────
-    footer_center_y = INNER_PAD + 34
-    wordmark_y      = footer_center_y + 4
+    # Code hint
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 10)
+    c.drawCentredString(PAGE_W/2, card_y - 0.30*IN, f"Code: {business_code}")
 
-    # "Powered by" label
-    c.setFillColor(GRAY)
+    # Thank-you
+    thanks_y = card_y - 0.95*IN
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(PAGE_W/2, thanks_y, "Thanks for helping us")
+    c.setFillColor(ORANGE)
+    c.drawCentredString(PAGE_W/2, thanks_y - 0.28*IN, "keep this place great.")
+
+    # 911 line
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica-Oblique", 10)
+    c.drawCentredString(PAGE_W/2, thanks_y - 0.70*IN, "Emergency? Call 911.")
+
+    # Footer wordmark: "Powered by [H] HOTLINE"
+    foot_y = 0.95*IN
+    box_s = 18
     c.setFont("Helvetica", 11)
     powered_w = c.stringWidth("Powered by ", "Helvetica", 11)
-
-    # H box
-    box_s = 18
-    total_w = powered_w + box_s + 6 + c.stringWidth("HOTLINE", "Helvetica-Bold", 14)
+    hotline_w = c.stringWidth("HOTLINE", "Helvetica-Bold", 14)
+    total_w = powered_w + box_s + 6 + hotline_w
     start_x = (PAGE_W - total_w) / 2
-
-    c.drawString(start_x, wordmark_y, "Powered by ")
+    c.setFillColor(MUTED)
+    c.drawString(start_x, foot_y, "Powered by ")
     box_x = start_x + powered_w
     c.setFillColor(ORANGE)
-    c.roundRect(box_x, wordmark_y - 2, box_s, box_s, 3, fill=1, stroke=0)
+    c.roundRect(box_x, foot_y - 2, box_s, box_s, 3, fill=1, stroke=0)
     c.setFillColor(rl_colors.white)
     c.setFont("Helvetica-Bold", 11)
-    c.drawCentredString(box_x + box_s/2, wordmark_y + 2, "H")
-
-    c.setFillColor(DARK)
+    c.drawCentredString(box_x + box_s/2, foot_y + 2, "H")
+    c.setFillColor(INK)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(box_x + box_s + 6, wordmark_y, "HOTLINE")
-
-    # "Visit Hotlinetxt.com for more info"
-    c.setFillColor(GRAY)
-    c.setFont("Helvetica", 10)
-    c.drawCentredString(PAGE_W / 2, footer_center_y - 14, "Visit Hotlinetxt.com for more info")
+    c.drawString(box_x + box_s + 6, foot_y, "HOTLINE")
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(PAGE_W/2, foot_y - 0.18*IN, "hotlinetxt.com")
 
     c.save()
     return pdf_buf.getvalue()
-
 
 @app.get("/signs/{business_code}.pdf")
 def sign_pdf(business_code: str):
@@ -2925,7 +3091,7 @@ def sign_pdf(business_code: str):
     if not biz:
         return Response(content="Business not found", status_code=404)
     try:
-        pdf_bytes = _make_sign_pdf_bytes(code, biz.get("name", ""))
+        pdf_bytes = _make_sign_pdf_bytes(code, biz.get("name", ""), biz.get("vertical", ""))
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -3330,7 +3496,7 @@ NAV_HTML = """<nav class="nav"><a href="/" class="logo"><svg xmlns="http://www.w
 DEMO_PROMPT = """You are simulating a business's customer feedback SMS system for a live demo called Hotline.
 
 TIER DEFINITIONS:
-- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, structural flooding (basement, building, lobby), gas leak, smoke, sparks, electrical hazard, injury, someone hurt/collapsed/unconscious, violence, threats, weapons, burst pipe. NOT Tier 1: Toilet or sink overflow — that is Tier 2 equipment/cleanliness. Tier 1 "electrical" means an ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
+- Tier 1: Emergency (Red Alert) — Physical danger to people or property. Literal fire, smoke, gas leak, sparks, electrical hazard (active arcing/burning), injury, someone hurt/collapsed/unconscious, violence, threats, weapons. STRUCTURAL FLOODING: only Tier 1 if active flooding INSIDE the building endangering people or property — NOT outdoor/utility flooding (water bubbling up on road, sewage backup in yard). NOT Tier 1: Toilet or sink overflow, water main break, burst pipe outdoors, sewage backup — all Tier 2 cleanliness/equipment. Tier 1 "electrical" means ACTIVE hazard only — sparks, arcing, burning smell, smoke, exposed or downed live wires, someone shocked. NOT Tier 1: a power outage / no power / breaker tripped or won't reset / no water / no hot water / internet or WiFi down with no fire, smoke, sparks, or burning — those are Tier 2 utility outages, NEVER a 911 emergency.
   NOT Tier 1: Figurative language. "fire her", "dumpster fire", "killing it", "blowing up", "on fire today", "she got fired" — complaints or compliments, never emergencies.
 - Tier 2: Business-Critical — Operations broken. Equipment failures (broken machines, payment systems down, gates stuck, pumps not working), no staff, supply outages (no toilet paper, soap), extreme waits (20+ min), access blocked (can't get in door), health/hygiene issues. Also Tier 2: utility outages — no power, power out, breaker tripped or won't reset, no water, no hot water, internet/WiFi down — when there is no sign of fire, smoke, sparks, or burning.
 - Tier 3: Reputation Risk — Customer unhappy, no operational failure. Rude staff, music too loud, temperature, disappointment.
@@ -3342,8 +3508,11 @@ Categories: cleanliness, staffing, equipment, wait_time, safety, supply, access,
 - "payment" = payment processing issues (card reader down, payment jam, coins stuck, online system down)
 
 AUTO-REPLY TONE:
-- Tier 1: Urgent. ALWAYS start with "Thank you for alerting us." Tell customer to call 911 immediately. NEVER say "we've contacted emergency services."
-- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue, say management notified. No exclamation marks. NEVER promise action.
+- Tier 1: Urgent. ALWAYS start with "Thank you for alerting us." 
+  - UNCONDITIONAL "Call 911 now" for: fire, smoke, gas leak, active electrical (sparks/burning/arcing), weapons/violence, unconscious/not breathing/severe bleeding.
+  - CONDITIONAL "If anyone is in immediate danger, call 911 now" for: ambiguous-but-serious (possible medical, confrontation, structural danger that might endanger people).
+  - NEVER say "we've contacted emergency services."
+- Tier 2: Professional, serious. ALWAYS start with "Thank you for reporting this." Confirm issue, say management notified. No exclamation marks. NEVER promise action. NEVER tell customer to call any emergency number.
 - Tier 3: Empathetic. ALWAYS start with "Thank you for reaching out." Acknowledge frustration. Invite more details. No exclamation marks.
 - Tier 4 positive: Warm, friendly. ALWAYS start with "Thank you!" Use exclamation marks.
 - Tier 4 inquiry: ALWAYS start with "Thank you for contacting us." NEVER answer business questions. If vague, ask follow-up. Forward to management.
@@ -3383,6 +3552,8 @@ EDGE CASES:
 - "You should fire her" = Tier 3, staffing complaint. NOT emergency.
 - "Out of toilet paper" = Tier 2, supply.
 - Any equipment failure, payment failure, or machinery jam = Tier 2 (customers cannot complete transactions).
+- "Water main looks broken" / "Water bubbling up on the road" = Tier 2, equipment (utility/infrastructure). NOT an emergency — do NOT tell customer to call 911.
+- "Sewage backing up into my yard" = Tier 2, cleanliness/health. Not a 911 situation.
 - "No power at my site" / "Power is out" / "Breaker won't reset" = Tier 2, equipment (utility outage). NOT an emergency — do NOT tell them to call 911.
 - "No water" / "No hot water" / "WiFi is down" = Tier 2, equipment (utility outage).
 - "Sparks from the outlet" / "Burning smell from the panel" / "Smoke from the dryer" = Tier 1, safety (active hazard).
@@ -3391,14 +3562,44 @@ EDGE CASES:
 Respond ONLY with JSON: {"tier":<int>,"category":"<str>","sentiment":"<str>","confidence":<float>,"summary":"<str>","auto_reply":"<str>"}"""
 
 
+def _always_emergency_check(text: str):
+    """Deterministic safety net for unambiguous life-safety keywords.
+    Returns a Tier 1 result immediately if matched, else None."""
+    keywords = [
+        "fire", "smoke", "gas leak", "gas is leaking",
+        "weapon", "gun", "gunshot", "shot", "stabbed", "knife",
+        "unconscious", "not breathing", "stopped breathing", "can't breathe",
+        "severe bleeding", "bleeding badly", "bleeding heavy"
+    ]
+    text_lower = (text or "").lower()
+    for kw in keywords:
+        if kw in text_lower:
+            return {
+                "tier": 1,
+                "category": "safety",
+                "sentiment": "urgent",
+                "confidence": 1.0,
+                "summary": text[:50],
+                "auto_reply": "Thank you for alerting us. Call 911 now. Evacuate if safe to do so."
+            }
+    return None
+
 @app.post("/demo/classify")
 async def demo_classify(request_data:dict=None):
     _ensure_init()
     if not request_data: return {"error":"No message"}
     text = (request_data.get("message") or "").strip()
     history = request_data.get("history") or []
+    suppress_reply = bool(request_data.get("suppress_reply", False))
     if not text: return {"error":"No message"}
     if len(text) > 500: return {"error":"Too long"}
+    # Check deterministic always-911 keywords first
+    emergency_result = _always_emergency_check(text)
+    if emergency_result:
+        explanation = generate_explanation(1, "safety")
+        return {"tier":1,"category":"safety","sentiment":"urgent","confidence":1.0,
+                "summary":text[:50],"auto_reply":emergency_result["auto_reply"],"explanation":explanation,
+                "tier_label":"Emergency","would_alert":True}
     if _ai_client:
         try:
             user_msg = ""
@@ -3415,6 +3616,10 @@ async def demo_classify(request_data:dict=None):
         except Exception as e: logger.error(f"Demo: {e}"); c = _classify_fallback(text)
     else: c = _classify_fallback(text)
     explanation = generate_explanation(c["tier"], c.get("category", "other"))
+    # If operator is actively handling this conversation, suppress auto-reply
+    if suppress_reply:
+        c["auto_reply"] = ""
+        logger.info("[DEMO CONVO] Suppressing auto-reply (operator active)")
     return {"tier":c["tier"],"category":c["category"],"sentiment":c["sentiment"],"confidence":c["confidence"],
             "summary":c["summary"],"auto_reply":c["auto_reply"],"explanation":explanation,
             "tier_label":{1:"Emergency",2:"Business-Critical",3:"Reputation Risk",4:"Routine"}.get(c["tier"],"Unknown"),
@@ -3435,15 +3640,15 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
     placements_html = "".join(f'<div style="padding:14px;background:#fff;border:1px solid #e0e0dc;border-radius:8px;text-align:center;font-size:13px;color:#666">{p}</div>' for p in placements)
     
     # Demo JS (adapted from main demo - uses v-cust and v-oper IDs)
-    DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+    DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
 function addB(c,cls,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
-async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
-history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1)}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2)}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
+async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});const d=await r.json();lastData=d;if(mo.lastChild)mo.lastChild.remove();const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
+history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
-function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;document.getElementById('v-input').value=''}
+function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;lastReplyTime=null;document.getElementById('v-input').value='';document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none'}
 function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
-function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
+function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;lastReplyTime=Date.now();addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');document.getElementById('v-op-input').style.display='block';if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none';return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
 
     steps_html = f'''<div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
@@ -3487,8 +3692,15 @@ h1{{font-size:clamp(28px,5vw,40px);font-weight:700;line-height:1.15;margin-botto
 <div class="phone-label-bar operator">Operator</div>
 <div class="pref-bar"><div class="pref-label">Alert level:</div><button class="filter-btn active" id="m-filt-crit" onclick="filterDemo('critical')">Critical only</button><button class="filter-btn" id="m-filt-all" onclick="filterDemo('all')">All messages</button></div>
 <div class="msgs" id="v-oper"><div class="bubble system">Operator alerts appear here</div></div>
-<div class="input-area"><div class="input-row"><input style="flex:1" type="text" placeholder="Type a message..."><button class="blue" style="margin:0">▲</button></div></div>
-<div class="home-bar"></div>
+<div class="v-op-cmds" id="v-op-cmds" style="display:none;padding:4px 12px 6px;gap:5px;flex-wrap:wrap;background:#fff">
+<div class="cmd-btn" onclick="operatorCmd('REPLY')" style="font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600">REPLY</div>
+<div class="cmd-btn" onclick="operatorCmd('CLOSE')" style="font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600">CLOSE</div>
+<div class="cmd-btn" onclick="operatorCmd('MENU')" style="font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #e0e0dc;background:#fff;color:#888;cursor:pointer;font-family:inherit;font-weight:600">MENU</div>
+</div>
+<div class="input-area v-op-input" id="v-op-input" style="display:none"><div class="input-row">
+<input type="text" id="v-op-inp" placeholder="Type a command..." onkeydown="if(event.key==='Enter')operatorCmd(this.value)">
+<button class="orange" onclick="operatorCmd(document.getElementById('v-op-inp').value)" style="background:#ea580c;color:#fff">&#9650;</button>
+</div></div><div class="home-bar"></div>
 </div></div>
 </div>
 
@@ -3774,7 +3986,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <footer>Hotline &middot; Real-time alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a></footer>
 <script>
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
-let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 
 const CHIPS={
   laundromat:[
@@ -3914,7 +4126,7 @@ async function sendDemo(){
   addB(mc,'out-blue',text);
   addB(mo,'system','<span class="spinner"></span> Processing...');
   try{
-    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history})});
+    const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});
     const d=await r.json();lastData=d;
     if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);
     const reply=d.auto_reply||'Thanks for letting us know.';
@@ -4057,13 +4269,13 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <footer>Hotline &middot; Real-time SMS alerts for offsite operators &middot; <a href="/privacy" style="color:#aaa">Privacy</a> &middot; <a href="/terms" style="color:#aaa">Terms</a> &middot; <a href="mailto:Connect@HotlineTXT.com" style="color:#aaa">Connect@HotlineTXT.com</a> &middot; <a href="https://www.instagram.com/hotlinetxt/" target="_blank" rel="noopener" style="color:#aaa;display:inline-flex;align-items:center;gap:4px;vertical-align:middle"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" stroke="none"/></svg>Instagram</a></footer>
 <script>
-let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical';
+let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 const mc=document.getElementById('m-cust'),mo=document.getElementById('m-operator');
 function addB(c,cls,label,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);let h='';if(label)h+='<div class="lbl">'+label+'</div>';h+=text.replace(/\\n/g,'<br>');d.innerHTML=h;c.appendChild(d);c.scrollTop=c.scrollHeight;applyFilter();return d}
 function tryEx(el){document.getElementById('cust-input').value=el.textContent;sendDemo()}
 function showOperatorInput(){document.getElementById('operator-cmds').style.display='flex';document.getElementById('operator-input').style.display='block'}
 function hideOperatorInput(){document.getElementById('operator-cmds').style.display='none';document.getElementById('operator-input').style.display='none'}
-function resetDemo(){history=[];lastData=null;replyMode=false;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Operator alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('operator-inp').value='';hideOperatorInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
+function resetDemo(){history=[];lastData=null;replyMode=false;lastReplyTime=null;demoCount=0;mc.innerHTML='<div class="bubble system">Customer messages appear here</div>';mo.innerHTML='<div class="bubble system">Operator alerts appear here</div>';document.getElementById('cust-input').value='';document.getElementById('operator-inp').value='';hideOperatorInput();addB(mo,'resp','','Conversation reset. Ready for a new scenario.')}
 function setFilter(mode){filterMode=mode;document.getElementById('filt-all').className='filter-btn'+(mode==='all'?' active':'');document.getElementById('filt-crit').className='filter-btn'+(mode==='critical'?' active':'');applyFilter()}
 function applyFilter(){mo.querySelectorAll('.bubble[data-tier]').forEach(function(b){var t=parseInt(b.getAttribute('data-tier'));b.style.display=(filterMode==='all'||t<=2)?'':'none'})}
 function fmtTime(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
@@ -4079,8 +4291,9 @@ function operatorCmd(raw){
   // In reply mode: any non-command text goes to customer
   if(replyMode){
     if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','','Reply cancelled.');inp.placeholder='Type a command...';return}
-    if(cmd==='CLOSE'){replyMode=false;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
+    if(cmd==='CLOSE'){replyMode=false;lastReplyTime=null;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
     replyMode=false;
+    lastReplyTime=Date.now();
     addB(mo,'cmd','',raw.trim());
     addB(mo,'resp','','Reply sent. AI quiet for 15min.\\nType CLOSE when done, or just let it time out.');
     addB(mc,'in','Operator reply',raw.trim());
@@ -4099,7 +4312,7 @@ function operatorCmd(raw){
     inp.focus();
     return;
   }
-  if(cmd==='CLOSE'){addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
+  if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
   if(cmd==='MENU'||cmd==='?'){
     addB(mo,'resp','','Commands:\\nREPLY \u2014 Reply to last customer\\nCLOSE \u2014 End conversation\\nSTATUS \u2014 Alert status + level\\nALERTS \u2014 Change alert level\\nTIER2 \u2014 Critical only\\nTIER3 \u2014 Add reputation alerts\\nPAUSE / RESUME\\nBILLING \u2014 Subscription\\nMENU \u2014 This message');
     return;
@@ -4120,7 +4333,7 @@ async function sendDemo(){
   addB(mc,'out-blue','',text);
   addB(mo,'system','','<span class="spinner"></span> Processing...');
   try{
-    const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history})});
+    const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history,suppress_reply})});
     const d=await r.json();d.original_message=text;lastData=d;
     mo.lastChild.remove();
     history.push({customer:text,reply:d.auto_reply});if(history.length>10)history.shift();
@@ -4247,6 +4460,16 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="multi">
+<h3>&#128273; Alerts to multiple people</h3>
+<p>Add a site manager or partner's number during signup — both of you get every alert and can reply. Useful when you need backup or want notifications to reach multiple phones.</p>
+</div>
+
+<div class="multi">
+<h3>&#128231; Quiet summaries, not notifications</h3>
+<p>Tier 3 (complaints) and Tier 4 (feedback) don't interrupt you by SMS. Get a daily or weekly email digest of them instead. Text DIGEST DAILY or DIGEST WEEKLY to opt in.</p>
+</div>
+
+<div class="multi">
 <h3>&#127970; Running multiple locations?</h3>
 <p>Sign up each location separately — each gets its own sign and business code. All alerts route to the same phone number. One inbox, full visibility across every location.</p>
 </div>
@@ -4369,7 +4592,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <a href="/resources/why-you-need-a-hotline" class="card">
 <div class="card-meta"><span>01 &mdash; Strategy</span><span>3 min read</span></div>
 <h2>Why your business needs a direct customer line (and why Hotline is the easiest way to run one)</h2>
-<p>Your staff won't always tell you what's wrong. Your customers will, if you give them a way to reach you.</p>
+<p>You're not on site to catch what goes wrong. Your customers are &mdash; give them a way to tell you the moment it happens.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
 <a href="/resources/where-to-put-your-qr" class="card">
@@ -4386,8 +4609,14 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </a>
 <a href="/resources/why-staff-fail-you" class="card">
 <div class="card-meta"><span>04 &mdash; Operations</span><span>4 min read</span></div>
-<h2>Why your staff may be your biggest operational blind spot</h2>
-<p>It's not about bad employees. It's about a broken system — and why building your visibility around staff escalation is a costly mistake.</p>
+<h2>Why being offsite is your biggest operational blind spot</h2>
+<p>When you're rarely on site, problems can sit for days. Here's why your customers &mdash; not your staff &mdash; are the fastest way to find out.</p>
+<span class="arrow">Read &rarr;</span>
+</a>
+<a href="/resources/self-storage-hotline" class="card">
+<div class="card-meta"><span>05 &mdash; Self Storage</span><span>4 min read</span></div>
+<h2>Running a self-storage facility nobody's watching</h2>
+<p>Gates, access issues, and unit problems happen when no manager is on site. Here's how to hear about them in real time.</p>
 <span class="arrow">Read &rarr;</span>
 </a>
 </div>
@@ -4521,8 +4750,8 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 </div>
 
 <div class="faq-item">
-<button class="faq-q" onclick="toggle(this)">Can I add a second phone number for a manager or partner? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. You can add a second alert number during signup or ask us to add one after. Both numbers get the same alerts and can use the same commands.</p></div>
+<button class="faq-q" onclick="toggle(this)">Can I send alerts to both an operator and a manager? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. During signup, add a second phone number for a partner, manager, or site owner. Both numbers get identical alerts and can use the same REPLY, PAUSE, MENU commands. This is optional—many operators run solo. If you want to add a second number after signup, just email Connect@HotlineTXT.com.</p></div>
 </div>
 
 <div class="faq-item">
@@ -4533,6 +4762,11 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I reply directly to a customer? <span class="faq-icon">+</span></button>
 <div class="faq-a"><p>Yes. Text REPLY after receiving an alert. The system enters reply mode — type your message and it goes to the customer from the Hotline number. They never see your personal cell. Text CLOSE when you're done or let it time out after 15 minutes.</p></div>
+</div>
+
+<div class="faq-item">
+<button class="faq-q" onclick="toggle(this)">Do I get email summaries of non-urgent messages? <span class="faq-icon">+</span></button>
+<div class="faq-a"><p>Yes. Tier 3 (customer complaints) and Tier 4 (feedback/compliments) don't interrupt you by SMS—they're logged. You can opt into a daily or weekly email digest that summarizes them all at once. Just text DIGEST DAILY or DIGEST WEEKLY to activate. Text DIGEST OFF to stop. Tier 1 and Tier 2 alerts always come through SMS immediately, regardless of digest setting.</p></div>
 </div>
 </div>
 
@@ -4648,15 +4882,15 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 </header>
 <article>
 
-<p class="lead">Your staff won't always tell you what's wrong. Your customers will, if you give them a channel to do it.</p>
+<p class="lead">When you run your business from offsite, you can't see what's going wrong. Your customers can &mdash; if you give them a channel to tell you.</p>
 
-<p>Think about the last time something went sideways in your business and you found out too late. The bathroom that went hours without being cleaned. The staff member who called out and nobody covered the floor. The card reader that stopped working during the dinner rush.</p>
+<p>Think about the last time something went sideways at your location and you found out too late. The restroom that sat a full day without anyone noticing. The entry gate that stuck open all weekend. The bank of washers that sat dead for three days before anyone said a word.</p>
 
-<p>Someone in your building knew. They just didn't tell you. Or they told a coworker. Or they pulled out their phone and left a one-star review instead.</p>
+<p>A customer knew. They just had no way to reach you. So they shrugged it off, or they left, or they pulled out their phone and posted a one-star review instead.</p>
 
 <h2>The gap between what happens and what you know</h2>
 
-<p>Every business has this gap. Problems happen at the floor level. Operators operate above it. The information that travels between the two gets filtered by time, by staff who don't want to deliver bad news, and by systems that only catch things after the fact.</p>
+<p>Every offsite operation has this gap. Problems happen on site. You're somewhere else. The information that should travel between the two gets lost &mdash; to distance, to time, and to systems that only catch things after the damage is done.</p>
 
 <p>That gap closes when customers have a direct line to you, in the moment, while the problem is still fixable.</p>
 
@@ -4674,7 +4908,7 @@ RESOURCES_ARTICLE_1_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Messages aren't just collected. Each one is read, classified by urgency, and you only get bothered when something actually needs your attention.</p>
 
-<p>A customer complaining that the music is too loud? that one gets logged quietly. A customer texting that your front door is locked and there's a line outside? It texts you immediately.</p>
+<p>A customer noting the lobby trash is full? That one gets logged quietly. A customer texting that the entry gate won't open and they're locked out? It texts you immediately.</p>
 
 <p>You set the threshold. You get the signal. The noise stays out of your way.</p>
 
@@ -4721,13 +4955,13 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 <p>Think about where things break down in your business. Then put it there.</p>
 
 <ul>
-<li>Inside bathroom stalls, at eye level</li>
-<li>On equipment that tends to break or jam</li>
-<li>Tables and tent cards in restaurants</li>
-<li>Near self-serve stations and kiosks</li>
-<li>Fitting rooms</li>
-<li>Hotel rooms and short-term rentals, near the TV or on the welcome card</li>
-<li>Locker rooms and shared facilities</li>
+<li>On the entry gate keypad or access panel</li>
+<li>On washers, dryers, vending, and change machines &mdash; right where they jam</li>
+<li>Inside restroom stalls, at eye level</li>
+<li>At the office door or kiosk when no manager is on site</li>
+<li>By the dump station, mailboxes, or clubhouse</li>
+<li>In the elevator and near loading bays</li>
+<li>Laundry rooms, locker rooms, and shared facilities</li>
 </ul>
 
 <p>Waterproof sticker stock for bathrooms and wet areas. Minimum 1.5 inches. Bigger in low light.</p>
@@ -4755,9 +4989,9 @@ RESOURCES_ARTICLE_2_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 <p>Keep it to one line. Tell them what happens when they scan.</p>
 
-<div class="sample">"Something wrong? Text us. Operator reads every message."</div>
-<div class="sample">"Issue with your visit? Let us know before you leave."</div>
-<div class="sample">"Staff not around? Something broken? Scan to text us."</div>
+<div class="sample">"Something wrong on site? Text us. The operator reads every message."</div>
+<div class="sample">"Gate, machine, or unit issue? Let us know right now."</div>
+<div class="sample">"No one on site? Something broken? Scan to text us."</div>
 
 <p>Avoid "feedback survey" and "rate your experience." Those sound like homework. Nobody scans homework.</p>
 
@@ -4867,82 +5101,66 @@ def resources_article_2(): _ensure_init(); return Response(content=_ga(RESOURCES
 def resources_article_3(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_3_HTML), media_type="text/html")
 
 RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Why your staff may be your biggest operational blind spot &mdash; Hotline</title>
+<title>Why being offsite is your biggest operational blind spot &mdash; Hotline</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <style>""" + _ARTICLE_CSS + """</style></head><body>
 """ + NAV_HTML + """
 <div class="wrap">
 <div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ 04 &mdash; Operations</div>
 <header class="ah">
-<h1>Why your staff may be your biggest operational blind spot</h1>
+<h1>Why being offsite is your biggest operational blind spot</h1>
 <div class="ameta"><span>Operations</span><span>4 min read</span></div>
 </header>
 <article>
 
-<p class="lead">Your staff isn't trying to fail you. But they might be anyway &mdash; and the system you've built around their ability to escalate is likely more fragile than you think.</p>
+<p class="lead">You're not failing to watch your business. You physically can't be there for most of it &mdash; and the system you're counting on to tell you what's happening is more fragile than you think.</p>
 
-<p>When something goes wrong at your location, the assumption is usually the same: someone on staff will notice, someone will escalate, and someone will fix it. That assumption is costing operators real money. Most frontline employees aren't equipped, incentivized, or expected to surface operational problems. Building your visibility strategy around their judgment is one of the most common and costly mistakes physical business operators make.</p>
+<p>When something goes wrong at your location, the assumption is usually the same: someone will notice, someone will say something, and you'll hear about it in time to act. For an offsite operator, that assumption quietly fails every day. You're not there. The people who are &mdash; customers, tenants, the occasional employee &mdash; have no reliable way to reach you in the moment. Building your visibility around hoping someone speaks up is one of the most common and costly mistakes offsite operators make.</p>
 
 <p>Here's why.</p>
 
-<h2>1. They were never trained to escalate</h2>
+<h2>1. You're not there to see it</h2>
 
-<p>Most frontline employees receive training on how to do their job &mdash; how to operate the register, how to greet customers, how to close up. What they rarely receive is clear guidance on what to do when something breaks: who to call, what to say, how urgent it is, and what happens if they don't.</p>
+<p>This is the whole problem in one line. You run the facility from a phone, a laptop, another location, or three locations at once. You can't walk the floor. The issues a present owner would catch in thirty seconds &mdash; a leak, a jammed door, a light that's been out for a week &mdash; go unseen for hours or days.</p>
 
-<p>Without a defined escalation process, most employees default to the path of least resistance: assume someone else will handle it, or wait to see if the problem resolves itself. By the time anyone realizes it won't, hours have passed.</p>
+<h2>2. There's often no one on site at all</h2>
 
-<h2>2. These are entry-level positions</h2>
+<p>Self-storage, laundromats, RV parks, and plenty of gyms run unattended by design. There's no staff member to notice a problem, escalate it, or even be asked about it. The entire idea of "someone will tell the manager" assumes a manager is standing there. Most of the time, nobody is.</p>
 
-<p>The people working your front line at a car wash, parking garage, laundromat, or gas station are often in their first or second job. They're new, they're still learning what's expected of them, and they're not thinking about your revenue or your Google rating.</p>
+<h2>3. When there is staff, escalation isn't their job</h2>
 
-<p>Asking an 18-year-old making $14 an hour to recognize a broken payment terminal, understand its operational impact, find the right person to call, and confidently escalate it is a significant ask. Not because they're incapable &mdash; but because nothing in their experience has prepared them for that level of ownership.</p>
+<p>At a car wash or a staffed gym, the people on site are usually entry-level and high-turnover. Reporting a broken machine to a remote owner isn't something they were trained for, incentivized to do, or thinking about. Broken equipment reads as "someone else's problem," and the handoff that's supposed to reach you never actually happens.</p>
 
-<h2>3. Repairs aren't their responsibility</h2>
+<h2>4. Customers won't chase you down</h2>
 
-<p>From a frontline employee's perspective, broken equipment is someone else's problem. They didn't buy it. They don't maintain it. They can't fix it. When something breaks, the instinct is to mentally hand it off &mdash; "that's a manager thing" or "maintenance handles that" &mdash; and move on.</p>
-
-<p>The problem is that the handoff never actually happens. It just gets assumed. And assumptions are where operational failures live.</p>
+<p>A frustrated customer isn't going to hunt for your office number, call, and wait on hold to report a jammed dryer. It's not worth the effort. They'll leave &mdash; and some of them will leave a review on the way out. The complaint you never hear is usually the one that costs you the most.</p>
 
 <div class="callout">
 <div class="callout-label">The real cost</div>
-<p>A customer notices the broken machine at 2 PM. Staff assumes someone else reported it. You find out at 9 PM when a review goes live. That gap &mdash; not the broken machine &mdash; is what actually hurt your business.</p>
+<p>A customer hits a stuck gate at 2 PM. No one's on site. You find out at 9 PM when the review posts. That gap &mdash; not the gate &mdash; is what actually hurt your business.</p>
 </div>
 
-<h2>4. They're not driven by revenue</h2>
+<h2>5. You find out from the worst possible source</h2>
 
-<p>Your staff doesn't feel the P&L impact of downtime. They don't see the revenue lost when a machine is offline for three hours on a Friday night. They don't read the weekly review report or watch the star rating tick down.</p>
+<p>Most offsite operators learn about problems from a one-star review, a chargeback, or a tenant who finally got fed up enough to email. By then the issue is days old, public, and far more expensive than it needed to be.</p>
 
-<p>You do. The gap between what your staff cares about and what you care about is completely natural &mdash; but it creates a dangerous blind spot. What feels like an emergency to you barely registers for someone who just wants to get through their shift and go home.</p>
+<h2>6. Distance turns small problems into patterns</h2>
 
-<h2>5. They have no stake in the outcome</h2>
+<p>When you're on site, a small issue gets fixed before it repeats. When you're offsite, the same problem keeps hitting customer after customer until something finally forces it into your view. One stuck gate becomes a whole weekend of locked-out tenants.</p>
 
-<p>A bad review doesn't affect your employee's paycheck. A lost customer doesn't change their schedule. A reputation hit doesn't impact their career. When there's no personal stake in the outcome, the urgency to act simply isn't there &mdash; even for good, well-meaning people.</p>
+<h2>The real problem: you built your visibility on being there &mdash; and you're not</h2>
 
-<p>This isn't a character flaw. It's human nature. People respond to incentives. And most frontline staff have no incentive to treat a broken machine as a five-alarm fire.</p>
+<p>None of this means you're a bad operator. It means running offsite removes the one thing physical businesses have always leaned on: a set of eyes on the ground. The operators who catch issues fastest have stopped waiting to be there. They've built a direct line between the people on site and themselves.</p>
 
-<h2>6. They're checked out</h2>
-
-<p>High-turnover industries &mdash; car washes, laundromats, parking facilities, gas stations &mdash; have a well-documented engagement problem. Many employees are working a job, not building a career. A checked-out employee isn't going out of their way to report a broken kiosk. They're going to assume it's not their problem, assume someone else saw it, and move on.</p>
-
-<p>The "I just work here" mentality isn't cynical. It's a symptom of an environment where nobody has ever made operational awareness feel like part of the job.</p>
-
-<h2>7. They don't want the confrontation</h2>
-
-<p>Telling a manager something is broken can feel like delivering bad news. Some employees worry about being blamed. Others don't want to seem like they're creating problems. In environments where escalation isn't explicitly encouraged, silence becomes the default.</p>
-
-<h2>The real problem: you built your visibility on a fragile foundation</h2>
-
-<p>None of this means your staff are bad employees. It means that relying on staff escalation as your primary method of operational visibility is a structural problem, not a personnel problem.</p>
-
-<p>The businesses that catch issues fastest have stopped waiting for staff to notice. Instead, they've built a direct line between their customers and their operations. When a customer sees something wrong, they can text in immediately. Hotline's AI responds to every message instantly &mdash; 24/7 &mdash; filters out the noise, and passes only real concerns directly to you.</p>
+<p>When a customer or tenant sees something wrong, they text. Hotline's AI responds instantly &mdash; 24/7 &mdash; filters out the noise, and passes only real problems straight to you, wherever you are.</p>
 
 <ul>
-<li>No reliance on a 19-year-old remembering to call the manager</li>
+<li>No waiting to find out on your next site visit</li>
 <li>No assuming someone else already reported it</li>
-<li>No finding out three hours later from a Google review</li>
+<li>No learning about it from a public review three days later</li>
 </ul>
 
-<p>Your staff will continue to be your first line of service. But they were never meant to be your only line of operational visibility. Give your customers a direct line, let AI handle the triage, and stop building your business resilience on a foundation that was never designed to hold it.</p>
+<p>You can't be everywhere. You don't have to be. Give the people on site a direct line, let AI handle the triage, and stop building your operation on the assumption that you'll just happen to find out.
 
 """ + _ARTICLE_CTA + """
 <a href="/resources" class="back-link">&larr; Back to resources</a>
@@ -4953,6 +5171,69 @@ RESOURCES_ARTICLE_4_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><
 
 @app.get("/resources/why-staff-fail-you")
 def resources_article_4(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_4_HTML), media_type="text/html")
+
+RESOURCES_ARTICLE_5_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Running a self-storage facility nobody's watching &mdash; Hotline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>""" + _ARTICLE_CSS + """</style></head><body>
+""" + NAV_HTML + """
+<div class="wrap">
+<div class="breadcrumb"><a href="/resources">&larr; Resources</a> &nbsp;/ 05 &mdash; Self Storage</div>
+<header class="ah">
+<h1>Running a self-storage facility nobody's watching</h1>
+<div class="ameta"><span>Self Storage</span><span>4 min read</span></div>
+</header>
+<article>
+
+<p class="lead">Most storage facilities run with no one on site for hours or days at a time. That's the model &mdash; low overhead, automated access, remote management. It's also exactly why problems go unseen until a tenant is angry enough to do something about it.</p>
+
+<h2>The unattended-facility tradeoff</h2>
+
+<p>Self-storage is built to run lean. Gate code in, gate code out, autopay, no front desk. Great for margins. The blind side is that when something breaks, there's no one standing there to notice. A gate stuck open is a security problem. A gate stuck closed is a tenant locked out of their own belongings at 8 PM. You won't know about either unless someone finds a way to tell you.</p>
+
+<h2>What tenants actually run into</h2>
+
+<ul>
+<li>Entry gate or keypad not working</li>
+<li>Elevator or roll-up door jammed</li>
+<li>A unit that won't lock, or a lock that's been cut</li>
+<li>Lights out in a hallway or across the lot after dark</li>
+<li>Leaks, pests, or a "climate-controlled" unit that isn't</li>
+<li>Someone living in a unit, or activity that doesn't look right</li>
+</ul>
+
+<h2>Why they don't just call</h2>
+
+<p>A tenant who can't get through the gate isn't going to dig up your office number and leave a voicemail nobody checks until morning. They'll force the gate, give up and leave, or open a dispute over their bill. The quiet ones simply stop paying and move out. None of that reaches you in time to fix the actual problem.</p>
+
+<div class="callout">
+<div class="callout-label">The pattern</div>
+<p>A keypad dies Friday night. Tenants can't get in all weekend. You hear about it Monday &mdash; after two move-out notices and a review that says "can never get into my unit."</p>
+</div>
+
+<h2>A QR code at the gate changes the math</h2>
+
+<p>Put a Hotline code on the keypad, the office door, and inside the elevator. A tenant who hits a problem scans and texts in seconds. The AI reads it, separates a stuck gate (you hear immediately) from a billing question (logged for your digest), and routes only what matters to your phone &mdash; without ever exposing your personal number.</p>
+
+<h2>What it means for an offsite operator</h2>
+
+<p>You get the visibility of an on-site manager without paying for one. Security and access issues reach you in real time. Everything else gets handled and summarized. Your attention goes to the handful of things that actually need an owner, and the rest stays out of your way.</p>
+
+<div class="brand-block">
+<h2>The fast version</h2>
+<p>Post a QR code at the gate, the office, and the elevator. Tenants text in problems. Hotline triages every message, alerts you instantly on anything urgent, and logs the rest. You run a facility nobody's watching &mdash; except now you are.</p>
+</div>
+
+""" + _ARTICLE_CTA + """
+<a href="/resources" class="back-link">&larr; Back to resources</a>
+</article>
+</div>
+""" + _ARTICLE_FOOT + """
+</body></html>"""
+
+@app.get("/resources/self-storage-hotline")
+def resources_article_5(): _ensure_init(); return Response(content=_ga(RESOURCES_ARTICLE_5_HTML), media_type="text/html")
+
 
 
 # --- Signup page ---
@@ -5391,7 +5672,7 @@ async def signup_create(request_data:dict=None):
           </table>
           <p style="margin:24px 0 0;font-size:13px;color:#aaa">Add manually at <a href="https://hotlinetxt.com/admin" style="color:#ea580c">hotlinetxt.com/admin</a></p>
         </div>"""
-        send_email("Connect@HotlineTXT.com", f"SIGNUP FAILED: {name} ({phone})", email_html)
+        send_email(SIGNUP_NOTIFY_EMAIL, f"SIGNUP FAILED: {name} ({phone})", email_html, from_email=SIGNUP_NOTIFY_EMAIL)
         return {"success":False,"error":"Setup failed \u2014 please try again in a moment, or contact Connect@HotlineTXT.com for help."}
 
     # Send welcome + asset links
@@ -5432,7 +5713,7 @@ async def signup_create(request_data:dict=None):
       </table>
       <p style="margin:16px 0 0;font-size:13px"><a href="{base}/signs/{business_code}.pdf" style="color:#ea580c">Sign PDF</a> &nbsp;|&nbsp; <a href="{base}/qr/{business_code}.png" style="color:#ea580c">QR PNG</a></p>
     </div>"""
-    send_email("Connect@HotlineTXT.com", f"New signup: {name} ({business_code})", email_html)
+    send_email(SIGNUP_NOTIFY_EMAIL, f"New signup: {name} ({business_code})", email_html, from_email=SIGNUP_NOTIFY_EMAIL)
 
     return {"success":True,"business_id":biz_id,"name":name,"owner_phone":phone,"business_code":business_code,
             "sign_url":f"{base}/signs/{business_code}.pdf","qr_url":f"{base}/qr/{business_code}.png"}
