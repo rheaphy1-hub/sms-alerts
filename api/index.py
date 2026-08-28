@@ -2190,7 +2190,7 @@ def admin_logout():
 @app.post("/admin/add")
 async def admin_add(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     name = body.get("name","").strip(); owner = body.get("owner","").strip()
     twilio = body.get("twilio","").strip(); biz_id = body.get("biz_id","").strip()
@@ -2206,7 +2206,7 @@ async def admin_add(request: Request):
 @app.post("/admin/welcome")
 async def admin_welcome(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     biz_id = body.get("biz_id","")
     with get_db() as c: biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
@@ -2238,13 +2238,13 @@ async def admin_welcome(request: Request):
 @app.get("/admin/list")
 def admin_list(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return {"businesses":[{"id":b["id"],"name":b["name"],"owner":b["owner_phone"],"twilio":b["twilio_number"]} for b in get_all_businesses()]}
 
 @app.post("/admin/update-phones")
 async def admin_update_phones(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     biz_id = body.get("biz_id","").strip()
     phones_str = body.get("phones","").strip()
@@ -2252,7 +2252,7 @@ async def admin_update_phones(request: Request):
     # Validate phones (comma-separated, each must start with +)
     phones = [p.strip() for p in phones_str.split(",") if p.strip()]
     for p in phones:
-        if not p.startswith("+"): return {"error":f"Invalid phone: {p}. All phones must start with +"}, 400
+        if not p.startswith("+"): return JSONResponse({"error":f"Invalid phone: {p}. All phones must start with +"}, status_code=400)
     normalized = ",".join(phones)
     with get_db() as c:
         _execute(c, _q("UPDATE businesses SET alert_phones=? WHERE id=?"), (normalized, biz_id))
@@ -2273,11 +2273,12 @@ async def admin_update_business(request: Request):
     # Fetch current business
     with get_db() as c:
         biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
-    if not biz: return {"error":"Business not found"}, 404
+    if not biz: return JSONResponse({"error":"Business not found"}, status_code=404)
     
     # Extract and validate fields
     name = body.get("name","").strip()
     owner_phone = body.get("owner_phone","").strip()
+    alert_phones_in = body.get("alert_phones", None)  # None = field absent, don't touch
     zip_code = body.get("zip","").strip()
     email = body.get("email","").strip()
     website_url = body.get("website_url","").strip()
@@ -2299,8 +2300,12 @@ async def admin_update_business(request: Request):
         errors.append("digest_freq must be 'daily' or 'weekly'")
     if alert_tier not in ("tier2", "tier3"):
         errors.append("alert_tier must be 'tier2' or 'tier3'")
+    if alert_phones_in is not None:
+        for _p in [x.strip() for x in str(alert_phones_in).split(",") if x.strip()]:
+            if len(re.sub(r"\D","",_p)) not in (10, 11):
+                errors.append(f"Invalid alert phone: {_p}")
     
-    if errors: return {"error": "; ".join(errors)}, 400
+    if errors: return JSONResponse({"error": "; ".join(errors)}, status_code=400)
     
     # Normalize phone to +1 format
     digits = re.sub(r"\D","", owner_phone)
@@ -2317,13 +2322,37 @@ async def admin_update_business(request: Request):
     # Convert alert_tier to alert_tier3 (legacy column)
     alert_tier3 = 1 if alert_tier == "tier3" else 0
     
+    # Build the full alert list: owner always first, then managers, deduped.
+    # If the field wasn't submitted at all, preserve whatever is already stored
+    # but still re-point it at the (possibly new) owner phone.
+    def _norm_one(p):
+        d = re.sub(r"\D","",p)
+        if len(d) == 10: d = "1" + d
+        elif len(d) == 11 and d[0] != "1": d = "1" + d[1:]
+        return f"+{d}" if d else ""
+    if alert_phones_in is None:
+        existing = [x.strip() for x in (biz.get("alert_phones") or "").split(",") if x.strip()]
+        old_owner_key = _mkey(biz.get("owner_phone",""))
+        extras = [p for p in existing if _mkey(p) != old_owner_key]
+    else:
+        extras = [x.strip() for x in str(alert_phones_in).split(",") if x.strip()]
+    merged, seen = [], set()
+    for p in [normalized_phone] + [_norm_one(x) for x in extras]:
+        k = _mkey(p)
+        if p and k and k not in seen:
+            seen.add(k); merged.append(p)
+    alert_phones_str = ",".join(merged)
+
     # Update database
     with get_db() as c:
-        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=?, vertical=? WHERE id=?"),
-                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, vertical, biz_id))
-    
+        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, alert_phones=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=?, vertical=? WHERE id=?"),
+                 (name, normalized_phone, alert_phones_str, zip_code, city, state, email, website_url, digest_freq, alert_tier3, vertical, biz_id))
+
+    # Keep manager rows in step: new owner promoted, removed phones deactivated.
+    sync_managers(biz_id, normalized_phone, alert_phones_str)
+
     # Log the changes
-    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}, vertical={vertical}")
+    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, alert_phones={alert_phones_str}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}, vertical={vertical}")
     
     # Fetch updated business to return
     with get_db() as c:
@@ -2336,6 +2365,7 @@ async def admin_update_business(request: Request):
             "id": updated_biz["id"],
             "name": updated_biz["name"],
             "owner_phone": updated_biz["owner_phone"],
+            "alert_phones": updated_biz.get("alert_phones",""),
             "zip": updated_biz["zip"],
             "city": updated_biz["city"],
             "state": updated_biz["state"],
@@ -2351,7 +2381,7 @@ async def admin_update_business(request: Request):
 @app.post("/admin/remove")
 async def admin_remove(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     biz_id = body.get("biz_id","")
     if not biz_id: return {"error":"biz_id required"}
@@ -2639,6 +2669,11 @@ def admin_ui(request: Request):
         <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Owner Phone *</label>
         <input id="em-phone" type="tel" placeholder="+1(555)555-1234" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
       </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Alert Phones (managers)</label>
+        <textarea id="em-alertphones" rows="2" placeholder="+12075551234, +12075555678" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box;font-family:inherit;resize:vertical"></textarea>
+        <div style="font-size:11px;color:#999;margin-top:4px">Everyone who receives alerts, comma-separated. Owner is added automatically. Leave blank for owner only.</div>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
           <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Zipcode</label>
@@ -2824,6 +2859,8 @@ function openEditModal(bizId,data){{
   _emBizId=bizId;_emData=data;
   document.getElementById("em-name").value=data.name||"";
   document.getElementById("em-phone").value=data.owner_phone||"";
+  var _ap=(data.alert_phones||"").split(",").map(function(x){{return x.trim();}}).filter(function(x){{return x&&x!==(data.owner_phone||"");}});
+  document.getElementById("em-alertphones").value=_ap.join(", ");
   document.getElementById("em-zip").value=data.zip||"";
   document.getElementById("em-location").value=(data.city||"")+(data.state?" "+data.state:"");
   document.getElementById("em-email").value=data.email||"";
@@ -2841,6 +2878,7 @@ function closeEditModal(){{
 async function saveBusinessEdit(){{
   const name=document.getElementById("em-name").value.trim();
   const phone=document.getElementById("em-phone").value.trim();
+  const alertPhones=document.getElementById("em-alertphones").value.trim();
   const zip=document.getElementById("em-zip").value.trim();
   const email=document.getElementById("em-email").value.trim();
   const website=document.getElementById("em-website").value.trim();
@@ -2848,9 +2886,11 @@ async function saveBusinessEdit(){{
   const tier=document.getElementById("em-tier").value;
   const errEl=document.getElementById("edit-error");
   if(!name||!phone){{errEl.textContent="Name and phone are required";errEl.style.display="block";return;}}
+  const _bad=alertPhones.split(",").map(function(x){{return x.trim();}}).filter(function(x){{var _n=x.replace(/[^0-9]/g,"");return x&&(_n.length<10||_n.length>11);}});
+  if(_bad.length){{errEl.textContent="Invalid phone: "+_bad[0]+" — use +12075551234 format";errEl.style.display="block";return;}}
   const vertical=document.getElementById("em-vertical").value;
   try{{
-    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier,vertical:vertical}})}});
+    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,alert_phones:alertPhones,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier,vertical:vertical}})}});
     const d=await r.json();
     if(!d.success){{errEl.textContent=d.error||"Failed to save";errEl.style.display="block";return;}}
     toast("Business updated",true);
