@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v68"
+VERSION = "v69"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -127,6 +127,14 @@ def init_db():
             media_id TEXT NOT NULL, created_at TEXT NOT NULL)""",
         f"""CREATE TABLE IF NOT EXISTS app_meta (
             key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT \'\')""",
+        f"""CREATE TABLE IF NOT EXISTS managers (
+            id {s} {pk}, business_id TEXT NOT NULL, phone TEXT NOT NULL,
+            phone_key TEXT NOT NULL DEFAULT \'\', name TEXT NOT NULL DEFAULT \'\',
+            role TEXT NOT NULL DEFAULT \'manager\', active INTEGER DEFAULT 1,
+            reply_context TEXT NOT NULL DEFAULT \'0\', reply_mode TEXT NOT NULL DEFAULT \'0\',
+            muted_until TEXT, created_at TEXT NOT NULL)""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mgr_biz_phone ON managers(business_id, phone_key)",
+        "CREATE INDEX IF NOT EXISTS idx_mgr_phone_key ON managers(phone_key)",
         "CREATE INDEX IF NOT EXISTS idx_biz_owner ON businesses(owner_phone)",
         "CREATE INDEX IF NOT EXISTS idx_msg_biz ON messages(business_id, tier, acknowledged)",
         "CREATE INDEX IF NOT EXISTS idx_conv_biz_cust ON conversation_state(business_id, customer_phone)",
@@ -278,6 +286,7 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
                 else:
                     _execute(c, _q("INSERT INTO businesses (id,name,owner_phone,alert_phones,email,website_url,website_info,twilio_number,business_code,trial_ends_at,sub_status,digest_freq,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"),
                              (biz_id, name, owner_phone, all_phones, email or "", website_url or "", website_info, twilio_number or "", business_code, trial_end, "trialing", "daily", now))
+            sync_managers(biz_id, owner_phone, all_phones)
             return business_code
         except Exception as e:
             if use_zip_cols:
@@ -292,7 +301,116 @@ def create_business(biz_id, name, owner_phone, twilio_number="", extra_phones=""
             return None
     return None
 
+# --- Managers (per-person rows + per-person state) ---
+
+def _mkey(p):
+    """Last-10-digits key. +15125551234 / 512-555-1234 / (512) 555 1234 all match."""
+    d = "".join(ch for ch in (p or "") if ch.isdigit())
+    return d[-10:] if len(d) >= 10 else d
+
+def upsert_manager(bid, phone, role="manager", name="", set_role=False):
+    """Add or reactivate a manager. set_role=True rewrites role on an existing row."""
+    key = _mkey(phone)
+    if not bid or not key: return False
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT id FROM managers WHERE business_id=? AND phone_key=?"), (bid, key))
+            if row:
+                if set_role:
+                    _execute(c, _q("UPDATE managers SET phone=?, role=?, active=1 WHERE id=?"), (phone, role, row["id"]))
+                else:
+                    _execute(c, _q("UPDATE managers SET phone=?, active=1 WHERE id=?"), (phone, row["id"]))
+            else:
+                _execute(c, _q("INSERT INTO managers (business_id,phone,phone_key,name,role,active,created_at) VALUES (?,?,?,?,?,1,?)"),
+                         (bid, phone, key, name, role, now))
+        return True
+    except Exception as e:
+        logger.warning(f"upsert_manager failed {bid}/{phone}: {e}"); return False
+
+def deactivate_manager(bid, phone):
+    key = _mkey(phone)
+    if not bid or not key: return False
+    try:
+        with get_db() as c:
+            _execute(c, _q("UPDATE managers SET active=0 WHERE business_id=? AND phone_key=?"), (bid, key))
+        return True
+    except Exception as e:
+        logger.warning(f"deactivate_manager failed: {e}"); return False
+
+def get_manager(bid, phone):
+    key = _mkey(phone)
+    if not bid or not key: return None
+    try:
+        with get_db() as c:
+            return _fetchone(c, _q("SELECT * FROM managers WHERE business_id=? AND phone_key=?"), (bid, key))
+    except Exception as e:
+        logger.warning(f"get_manager failed: {e}"); return None
+
+def _mgr_set(bid, phone, field, value):
+    """Write one column on one manager row. Returns False if no such row —
+    callers use that to fall back to the legacy business-level column."""
+    key = _mkey(phone)
+    if not bid or not key: return False
+    try:
+        with get_db() as c:
+            cur = _execute(c, _q(f"UPDATE managers SET {field}=? WHERE business_id=? AND phone_key=?"),
+                           (str(value), bid, key))
+            return (cur.rowcount or 0) > 0
+    except Exception as e:
+        logger.warning(f"_mgr_set {field} failed: {e}"); return False
+
+def sync_managers(bid, owner_phone, alert_phones_str):
+    """Make manager rows match owner_phone + alert_phones. Owner first, deduped.
+    Phones no longer listed are deactivated, not deleted — their history survives."""
+    owner = (owner_phone or "").strip()
+    listed = [p.strip() for p in (alert_phones_str or "").split(",") if p.strip()]
+    seen, ordered = set(), []
+    for p in ([owner] if owner else []) + listed:
+        k = _mkey(p)
+        if k and k not in seen:
+            seen.add(k); ordered.append(p)
+    for i, p in enumerate(ordered):
+        upsert_manager(bid, p, role="owner" if i == 0 else "manager", set_role=True)
+    try:
+        with get_db() as c:
+            for r in _fetchall(c, _q("SELECT phone_key FROM managers WHERE business_id=? AND active=1"), (bid,)):
+                if r["phone_key"] not in seen:
+                    _execute(c, _q("UPDATE managers SET active=0 WHERE business_id=? AND phone_key=?"), (bid, r["phone_key"]))
+    except Exception as e:
+        logger.warning(f"sync_managers prune failed: {e}")
+    return len(ordered)
+
+def _seed_managers_if_empty(biz):
+    """Lazy migration. First alert for a business converts its alert_phones
+    string into manager rows. Runs once per business, then never writes again."""
+    bid = biz.get("id")
+    if not bid: return
+    try:
+        with get_db() as c:
+            n = _fetchone(c, _q("SELECT COUNT(*) AS n FROM managers WHERE business_id=?"), (bid,))
+        if n and int(n.get("n") or 0) > 0: return
+    except Exception:
+        return
+    sync_managers(bid, biz.get("owner_phone",""), biz.get("alert_phones",""))
+    logger.info(f"[MIGRATION] seeded managers for {bid}")
+
 def get_alert_phones(biz):
+    """Active, unmuted managers — owner first. Falls back to the legacy
+    alert_phones string if the managers table is missing or has no rows."""
+    bid = biz.get("id")
+    if bid:
+        _seed_managers_if_empty(biz)
+        try:
+            with get_db() as c:
+                rows = _fetchall(c, _q("SELECT phone, role, muted_until FROM managers WHERE business_id=? AND active=1 ORDER BY id"), (bid,))
+        except Exception as e:
+            logger.warning(f"get_alert_phones managers read failed: {e}"); rows = []
+        if rows:
+            now = datetime.now(timezone.utc).isoformat()
+            live = [r for r in rows if not (r.get("muted_until") and str(r["muted_until"]) > now)]
+            live.sort(key=lambda r: 0 if (r.get("role") == "owner") else 1)
+            return [r["phone"] for r in live]
     phones = [p.strip() for p in (biz.get("alert_phones") or biz.get("owner_phone") or "").split(",") if p.strip()]
     owner = biz.get("owner_phone","")
     if owner and owner not in phones: phones.insert(0, owner)
@@ -309,7 +427,18 @@ def get_business_by_twilio(twilio_number):
 
 def get_business_by_owner(owner_phone):
     clean = _normalize_phone(owner_phone)
+    key = _mkey(clean)
     with get_db() as c:
+        # Indexed managers lookup first — avoids scanning every business and
+        # string-splitting its alert_phones on every inbound operator text.
+        if key:
+            try:
+                m = _fetchone(c, _q("SELECT business_id FROM managers WHERE phone_key=? AND active=1 ORDER BY id LIMIT 1"), (key,))
+                if m:
+                    b = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (m["business_id"],))
+                    if b: return b
+            except Exception as e:
+                logger.warning(f"managers lookup failed, falling back to scan: {e}")
         row = _fetchone(c, _q("SELECT * FROM businesses WHERE owner_phone=?"), (clean,))
         if row: return row
         for r in _fetchall(c, "SELECT * FROM businesses"):
@@ -968,22 +1097,38 @@ def generate_explanation(tier, category):
     tier_fallbacks = {1: "Safety emergency detected. Immediate action required.",2: "Operational issue detected. Investigate and respond within 1 hour.",3: "Customer concern noted. Follow up to preserve relationship.",4: "Message received. No immediate action required."}
     return tier_fallbacks.get(tier, "Alert received.")
 
-def set_context(bid, mid):
+# State lives on the manager row when we know who texted. The business-level
+# columns stay as fallback for unknown senders and any legacy no-phone callers.
+
+def set_context(bid, mid, phone=""):
+    if phone and _mgr_set(bid, phone, "reply_context", mid): return
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_context=? WHERE id=?"), (str(mid), bid))
 
-def get_context(bid):
+def get_context(bid, phone=""):
+    if phone:
+        m = get_manager(bid, phone)
+        if m:
+            try: return int(m.get("reply_context") or 0)
+            except: return 0
     with get_db() as c:
         row = _fetchone(c, _q("SELECT owner_context FROM businesses WHERE id=?"), (bid,))
         try: return int(row["owner_context"]) if row else 0
         except: return 0
 
-def set_reply_mode(bid, mid):
+def set_reply_mode(bid, mid, phone=""):
+    if phone and _mgr_set(bid, phone, "reply_mode", mid): return
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_reply_mode=? WHERE id=?"), (str(mid), bid))
 
-def clear_reply_mode(bid):
+def clear_reply_mode(bid, phone=""):
+    if phone and _mgr_set(bid, phone, "reply_mode", 0): return
     with get_db() as c: _execute(c, _q("UPDATE businesses SET owner_reply_mode='0' WHERE id=?"), (bid,))
 
-def get_reply_mode(bid):
+def get_reply_mode(bid, phone=""):
+    if phone:
+        m = get_manager(bid, phone)
+        if m:
+            try: return int(m.get("reply_mode") or 0)
+            except: return 0
     with get_db() as c:
         row = _fetchone(c, _q("SELECT owner_reply_mode FROM businesses WHERE id=?"), (bid,))
         try: v = int(row["owner_reply_mode"]) if row else 0; return v if v else 0
@@ -1394,6 +1539,13 @@ def handle_owner_command(text, business, sender_phone=""):
     raw = text.strip()
     cmd = raw.upper()
 
+    # Self-heal: an operator texting in who has no manager row yet gets one,
+    # so their reply state is theirs from the very first command.
+    if sender_phone and not get_manager(bid, sender_phone):
+        sync_managers(bid, business.get("owner_phone",""), business.get("alert_phones",""))
+        if not get_manager(bid, sender_phone):
+            upsert_manager(bid, sender_phone)
+
     # Words that should be interpreted as commands even when we're in reply mode
     # (so the operator can't accidentally text "STATUS" to the customer).
     RESERVED = {
@@ -1404,23 +1556,23 @@ def handle_owner_command(text, business, sender_phone=""):
     }
 
     # ── Reply mode (persisted in DB, survives restarts) ───────────────────────
-    reply_mid = get_reply_mode(bid)
+    reply_mid = get_reply_mode(bid, phone=sender_phone)
     if reply_mid:
         if cmd in {"NEVERMIND","CANCEL"}:
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             return "Reply cancelled."
         if cmd in {"CLOSE","DONE","WRAP","FINISH","END"}:
             msg = get_message_by_id(reply_mid)
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             if msg: end_conversation(bid, msg["from_number"])
             return "Conversation closed. AI auto-replies resumed."
         # If operator types another reserved command, fall through to handle it
         # instead of texting that word to the customer.
         if cmd in RESERVED:
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             # fall through below
         else:
-            clear_reply_mode(bid)
+            clear_reply_mode(bid, phone=sender_phone)
             msg = get_message_by_id(reply_mid)
             if msg:
                 send_sms(msg["from_number"], raw)
@@ -1461,7 +1613,7 @@ def handle_owner_command(text, business, sender_phone=""):
         recent = get_recent_all(bid, 1)
         msg = recent[0] if recent else None
         if not msg: return "No messages to reply to."
-        set_reply_mode(bid, msg["id"])
+        set_reply_mode(bid, msg["id"], phone=sender_phone)
         logger.info(f"[REPLY MODE] biz={bid} target_msg_id={msg['id']} text={msg['message_text'][:40]!r}")
         return (f"Replying to: \"{msg['message_text'][:60]}\"\n"
                 f"Type your reply now, or NEVERMIND.\n"
@@ -2038,7 +2190,7 @@ def admin_logout():
 @app.post("/admin/add")
 async def admin_add(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     name = body.get("name","").strip(); owner = body.get("owner","").strip()
     twilio = body.get("twilio","").strip(); biz_id = body.get("biz_id","").strip()
@@ -2054,7 +2206,7 @@ async def admin_add(request: Request):
 @app.post("/admin/welcome")
 async def admin_welcome(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     biz_id = body.get("biz_id","")
     with get_db() as c: biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
@@ -2086,13 +2238,13 @@ async def admin_welcome(request: Request):
 @app.get("/admin/list")
 def admin_list(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return {"businesses":[{"id":b["id"],"name":b["name"],"owner":b["owner_phone"],"twilio":b["twilio_number"]} for b in get_all_businesses()]}
 
 @app.post("/admin/update-phones")
 async def admin_update_phones(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     biz_id = body.get("biz_id","").strip()
     phones_str = body.get("phones","").strip()
@@ -2100,10 +2252,12 @@ async def admin_update_phones(request: Request):
     # Validate phones (comma-separated, each must start with +)
     phones = [p.strip() for p in phones_str.split(",") if p.strip()]
     for p in phones:
-        if not p.startswith("+"): return {"error":f"Invalid phone: {p}. All phones must start with +"}, 400
+        if not p.startswith("+"): return JSONResponse({"error":f"Invalid phone: {p}. All phones must start with +"}, status_code=400)
     normalized = ",".join(phones)
     with get_db() as c:
         _execute(c, _q("UPDATE businesses SET alert_phones=? WHERE id=?"), (normalized, biz_id))
+        biz_row = _fetchone(c, _q("SELECT owner_phone FROM businesses WHERE id=?"), (biz_id,))
+    sync_managers(biz_id, (biz_row or {}).get("owner_phone",""), normalized)
     logger.info(f"[ADMIN] Updated alert phones for {biz_id}: {normalized}")
     return {"success":True, "alert_phones": normalized}
 
@@ -2119,11 +2273,12 @@ async def admin_update_business(request: Request):
     # Fetch current business
     with get_db() as c:
         biz = _fetchone(c, _q("SELECT * FROM businesses WHERE id=?"), (biz_id,))
-    if not biz: return {"error":"Business not found"}, 404
+    if not biz: return JSONResponse({"error":"Business not found"}, status_code=404)
     
     # Extract and validate fields
     name = body.get("name","").strip()
     owner_phone = body.get("owner_phone","").strip()
+    alert_phones_in = body.get("alert_phones", None)  # None = field absent, don't touch
     zip_code = body.get("zip","").strip()
     email = body.get("email","").strip()
     website_url = body.get("website_url","").strip()
@@ -2145,8 +2300,12 @@ async def admin_update_business(request: Request):
         errors.append("digest_freq must be 'daily' or 'weekly'")
     if alert_tier not in ("tier2", "tier3"):
         errors.append("alert_tier must be 'tier2' or 'tier3'")
+    if alert_phones_in is not None:
+        for _p in [x.strip() for x in str(alert_phones_in).split(",") if x.strip()]:
+            if len(re.sub(r"\D","",_p)) not in (10, 11):
+                errors.append(f"Invalid alert phone: {_p}")
     
-    if errors: return {"error": "; ".join(errors)}, 400
+    if errors: return JSONResponse({"error": "; ".join(errors)}, status_code=400)
     
     # Normalize phone to +1 format
     digits = re.sub(r"\D","", owner_phone)
@@ -2163,13 +2322,37 @@ async def admin_update_business(request: Request):
     # Convert alert_tier to alert_tier3 (legacy column)
     alert_tier3 = 1 if alert_tier == "tier3" else 0
     
+    # Build the full alert list: owner always first, then managers, deduped.
+    # If the field wasn't submitted at all, preserve whatever is already stored
+    # but still re-point it at the (possibly new) owner phone.
+    def _norm_one(p):
+        d = re.sub(r"\D","",p)
+        if len(d) == 10: d = "1" + d
+        elif len(d) == 11 and d[0] != "1": d = "1" + d[1:]
+        return f"+{d}" if d else ""
+    if alert_phones_in is None:
+        existing = [x.strip() for x in (biz.get("alert_phones") or "").split(",") if x.strip()]
+        old_owner_key = _mkey(biz.get("owner_phone",""))
+        extras = [p for p in existing if _mkey(p) != old_owner_key]
+    else:
+        extras = [x.strip() for x in str(alert_phones_in).split(",") if x.strip()]
+    merged, seen = [], set()
+    for p in [normalized_phone] + [_norm_one(x) for x in extras]:
+        k = _mkey(p)
+        if p and k and k not in seen:
+            seen.add(k); merged.append(p)
+    alert_phones_str = ",".join(merged)
+
     # Update database
     with get_db() as c:
-        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=?, vertical=? WHERE id=?"),
-                 (name, normalized_phone, zip_code, city, state, email, website_url, digest_freq, alert_tier3, vertical, biz_id))
-    
+        _execute(c, _q("UPDATE businesses SET name=?, owner_phone=?, alert_phones=?, zip=?, city=?, state=?, email=?, website_url=?, digest_freq=?, alert_tier3=?, vertical=? WHERE id=?"),
+                 (name, normalized_phone, alert_phones_str, zip_code, city, state, email, website_url, digest_freq, alert_tier3, vertical, biz_id))
+
+    # Keep manager rows in step: new owner promoted, removed phones deactivated.
+    sync_managers(biz_id, normalized_phone, alert_phones_str)
+
     # Log the changes
-    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}, vertical={vertical}")
+    logger.info(f"[ADMIN] {biz_id}: Updated business info — name={name}, phone={normalized_phone}, alert_phones={alert_phones_str}, zip={zip_code}, email={email}, digest={digest_freq}, tier={alert_tier}, vertical={vertical}")
     
     # Fetch updated business to return
     with get_db() as c:
@@ -2182,6 +2365,7 @@ async def admin_update_business(request: Request):
             "id": updated_biz["id"],
             "name": updated_biz["name"],
             "owner_phone": updated_biz["owner_phone"],
+            "alert_phones": updated_biz.get("alert_phones",""),
             "zip": updated_biz["zip"],
             "city": updated_biz["city"],
             "state": updated_biz["state"],
@@ -2197,7 +2381,7 @@ async def admin_update_business(request: Request):
 @app.post("/admin/remove")
 async def admin_remove(request: Request):
     _ensure_init()
-    if not _get_admin_session(request): return {"error": "Unauthorized"}, 401
+    if not _get_admin_session(request): return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
     biz_id = body.get("biz_id","")
     if not biz_id: return {"error":"biz_id required"}
@@ -2337,7 +2521,7 @@ def admin_ui(request: Request):
     trialing_count = sum(1 for b in all_biz if (b.get("sub_status") or "trialing") == "trialing")
     churned_count  = sum(1 for b in all_biz if (b.get("sub_status") or "") in ("canceled", "expired"))
     total_biz      = len(all_biz)
-    mrr            = round(active_count * 19.99, 2)
+    mrr            = round(active_count * 29.00, 2)
     new_30d        = sum(1 for b in all_biz if (b.get("created_at") or "") >= cutoff_30)
 
     churn_denom  = active_count + churned_count
@@ -2484,6 +2668,11 @@ def admin_ui(request: Request):
       <div>
         <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Owner Phone *</label>
         <input id="em-phone" type="tel" placeholder="+1(555)555-1234" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px">Alert Phones (managers)</label>
+        <textarea id="em-alertphones" rows="2" placeholder="+12075551234, +12075555678" style="width:100%;padding:8px 10px;border:1px solid #e0e0dc;border-radius:6px;font-size:14px;box-sizing:border-box;font-family:inherit;resize:vertical"></textarea>
+        <div style="font-size:11px;color:#999;margin-top:4px">Everyone who receives alerts, comma-separated. Owner is added automatically. Leave blank for owner only.</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
@@ -2670,6 +2859,8 @@ function openEditModal(bizId,data){{
   _emBizId=bizId;_emData=data;
   document.getElementById("em-name").value=data.name||"";
   document.getElementById("em-phone").value=data.owner_phone||"";
+  var _ap=(data.alert_phones||"").split(",").map(function(x){{return x.trim();}}).filter(function(x){{return x&&x!==(data.owner_phone||"");}});
+  document.getElementById("em-alertphones").value=_ap.join(", ");
   document.getElementById("em-zip").value=data.zip||"";
   document.getElementById("em-location").value=(data.city||"")+(data.state?" "+data.state:"");
   document.getElementById("em-email").value=data.email||"";
@@ -2687,6 +2878,7 @@ function closeEditModal(){{
 async function saveBusinessEdit(){{
   const name=document.getElementById("em-name").value.trim();
   const phone=document.getElementById("em-phone").value.trim();
+  const alertPhones=document.getElementById("em-alertphones").value.trim();
   const zip=document.getElementById("em-zip").value.trim();
   const email=document.getElementById("em-email").value.trim();
   const website=document.getElementById("em-website").value.trim();
@@ -2694,9 +2886,11 @@ async function saveBusinessEdit(){{
   const tier=document.getElementById("em-tier").value;
   const errEl=document.getElementById("edit-error");
   if(!name||!phone){{errEl.textContent="Name and phone are required";errEl.style.display="block";return;}}
+  const _bad=alertPhones.split(",").map(function(x){{return x.trim();}}).filter(function(x){{var _n=x.replace(/[^0-9]/g,"");return x&&(_n.length<10||_n.length>11);}});
+  if(_bad.length){{errEl.textContent="Invalid phone: "+_bad[0]+" — use +12075551234 format";errEl.style.display="block";return;}}
   const vertical=document.getElementById("em-vertical").value;
   try{{
-    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier,vertical:vertical}})}});
+    const r=await fetch("/admin/update-business",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{biz_id:_emBizId,name:name,owner_phone:phone,alert_phones:alertPhones,zip:zip,email:email,website_url:website,digest_freq:digest,alert_tier:tier,vertical:vertical}})}});
     const d=await r.json();
     if(!d.success){{errEl.textContent=d.error||"Failed to save";errEl.style.display="block";return;}}
     toast("Business updated",true);
@@ -4621,7 +4815,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">How much does Hotline cost? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>$19.99 per month after your free pilot. No setup fees, no contracts, cancel anytime by texting or emailing us.</p></div>
+<div class="faq-a"><p>$29 per location, per month after your free pilot. No setup fees, no contracts, cancel anytime by texting or emailing us.</p></div>
 </div>
 
 <div class="faq-item">
@@ -5128,7 +5322,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 <p class="sub">No app. No software. No training required. Sign up in 30 seconds and get your print-ready Hotline instantly.</p>
 <div class="card">
 <div class="trial">14-day free pilot &middot; No credit card required</div>
-<div style="text-align:center;font-size:13px;color:#888;margin:-8px 0 16px">Then $19.99/month. Cancel anytime.</div>
+<div style="text-align:center;font-size:13px;color:#888;margin:-8px 0 16px">Then $29/month per location. Cancel anytime.</div>
 <div class="result" id="result"></div>
 <label>Business name</label><input type="text" id="f-name" placeholder="Joe's Coffee">
 <label>Your cell phone</label><input type="tel" id="f-phone" placeholder="(727) 555-1234">
