@@ -519,6 +519,33 @@ def end_conversation(bid, customer_phone):
     except Exception as e:
         logger.error(f"[CONVO END] {e}")
 
+# last_owner_reply_at is really "last activity on this line" — it refreshes when
+# EITHER side texts, so the window measures idle time, not time since the
+# operator's last send. Alias makes call sites read correctly.
+touch_conversation = mark_owner_replied
+
+def get_open_line(bid):
+    """The customer this business has a live conversation with right now (most
+    recent activity inside CONVERSATION_WINDOW_MIN), or None."""
+    try:
+        with get_db() as c:
+            row = _fetchone(c, _q("SELECT customer_phone, last_owner_reply_at FROM conversation_state WHERE business_id=? ORDER BY last_owner_reply_at DESC LIMIT 1"), (bid,))
+        if not row: return None
+        last = datetime.fromisoformat(row["last_owner_reply_at"])
+        if last.tzinfo is None: last = last.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - last) < timedelta(minutes=CONVERSATION_WINDOW_MIN):
+            return row["customer_phone"]
+        return None
+    except Exception as e:
+        logger.error(f"[OPEN LINE] {e}")
+        return None
+
+def _looks_like_command(raw):
+    """Single ALL-CAPS word of 4+ letters (e.g. a typo'd STATSU). Short words like
+    'OK' or 'YES' and anything with spaces/lowercase read as a real message."""
+    w = raw.strip()
+    return " " not in w and w.isalpha() and w.isupper() and len(w) >= 4
+
 def find_customer_business(customer_phone):
     """Look up which business this customer has been talking to recently (via BC code or previous messages)."""
     clean = _normalize_phone(customer_phone)
@@ -1578,8 +1605,26 @@ def handle_owner_command(text, business, sender_phone=""):
                 send_sms(msg["from_number"], raw)
                 mark_owner_replied(bid, msg["from_number"])
                 logger.info(f"[OPERATOR REPLY] biz={bid} msg_id={reply_mid} to={msg['from_number']}")
-                return f"Reply sent. AI quiet for {CONVERSATION_WINDOW_MIN}min.\nType CLOSE when done, or just let it time out."
+                return (f"Sent. Line open \u2014 just text to keep replying.\n"
+                        f"CLOSE to end. AI resumes after {CONVERSATION_WINDOW_MIN}min idle.")
             return "Could not find the original message."
+
+    # ── Open line: operator already replied to this customer recently, so plain
+    # text goes straight to them. No need to type REPLY every turn. ────────────
+    open_cust = get_open_line(bid)
+    if open_cust and cmd not in RESERVED and cmd not in ("DEBUG",) and not _looks_like_command(raw) \
+            and not any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED","LIKED","LOVED","THUMBED UP"]):
+        ok = send_sms(open_cust, raw)
+        touch_conversation(bid, open_cust)
+        logger.info(f"[OPEN LINE SEND] biz={bid} to=...{open_cust[-4:]} ok={ok}")
+        if ok: return ""  # silent — operator already sees their own text in the thread
+        return "Couldn't deliver that. Try again."
+
+    if cmd in {"CLOSE","DONE","WRAP","FINISH","END"}:
+        if open_cust:
+            end_conversation(bid, open_cust)
+            return "Conversation closed. AI auto-replies resumed."
+        return "No open conversation."
 
     if cmd == "BILLING":
         status = business.get("sub_status") or "trialing"
@@ -1599,7 +1644,7 @@ def handle_owner_command(text, business, sender_phone=""):
     if cmd in ("MENU", "?", "HELP"):
         return ("Commands:\n"
                 "REPLY \u2014 Reply to last customer\n"
-                "CLOSE \u2014 End active conversation\n"
+                "CLOSE \u2014 End open conversation\n"
                 "STATUS \u2014 Alert status + level\n"
                 "ALERTS \u2014 Change alert level\n"
                 "TIER2 \u2014 Critical only\n"
@@ -1617,7 +1662,7 @@ def handle_owner_command(text, business, sender_phone=""):
         logger.info(f"[REPLY MODE] biz={bid} target_msg_id={msg['id']} text={msg['message_text'][:40]!r}")
         return (f"Replying to: \"{msg['message_text'][:60]}\"\n"
                 f"Type your reply now, or NEVERMIND.\n"
-                f"Type CLOSE when finished to close the line with customer.")
+                f"After that the line stays open \u2014 just keep texting. CLOSE to end.")
 
     if cmd == "STATUS":
         name = business.get("name") or bid
@@ -1650,7 +1695,9 @@ def handle_owner_command(text, business, sender_phone=""):
         return "\n".join(lines)
 
     if any(cmd.startswith(w) for w in ["EMPHASIZED","QUESTIONED","LAUGHED AT","DISLIKED","LIKED","LOVED","THUMBED UP"]): return ""
-    return f"Unknown: \"{raw[:20]}\"\nReply MENU for commands."
+    if open_cust:
+        return f"Unknown command: \"{raw[:20]}\" (not sent to customer).\nReply MENU for commands."
+    return f"Unknown: \"{raw[:20]}\"\nTo message a customer, text REPLY first.\nReply MENU for commands."
 
 
 
@@ -3309,13 +3356,14 @@ def _process_customer_message(biz, sender, body, image_url=""):
             when = _fmt_ts(datetime.now(timezone.utc).isoformat(), biz)
             relay = (f"\U0001f4ac Customer reply ({when})\n\n"
                      f"{body}\n\n"
-                     f"Reply REPLY to respond, CLOSE to end.")
+                     f"Just text to reply. CLOSE to end.")
             if public_media_url and biz.get("alert_include_images"):
                 relay += "\n\U0001f4f7 Photo attached"
             for p in alert_phones:
                 ok = send_sms(p, relay, media_url=public_media_url if (public_media_url and biz.get("alert_include_images")) else "")
                 logger.info(f"[CONVO RELAY] to={p} ok={ok} biz={biz['id']} tier={tier}")
             mark_alerted(msg_id)
+            touch_conversation(biz["id"], sender)  # customer activity keeps the line open
             # Deliberately not log_alert() — relays shouldn't eat the rate-limit budget
             # that protects real alerts for other customers.
         elif relay_only:
@@ -3704,12 +3752,13 @@ def _make_vertical_page(slug, label, headline, sub, scenarios, step1, step2, ste
     DEMO_JS = """let lastData=null,replyMode=false,history=[],demoCount=0,maxDemo=10,filterMode='critical',lastReplyTime=null;
 const mc=document.getElementById('v-cust'),mo=document.getElementById('v-oper');
 function addB(c,cls,text,tier){const d=document.createElement('div');d.className='bubble '+cls;if(tier)d.setAttribute('data-tier',tier);d.innerHTML=text;c.appendChild(d);c.scrollTop=c.scrollHeight;if(mo===c)filterDemo(filterMode)}
-async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});const d=await r.json();d.original_message=text;lastData=d;if(mo.lastChild)mo.lastChild.remove();const t0=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(suppress_reply&&!d.auto_reply&&d.tier!==1){history.push({customer:text,reply:''});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,350));addB(mo,'resp','💬 Customer reply ('+t0+')<br><br>'+text+'<br><br>Reply REPLY to respond, CLOSE to end.');document.getElementById('v-op-cmds').style.display='flex';btn.disabled=false;inp.focus();return}const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
+async function sendDemo(){const inp=document.getElementById('v-input'),btn=document.getElementById('v-btn'),text=inp.value.trim();if(!text)return;if(demoCount>=maxDemo){addB(mc,'system','Demo limit reached. <a href="/signup" style="color:#ea580c">Sign up free</a>');return}inp.value='';btn.disabled=true;demoCount++;addB(mc,'out-blue',text);addB(mo,'system','<span class="spinner"></span> Reading...');try{const suppress_reply=lineOpen();const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});const d=await r.json();d.original_message=text;lastData=d;if(mo.lastChild)mo.lastChild.remove();const t0=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(suppress_reply&&!d.auto_reply&&d.tier!==1){lastReplyTime=Date.now();history.push({customer:text,reply:''});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,350));addB(mo,'resp','💬 Customer reply ('+t0+')<br><br>'+text+'<br><br>Just text to reply. CLOSE to end.');document.getElementById('v-op-cmds').style.display='flex';btn.disabled=false;inp.focus();return}const reply=d.auto_reply||'Thanks for letting us know.';const cat=(d.category||'general').replace(/_/g,' ');const concern=d.concern||d.explanation||'';
 history.push({customer:text,reply});if(history.length>6)history.shift();await new Promise(r=>setTimeout(r,250));addB(mc,'in',reply);await new Promise(r=>setTimeout(r,350));const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(d.tier===1){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">🚨 URGENT &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert-red',msg,1);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===2){const ch=concern?'<div style="font-size:10px;color:inherit;margin-bottom:4px;opacity:0.85">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">⚠️ ISSUE &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:3px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;margin-bottom:3px"><strong>Customer:</strong><br>'+text+'</div>'+'<div style="font-size:11px;margin-bottom:4px"><strong>We replied:</strong><br>'+reply+'</div>'+'<div style="font-size:10px;opacity:0.65">Reply REPLY to message customer back.</div>';addB(mo,'alert',msg,2);document.getElementById('v-op-cmds').style.display='flex';document.getElementById('v-op-input').style.display='none'}else if(d.tier===3){const ch=concern?'<div style="font-size:10px;opacity:0.8">'+concern+'</div>':'';const msg='<div style="font-weight:700;font-size:11px;margin-bottom:4px">ℹ️ FEEDBACK &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-bottom:2px;opacity:0.75">'+cat+'</div>'+ch+'<div style="font-size:11px;opacity:0.85">'+text+'</div>';addB(mo,'feedback',msg,3)}else{const msg='<div style="font-weight:700;font-size:11px">✓ LOGGED &nbsp;'+t+'</div>'+'<div style="font-size:10px;margin-top:2px;opacity:0.7">'+cat+'</div>';addB(mo,'info',msg,4)}}catch(e){if(mo.lastChild)mo.lastChild.remove();addB(mo,'system','Error: '+e.message)}btn.disabled=false;inp.focus()}
 function tryEx(el){document.getElementById('v-input').value=el.textContent;sendDemo()}
 function resetDemo(){while(mc.children.length>0)mc.removeChild(mc.lastChild);while(mo.children.length>0)mo.removeChild(mo.lastChild);addB(mc,'system','Customer messages appear here');addB(mo,'system','Operator alerts appear here');demoCount=0;history=[];replyMode=false;lastReplyTime=null;document.getElementById('v-input').value='';document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none'}
 function filterDemo(m){filterMode=m;document.getElementById('m-filt-crit').className='filter-btn'+(m==='critical'?' active':'');document.getElementById('m-filt-all').className='filter-btn'+(m==='all'?' active':'');mo.querySelectorAll('[data-tier]').forEach(b=>{const t=parseInt(b.getAttribute('data-tier')||'9');b.style.display=m==='all'||t<=2?'':'none'})}
-function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;lastReplyTime=Date.now();addB(mo,'cmd',raw.trim());addB(mo,'resp','Reply sent. AI quiet for 15min.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Type a command...';return}addB(mo,'cmd',raw.trim());if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');document.getElementById('v-op-input').style.display='block';if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none';return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command. Reply MENU for help.');}"""
+function operatorCmd(raw){const cmd=(raw||'').trim().toUpperCase();const inp=document.getElementById('v-op-inp')||document.getElementById('operator-inp');if(inp)inp.value='';if(!cmd)return;if(replyMode){if(cmd==='NEVERMIND'){replyMode=false;addB(mo,'resp','Reply cancelled.');if(inp)inp.placeholder='Type a command...';return}replyMode=false;lastReplyTime=Date.now();addB(mo,'cmd',raw.trim());addB(mo,'resp','Sent. Line open \u2014 just text to keep replying.<br>CLOSE to end. AI resumes after 15 min idle.');addB(mc,'in',raw.trim());if(inp)inp.placeholder='Text the customer, or a command...';return}addB(mo,'cmd',raw.trim());const KNOWN=['REPLY','CLOSE','MENU','?','PAUSE','RESUME','NEVERMIND'];const looksCmd=raw.trim().indexOf(' ')<0&&/^[A-Z]{4,}$/.test(raw.trim());if(lineOpen()&&KNOWN.indexOf(cmd)<0&&!looksCmd){lastReplyTime=Date.now();addB(mc,'in',raw.trim());return}if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}if(cmd==='REPLY'){if(!lastData){addB(mo,'resp','No messages to reply to.');return}replyMode=true;addB(mo,'resp','Replying to: \"'+(lastData.original_message||'last message').slice(0,50)+'\"\\nType your reply now, or NEVERMIND.');document.getElementById('v-op-input').style.display='block';if(inp){inp.placeholder='Type your reply...';inp.focus();}return}if(cmd==='CLOSE'){if(!lastReplyTime){addB(mo,'resp','No open conversation.');return}lastReplyTime=null;addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('v-op-cmds').style.display='none';document.getElementById('v-op-input').style.display='none';if(inp)inp.placeholder='Type a command...';return}if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}addB(mo,'resp','Unknown command.<br>To message a customer, text REPLY first.<br>Reply MENU for help.');}
+function lineOpen(){return !!lastReplyTime&&(Date.now()-lastReplyTime)<15*60*1000}"""
 
     steps_html = f'''<div class="hiw-steps">
 <div class="hiw-step"><div class="hiw-num">1</div><div><strong>{step1[0]}</strong><p>{step1[1]}</p></div></div>
@@ -4157,12 +4206,19 @@ function operatorCmd(raw){
     replyMode=false;
     lastReplyTime=Date.now();
     addB(mo,'cmd',raw.trim());
-    addB(mo,'resp','Reply sent. AI quiet for 15 min.\\nCustomer replies come straight to you.');
+    addB(mo,'resp','Sent. Line open \u2014 just text to keep replying.\\nCLOSE to end. AI resumes after 15 min idle.');
     addB(mc,'in',raw.trim());
-    if(inp)inp.placeholder='Type a command...';
+    if(inp)inp.placeholder='Text the customer, or a command...';
     return;
   }
   addB(mo,'cmd',raw.trim());
+  const KNOWN=['REPLY','CLOSE','MENU','?','PAUSE','RESUME','NEVERMIND'];
+  const looksCmd=raw.trim().indexOf(' ')<0&&/^[A-Z]{4,}$/.test(raw.trim());
+  if(lineOpen()&&KNOWN.indexOf(cmd)<0&&!looksCmd){
+    lastReplyTime=Date.now();
+    addB(mc,'in',raw.trim());
+    return;
+  }
   if(!lastData&&cmd!=='MENU'){addB(mo,'resp','No active alerts.');return}
   if(cmd==='REPLY'){
     if(!lastData){addB(mo,'resp','No messages to reply to.');return}
@@ -4173,12 +4229,13 @@ function operatorCmd(raw){
     if(inp){inp.placeholder='Type your reply...';inp.focus();}
     return;
   }
-  if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('operator-input').style.display='none';return}
+  if(cmd==='CLOSE'){if(!lastReplyTime){addB(mo,'resp','No open conversation.');return}lastReplyTime=null;addB(mo,'resp','Conversation closed. AI auto-replies resumed.');replyMode=false;document.getElementById('operator-input').style.display='none';if(inp)inp.placeholder='Type a command...';return}
   if(cmd==='MENU'||cmd==='?'){addB(mo,'resp','REPLY — Reply to last customer\\nCLOSE — End conversation\\nPAUSE / RESUME\\nMENU — This list');return}
   if(cmd==='PAUSE'){addB(mo,'resp','Alerts PAUSED. Reply RESUME to turn back on.');return}
   if(cmd==='RESUME'){addB(mo,'resp','Alerts resumed.');return}
-  addB(mo,'resp','Unknown command. Reply MENU for help.');
+  addB(mo,'resp','Unknown command.\\nTo message a customer, text REPLY first.\\nReply MENU for help.');
 }
+function lineOpen(){return !!lastReplyTime&&(Date.now()-lastReplyTime)<15*60*1000}
 
 async function sendDemo(){
   const inp=document.getElementById('cust-input'),btn=document.getElementById('cust-btn');
@@ -4188,15 +4245,16 @@ async function sendDemo(){
   addB(mc,'out-blue',text);
   addB(mo,'system','<span class="spinner"></span> Processing...');
   try{
-    const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});
+    const suppress_reply=lineOpen();const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history,suppress_reply})});
     const d=await r.json();d.original_message=text;lastData=d;
     if(mo.lastChild&&mo.lastChild.classList.contains('system'))mo.removeChild(mo.lastChild);
     const suppressed=!!suppress_reply&&!d.auto_reply&&d.tier!==1;
     const t=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
     if(suppressed){
+      lastReplyTime=Date.now();
       history.push({customer:text,reply:''});if(history.length>6)history.shift();
       await new Promise(r=>setTimeout(r,350));
-      addB(mo,'resp','💬 Customer reply ('+t+')\\n\\n'+text+'\\n\\nReply REPLY to respond, CLOSE to end.');
+      addB(mo,'resp','💬 Customer reply ('+t+')\\n\\n'+text+'\\n\\nJust text to reply. CLOSE to end.');
       document.getElementById('operator-cmds').style.display='flex';
       btn.disabled=false;inp.focus();return;
     }
@@ -4365,24 +4423,32 @@ function operatorCmd(raw){
     replyMode=false;
     lastReplyTime=Date.now();
     addB(mo,'cmd','',raw.trim());
-    addB(mo,'resp','','Reply sent. AI quiet for 15min.\\nType CLOSE when done, or just let it time out.');
+    addB(mo,'resp','','Sent. Line open \u2014 just text to keep replying.\\nCLOSE to end. AI resumes after 15 min idle.');
     addB(mc,'in','Operator reply',raw.trim());
-    inp.placeholder='Type a command...';
+    inp.placeholder='Text the customer, or a command...';
     return;
   }
 
   addB(mo,'cmd','',raw.trim());
+  // Open line: after the first REPLY, plain text goes straight to the customer.
+  const KNOWN=['REPLY','CLOSE','MENU','?','STATUS','PAUSE','RESUME','NEVERMIND','ALERTS','TIER2','TIER3','BILLING'];
+  const looksCmd=raw.trim().indexOf(' ')<0&&/^[A-Z]{4,}$/.test(raw.trim());
+  if(lineOpen()&&KNOWN.indexOf(cmd)<0&&!looksCmd){
+    lastReplyTime=Date.now();
+    addB(mc,'in','Operator reply',raw.trim());
+    return;
+  }
   if(!lastData&&cmd!=='MENU'){addB(mo,'resp','','No active alerts.');return}
 
   if(cmd==='REPLY'){
     if(!lastData){addB(mo,'resp','','No messages to reply to.');return}
     replyMode=true;
-    addB(mo,'resp','','Replying to: "'+lastData.original_message.slice(0,60)+'"\\nType your reply now, or NEVERMIND.\\nType CLOSE when finished to close the line with customer.');
+    addB(mo,'resp','','Replying to: "'+lastData.original_message.slice(0,60)+'"\\nType your reply now, or NEVERMIND.\\nAfter that the line stays open \u2014 just keep texting. CLOSE to end.');
     inp.placeholder='Type your reply...';
     inp.focus();
     return;
   }
-  if(cmd==='CLOSE'){lastReplyTime=null;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');return}
+  if(cmd==='CLOSE'){if(!lastReplyTime){addB(mo,'resp','','No open conversation.');return}lastReplyTime=null;addB(mo,'resp','','Conversation closed. AI auto-replies resumed.');inp.placeholder='Type a command...';return}
   if(cmd==='MENU'||cmd==='?'){
     addB(mo,'resp','','Commands:\\nREPLY \u2014 Reply to last customer\\nCLOSE \u2014 End conversation\\nSTATUS \u2014 Alert status + level\\nALERTS \u2014 Change alert level\\nTIER2 \u2014 Critical only\\nTIER3 \u2014 Add reputation alerts\\nPAUSE / RESUME\\nBILLING \u2014 Subscription\\nMENU \u2014 This message');
     return;
@@ -4390,8 +4456,9 @@ function operatorCmd(raw){
   if(cmd==='STATUS'){addB(mo,'resp','','&#128276; Alerts ON.\\nAlert level: Tier 2 critical only\\nReply ALERTS to change.');return}
   if(cmd==='PAUSE'){addB(mo,'resp','','&#128244; Alerts PAUSED. Reply RESUME to turn back on.');return}
   if(cmd==='RESUME'){addB(mo,'resp','','&#128276; Alerts resumed.');return}
-  addB(mo,'resp','','Unknown command. Reply MENU for commands.');
+  addB(mo,'resp','','Unknown command.\\nTo message a customer, text REPLY first.\\nReply MENU for commands.');
 }
+function lineOpen(){return !!lastReplyTime&&(Date.now()-lastReplyTime)<15*60*1000}
 
 async function sendDemo(){
   const inp=document.getElementById('cust-input');
@@ -4403,13 +4470,14 @@ async function sendDemo(){
   addB(mc,'out-blue','',text);
   addB(mo,'system','','<span class="spinner"></span> Processing...');
   try{
-    const now=Date.now(),suppress_reply=lastReplyTime&&(now-lastReplyTime)<15*60*1000;const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history,suppress_reply})});
+    const suppress_reply=lineOpen();const r=await fetch('/demo/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history,suppress_reply})});
     const d=await r.json();d.original_message=text;lastData=d;
     mo.lastChild.remove();
     if(suppress_reply&&!d.auto_reply&&d.tier!==1){
+      lastReplyTime=Date.now();
       history.push({customer:text,reply:''});if(history.length>10)history.shift();
       await new Promise(r=>setTimeout(r,400));
-      addB(mo,'resp','','💬 Customer reply ('+fmtTime()+')\\n\\n'+text+'\\n\\nReply REPLY to respond, CLOSE to end.');
+      addB(mo,'resp','','💬 Customer reply ('+fmtTime()+')\\n\\n'+text+'\\n\\nJust text to reply. CLOSE to end.');
       showOperatorInput();
       btn.disabled=false;inp.focus();return;
     }
@@ -4838,7 +4906,7 @@ footer{text-align:center;padding:32px 24px;color:#aaa;font-size:13px;border-top:
 
 <div class="faq-item">
 <button class="faq-q" onclick="toggle(this)">Can I reply directly to a customer? <span class="faq-icon">+</span></button>
-<div class="faq-a"><p>Yes. Text REPLY after receiving an alert. The system enters reply mode — type your message and it goes to the customer from the Hotline number. They never see your personal cell. Text CLOSE when you're done or let it time out after 15 minutes.</p></div>
+<div class="faq-a"><p>Yes. Text REPLY after receiving an alert, then type your message — it goes to the customer from the Hotline number. They never see your personal cell. From there the line stays open: anything the customer sends comes straight to you, and anything you text goes straight to them, no REPLY needed. The AI stays out of it. Text CLOSE when you're done, or the line closes on its own after 15 minutes of silence.</p></div>
 </div>
 
 <div class="faq-item">
