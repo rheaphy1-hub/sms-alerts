@@ -1,4 +1,3 @@
-# force rebuild 2
 """
 Hotline — SMS Alert System. Single-file Vercel deployment.
 """
@@ -32,7 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sms")
 
 # --- Version info (bump VERSION on each new index.py file) ---
-VERSION = "v70-resend"
+VERSION = "v71-resend-ua"
 BUILD_TIME = datetime.now(timezone.utc).isoformat()
 FEATURE_FLAGS = {
     "tier3_conf_gate": 0.4,
@@ -822,7 +821,8 @@ def _send_via_resend(to_email, subject, html_body, from_email):
     import urllib.request
     data = json.dumps({"from": f"Hotline <{from_email}>", "to": [to_email], "subject": subject, "html": html_body}).encode()
     req = urllib.request.Request("https://api.resend.com/emails", data=data,
-                                  headers={"Authorization": f"Bearer {RESEND_KEY}", "Content-Type": "application/json"}, method="POST")
+                                  headers={"Authorization": f"Bearer {RESEND_KEY}", "Content-Type": "application/json",
+                                           "User-Agent": "Hotline/1.0", "Accept": "application/json"}, method="POST")
     urllib.request.urlopen(req, timeout=10)
     return True
 
@@ -830,7 +830,8 @@ def _send_via_sendgrid(to_email, subject, html_body, from_email):
     import urllib.request
     data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":from_email,"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
     req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send", data=data,
-                                  headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json"}, method="POST")
+                                  headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json",
+                                           "User-Agent": "Hotline/1.0", "Accept": "application/json"}, method="POST")
     urllib.request.urlopen(req, timeout=10)
     return True
 
