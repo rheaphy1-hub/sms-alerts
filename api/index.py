@@ -26,6 +26,7 @@ except ImportError as _pdf_import_err:
     logging.getLogger("sms").warning(f"PDF/QR libs not available: {_pdf_import_err}")
 
 import hmac, hashlib, secrets, time as _time
+import urllib.error
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sms")
 
@@ -810,19 +811,54 @@ def send_sms(to, body, from_number="", media_url=""):
 # buy_twilio_number removed — single shared number model
 
 
-# --- Email (SendGrid) ---
+# --- Email (Resend primary, SendGrid fallback) ---
+RESEND_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
 SENDGRID_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
-DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Connect@HotlineTXT.com")
+DIGEST_FROM_EMAIL = os.getenv("DIGEST_FROM_EMAIL", "Digest@HotlineTXT.com")
 SIGNUP_NOTIFY_EMAIL = os.getenv("SIGNUP_NOTIFY_EMAIL", "signups@HotlineTXT.com")
 
+def _send_via_resend(to_email, subject, html_body, from_email):
+    import urllib.request
+    data = json.dumps({"from": f"Hotline <{from_email}>", "to": [to_email], "subject": subject, "html": html_body}).encode()
+    req = urllib.request.Request("https://api.resend.com/emails", data=data,
+                                  headers={"Authorization": f"Bearer {RESEND_KEY}", "Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req, timeout=10)
+    return True
+
+def _send_via_sendgrid(to_email, subject, html_body, from_email):
+    import urllib.request
+    data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":from_email,"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
+    req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send", data=data,
+                                  headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req, timeout=10)
+    return True
+
 def send_email(to_email, subject, html_body, from_email=None):
-    if not SENDGRID_KEY: logger.info(f"[DRY-RUN] Email to {to_email}: {subject}"); return True
+    """Sends via Resend if configured, falling back to SendGrid on failure or if Resend isn't set."""
+    if not RESEND_KEY and not SENDGRID_KEY:
+        logger.info(f"[DRY-RUN] Email to {to_email}: {subject}")
+        return True
+    fe = from_email or DIGEST_FROM_EMAIL
+    if RESEND_KEY:
+        try:
+            return _send_via_resend(to_email, subject, html_body, fe)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            logger.error(f"Resend failed ({e.code}) for {to_email}: {body}")
+        except Exception as e:
+            logger.error(f"Resend failed for {to_email}: {e}")
+        if not SENDGRID_KEY:
+            return False
+        logger.info(f"Falling back to SendGrid for {to_email}")
     try:
-        import urllib.request
-        data = json.dumps({"personalizations":[{"to":[{"email":to_email}]}],"from":{"email":(from_email or DIGEST_FROM_EMAIL),"name":"Hotline"},"subject":subject,"content":[{"type":"text/html","value":html_body}]}).encode()
-        req = urllib.request.Request("https://api.sendgrid.com/v3/mail/send", data=data, headers={"Authorization":f"Bearer {SENDGRID_KEY}","Content-Type":"application/json"}, method="POST")
-        urllib.request.urlopen(req); return True
-    except Exception as e: logger.error(f"Email failed: {e}"); return False
+        return _send_via_sendgrid(to_email, subject, html_body, fe)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        logger.error(f"SendGrid failed ({e.code}) for {to_email}: {body}")
+        return False
+    except Exception as e:
+        logger.error(f"SendGrid failed for {to_email}: {e}")
+        return False
 
 
 # --- AI Classifier ---
@@ -2155,9 +2191,7 @@ def digest_endpoint(freq: str = Query("weekly"), bid: str = Query("")):
         logger.error(f"[DIGEST] Failed: {e}", exc_info=True)
         raise
 
-@app.post("/cron/digests")
-def cron_digests_endpoint(admin_key: str = Query("")):
-    """Hourly cron: send digests that are due."""
+def _run_digest_cron(admin_key):
     if admin_key != _ADMIN_KEY: return {"error": "Unauthorized"}
     _ensure_init()
     sent = 0
@@ -2168,6 +2202,21 @@ def cron_digests_endpoint(admin_key: str = Query("")):
             result = send_all_digests(force_freq=freq, bid=biz["id"])
             sent += result
     return {"digests_sent": sent}
+
+@app.get("/cron/digests")
+def cron_digests_get(request: Request, admin_key: str = Query("")):
+    """Hourly cron (Vercel Cron calls this via GET). Auth via CRON_SECRET header (set by Vercel)
+    or admin_key query param (manual testing)."""
+    cron_secret = os.getenv("CRON_SECRET", "")
+    auth_header = request.headers.get("authorization", "")
+    if cron_secret and auth_header == f"Bearer {cron_secret}":
+        return _run_digest_cron(_ADMIN_KEY)  # header verified -> trust the call
+    return _run_digest_cron(admin_key)
+
+@app.post("/cron/digests")
+def cron_digests_post(admin_key: str = Query("")):
+    """Manual trigger via POST."""
+    return _run_digest_cron(admin_key)
 
 @app.get("/digest-off")
 def digest_off_endpoint(bid: str = Query(""), t: str = Query("")):
