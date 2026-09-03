@@ -1,3 +1,4 @@
+# force rebuild 2026-09-03
 """
 Hotline — SMS Alert System. Single-file Vercel deployment.
 """
